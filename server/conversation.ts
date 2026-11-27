@@ -88,7 +88,7 @@ export class Conversation implements AgentHost, TeamActions {
   static restore(host: ConversationHost, stored: StoredConversation): Conversation {
     const conv = new Conversation(stored.meta, host);
     for (const a of stored.agents) {
-      const info = { ...a.info, title: a.info.title ?? '', activity: undefined };
+      const info = { ...a.info, title: a.info.title ?? '', activity: undefined, closing: undefined };
       if (info.status === 'queued' || info.status === 'running' || info.status === 'waiting') {
         // The app was closed while this agent was working.
         info.status = info.tier === 'lead' ? 'idle' : 'stopped';
@@ -209,6 +209,34 @@ export class Conversation implements AgentHost, TeamActions {
     else if (parent) this.settle(parent);
   }
 
+  /**
+   * The person asked for one agent to be shut down safely. The agent that started it is told to
+   * have it wrap up and report; nothing is cut off. `stopAgent` is the forceful way.
+   */
+  closeAgent(agentId: string): void {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.tier === 'lead' || !agent.live || agent.info.closing) return;
+    if (agent.status === 'queued') {
+      // It has not started, so there is nothing to finish.
+      this.stopAgent(agentId, 'Stopped by the person.');
+      return;
+    }
+    agent.info.closing = true;
+    agent.addItem({ kind: 'notice', level: 'info', text: 'The person asked for this agent to be shut down safely.' });
+    this.host.agentChanged(this, agent);
+    const owner = this.parent(agent);
+    const job = agent.info.title ? ` (${agent.info.title})` : '';
+    if (owner && (owner.tier === 'lead' || owner.live)) {
+      owner.addItem({ kind: 'notice', level: 'info', text: `The person asked for "${agent.name}" to be shut down safely.` });
+      owner.deliver(
+        `The person pressed the shut-down button on "${agent.name}"${job}. Have it shut down safely now: tell it with send_message to stop at a safe point, leave its work in a usable state and send its report; give it no new work. If it has nothing worth finishing, use stop_agent instead.`,
+      );
+    } else {
+      agent.deliver('The person asked for you to shut down safely. Stop at a safe point, leave your work in a usable state and send your report now. Start nothing new.');
+    }
+    this.touch();
+  }
+
   stopAll(): void {
     this.stopAgent(this.lead.id, 'Stopped by the person.');
     this.settle(this.lead);
@@ -264,6 +292,11 @@ export class Conversation implements AgentHost, TeamActions {
     return teamTools(agent, this);
   }
   agentChanged(agent: Agent): void {
+    if (agent.info.closing && !agent.live) {
+      // The safe shutdown is over, however it ended. The person wanted it gone, so only they wake it.
+      agent.info.closing = undefined;
+      this.stoppedByPerson.add(agent.id);
+    }
     this.host.agentChanged(this, agent);
   }
   itemChanged(agent: Agent, item: Item): void {

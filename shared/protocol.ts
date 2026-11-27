@@ -146,6 +146,8 @@ export interface AgentInfo {
   /** One line on what it is doing right now, e.g. the tool it is running. */
   activity?: string;
   error?: string;
+  /** The person asked for this agent to be shut down safely and it has not ended yet. */
+  closing?: boolean;
 }
 
 interface ItemBase {
@@ -266,6 +268,8 @@ export type ClientMsg =
     }
   | { t: 'interrupt'; convId: string }
   | { t: 'stop_agent'; convId: string; agentId: string }
+  /** Ask the agent that started this one to have it finish safely. `stop_agent` is the forceful one. */
+  | { t: 'close_agent'; convId: string; agentId: string }
   | { t: 'stop_all'; convId: string }
   | {
       t: 'permission';

@@ -68,6 +68,8 @@ its own data folder, so stop it with the same `XDG_DATA_HOME` it was started wit
 - **Approvals.** When an agent wants to do something that needs your say, a card appears above the
   message box. "Permissions" in the team panel chooses how often that happens; by default it follows
   your own Claude Code settings.
+- **Shutting an agent down.** On the team map, the ✕ on an agent's box asks the agent that started it to have
+  it finish safely and report. Press it again to stop that agent at once, with everything under it.
 - **Stopping.** The square button stops the lead's current turn. "Stop everything" also stops every
   agent it started. Each agent has its own stop button.
 

@@ -307,3 +307,36 @@ test('prompts: real starting effort, a/an, file-relative line numbers', () => {
   assert.equal(withArticle('Opus 5.5'), 'an Opus 5.5');
   assert.equal(withArticle('Haiku 5.5'), 'a Haiku 5.5');
 });
+
+test('safe shutdown: the owner is asked, a second request does nothing more, and force ends it', async () => {
+  const { conv, block, byName, items } = setup();
+  block('opus');
+  conv.spawn(conv.lead, 'Job', 'task', undefined);
+  const bravo = byName('bravo');
+  // A queued agent has nothing to finish, so it is simply stopped.
+  conv.closeAgent(bravo.id);
+  assert.equal(bravo.status, 'stopped');
+  assert.equal(bravo.info.closing, undefined);
+
+  conv.spawn(conv.lead, 'Job two', 'task', undefined);
+  const charlie = byName('charlie');
+  charlie.info.status = 'running'; // set by hand: a really running agent needs Claude Code
+  const before = items.length;
+  conv.closeAgent(charlie.id);
+  assert.equal(charlie.info.closing, true);
+  assert.equal(charlie.status, 'running', 'nothing is cut off');
+  const asked = items.slice(before).filter((x) => x.agent === 'alpha' && x.item.kind === 'notice' && /"charlie" to be shut down safely/.test(x.item.text));
+  assert.equal(asked.length, 1, 'the owner is told');
+  const count = items.length;
+  conv.closeAgent(charlie.id);
+  assert.equal(items.filter((x) => x.agent === 'alpha').length, items.slice(0, count).filter((x) => x.agent === 'alpha').length, 'asking twice sends nothing more');
+
+  conv.stopAgent(charlie.id, 'Stopped by the person.');
+  assert.equal(charlie.status, 'stopped');
+  assert.equal(charlie.info.closing, undefined);
+  await tick();
+  assert.match(conv.message(conv.lead, 'charlie', 'wake up'), /only they can wake it/);
+  // The lead is never shut down this way.
+  conv.closeAgent(conv.lead.id);
+  assert.equal(conv.lead.info.closing, undefined);
+});

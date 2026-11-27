@@ -286,6 +286,9 @@ export class App implements ConversationHost {
       case 'interrupt':
         void this.conv(msg.convId).interruptLead();
         return;
+      case 'close_agent':
+        this.conv(msg.convId).closeAgent(String(msg.agentId));
+        return;
       case 'stop_agent':
         this.conv(msg.convId).stopAgent(String(msg.agentId), 'Stopped by the person.');
         return;

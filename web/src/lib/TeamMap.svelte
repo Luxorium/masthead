@@ -6,6 +6,7 @@
   const isLive = (a: AgentInfo) => a.status === 'queued' || a.status === 'running' || a.status === 'waiting';
 
   function doing(a: AgentInfo): string {
+    if (a.closing) return 'Shutting down safely…';
     if (a.status === 'running') return a.activity ?? 'Working';
     if (a.status === 'failed') return a.error ? `Failed: ${a.error}` : 'Failed';
     return STATUS_LABEL[a.status];
@@ -110,7 +111,12 @@
         </span>
       </button>
       {#if isLive(a) && a.tier !== 'lead'}
-        <button class="stop" onclick={() => store.convId && store.send({ t: 'stop_agent', convId: store.convId, agentId: a.id })} title="Stop this agent and everything under it" aria-label="Stop {displayName(a.name)}">■</button>
+        {@const owner = store.agents[a.parentId ?? '']}
+        {#if a.closing}
+          <button class="stop force" onclick={() => store.convId && store.send({ t: 'stop_agent', convId: store.convId, agentId: a.id })} title="Shutting down safely. Press again to stop it now, with everything under it" aria-label="Stop {displayName(a.name)} now">✕</button>
+        {:else}
+          <button class="stop" onclick={() => store.convId && store.send({ t: 'close_agent', convId: store.convId, agentId: a.id })} title="Ask {owner ? displayName(owner.name) : 'its owner'} to shut this agent down safely. Press again to stop it at once" aria-label="Shut down {displayName(a.name)} safely">✕</button>
+        {/if}
       {/if}
       {#if previewId === a.id}
         {@const lines = previewLines(a)}
@@ -297,8 +303,12 @@
     width: 22px;
     height: 22px;
     border-radius: 5px;
-    font-size: 9px;
+    font-size: 12px;
     color: var(--muted);
+  }
+  .stop.force {
+    background: color-mix(in srgb, var(--bad) 18%, transparent);
+    color: var(--bad);
   }
   .stop:hover {
     background: color-mix(in srgb, var(--bad) 15%, transparent);
