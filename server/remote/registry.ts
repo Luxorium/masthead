@@ -2,7 +2,7 @@
 // roles, tokens bound to the Tailscale node, expiry, revocation, and an audit log. Pure logic plus a
 // small versioned file; the transport calls it and never decides on its own.
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Identity } from './tailscale.js';
 
@@ -60,9 +60,18 @@ export interface RegistryOptions {
   tokenDays?: number;
   allowOtherTailnets?: boolean;
   allowTagged?: boolean;
+  /** Called when a device's approval ends by expiry, so its open sockets can be closed. */
+  onExpire?: (nodeId: string) => void;
 }
 
 const FILE_VERSION = 1;
+/** Pending requests one tailnet user (or all tagged nodes together) may have at once. */
+const MAX_PENDING_PER_USER = 3;
+/** The audit log is moved aside past this size; reads take a bounded tail. */
+const AUDIT_MAX_BYTES = 1024 * 1024;
+const AUDIT_TAIL_BYTES = 256 * 1024;
+/** One refusal line per node and reason per this long, so a noisy device cannot fill the disk. */
+const REFUSE_LOG_MS = 60_000;
 const DAY = 24 * 3600 * 1000;
 const PENDING_MS = 10 * 60 * 1000;
 const DENY_COOLDOWN_MS = 10 * 60 * 1000;
@@ -121,17 +130,51 @@ export class DeviceRegistry {
     renameSync(tmp, this.file);
   }
 
+  private refusalsLogged = new Map<string, number>();
+
   audit(e: Omit<AuditEntry, 'ts'>): void {
+    if (e.event === 'refuse') {
+      const key = `${e.nodeId ?? e.address ?? ''}|${e.detail ?? ''}`;
+      const last = this.refusalsLogged.get(key);
+      if (last !== undefined && this.now() - last < REFUSE_LOG_MS) return;
+      this.refusalsLogged.set(key, this.now());
+      if (this.refusalsLogged.size > 1000) this.refusalsLogged.clear();
+    }
     try {
+      try {
+        if (statSync(this.auditFile).size > AUDIT_MAX_BYTES) renameSync(this.auditFile, `${this.auditFile}.1`);
+      } catch {
+        // no log yet
+      }
       appendFileSync(this.auditFile, JSON.stringify({ ts: this.now(), ...e }) + '\n', { mode: 0o600 });
     } catch {
       // A full disk must not stop remote access decisions.
     }
   }
 
+  /** The newest entries, from a bounded tail of the log. */
   readAudit(limit = 100): AuditEntry[] {
     try {
-      return readFileSync(this.auditFile, 'utf8').trim().split('\n').filter(Boolean).slice(-limit).map((l) => JSON.parse(l) as AuditEntry);
+      const fd = openSync(this.auditFile, 'r');
+      try {
+        const size = fstatSync(fd).size;
+        const len = Math.min(size, AUDIT_TAIL_BYTES);
+        const buf = Buffer.alloc(len);
+        readSync(fd, buf, 0, len, size - len);
+        const lines = buf.toString('utf8').split('\n');
+        if (len < size) lines.shift(); // a partial first line
+        const out: AuditEntry[] = [];
+        for (const l of lines.filter(Boolean).slice(-limit)) {
+          try {
+            out.push(JSON.parse(l) as AuditEntry);
+          } catch {
+            // a torn line
+          }
+        }
+        return out;
+      } finally {
+        closeSync(fd);
+      }
     } catch {
       return [];
     }
@@ -156,6 +199,7 @@ export class DeviceRegistry {
         this.devices.delete(d.nodeId);
         changed = true;
         this.audit({ event: 'expire', nodeId: d.nodeId, nodeName: d.nodeName, user: d.user?.login });
+        this.opts.onExpire?.(d.nodeId);
       }
     }
     if (changed) this.save();
@@ -173,13 +217,18 @@ export class DeviceRegistry {
       this.audit({ event: 'refuse', nodeId: id.nodeId, nodeName: id.nodeName, user: id.user?.login, address, detail: 'denied recently' });
       return { refused: 'This device was turned down recently; try again later.' };
     }
-    const pollSecret = randomBytes(24).toString('hex');
-    const existing = [...this.pending.values()].find((p) => p.nodeId === id.nodeId && !p.denied);
-    if (existing) {
-      existing.pollHash = sha(pollSecret);
-      return { request: existing, pollSecret };
+    // One waiting request per node, and its poll secret never changes: a second asker (on a loopback
+    // listener, another local user forging this node's address) must not take over the first one's
+    // request. The device keeps its poll secret; a page that lost it waits for the request to expire.
+    if ([...this.pending.values()].some((p) => p.nodeId === id.nodeId && !p.denied)) {
+      return { refused: 'A request from this device is already waiting for approval.' };
     }
     if (this.pending.size >= MAX_PENDING) return { refused: 'Too many devices are waiting for approval.' };
+    const owner = id.user?.login ?? 'tagged';
+    if ([...this.pending.values()].filter((p) => (p.user?.login ?? 'tagged') === owner).length >= MAX_PENDING_PER_USER) {
+      return { refused: 'Too many devices of this tailnet user are waiting for approval.' };
+    }
+    const pollSecret = randomBytes(24).toString('hex');
     const request: PendingRequest = {
       id: randomBytes(12).toString('hex'),
       nodeId: id.nodeId,

@@ -1,6 +1,7 @@
 import type {
   AgentInfo,
   AppState,
+  BlobRef,
   ClientMsg,
   ConversationMeta,
   Draft,
@@ -11,6 +12,7 @@ import type {
   ServerMsg,
   Settings,
 } from '../../../shared/protocol.ts';
+import type { ApprovalSummary, Capability, ClientMsgV2, ServerMsgV2 } from '../../../shared/protocol-v2.ts';
 import { dropCandidate, idFromHash, keepCandidate, serverUp, storedKey, takeKey } from './signin.ts';
 import { limitKey, settingsPatch, worstLimit } from './state/pure.ts';
 
@@ -19,6 +21,11 @@ export interface ComposerImage extends ImageAttachment {
   url: string;
   name: string;
   size: number;
+  /** In an existing chat the picture is uploaded at once (POST /blob); this is how it was stored. */
+  ref?: BlobRef;
+  uploading?: boolean;
+  /** Why the upload failed; the picture must be removed before sending. */
+  error?: string;
 }
 export interface ComposerDraft {
   text: string;
@@ -91,6 +98,33 @@ export class Store {
   /** Agents whose transcript the page wants; an `items` reply for any other is dropped. */
   private wanted = new Set<string>();
 
+  // ---- protocol version 2 (see web.md section 2) ----
+  /** True once the server answered hello with protocol 2; false for an older server (version 1). */
+  v2 = false;
+  /** Approval requests in every conversation, as summaries: for the badges in the chat list. */
+  approvals = $state<ApprovalSummary[]>([]);
+  /** For images: `/blob/<conv>/<hash>?t=<blobToken>` (Stage B). */
+  blobToken = $state<string | null>(null);
+  /** Items that arrived clipped (`truncated`), by id; opening one fetches it whole. */
+  clipped = $state<Record<string, true>>({});
+  /** Per agent: the cursor of the oldest page loaded, whether older pages exist, and whether one is loading. */
+  pages = $state<Record<string, { cursor: number | null; more: boolean; loading: boolean }>>({});
+  /** The last per-conversation event number seen for the open conversation, for resync after a drop. */
+  private seq = 0;
+  /** The conversation this tab is subscribed to. */
+  private subscribed: string | null = null;
+  /** Each streaming draft's step count, to notice a missed step. */
+  private dseq: Record<string, number> = {};
+  /** The v1 state the server sends on connect, used only if it never answers hello (an older server). */
+  private v1State: ServerMsg | null = null;
+  private helloTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A hello was sent on this socket and not yet answered. */
+  private helloPending = false;
+  /** Items per transcript page. */
+  static PAGE = 100;
+  /** Whether the server already has this tab subscribed to `subscribed` on the current socket. */
+  private subscribedOnServer = false;
+
   conv = $derived(this.conversations.find((c) => c.id === this.convId) ?? null);
   agentList = $derived(Object.values(this.agents).sort((a, b) => a.createdAt - b.createdAt));
   lead = $derived(this.agentList.find((a) => a.tier === 'lead') ?? null);
@@ -142,8 +176,19 @@ export class Store {
       this.connected = true;
       this.retry = 0;
       this.refusals = 0;
+      this.v2 = false;
+      this.subscribedOnServer = false;
+      const caps: Capability[] = ['drafts-delta', 'items-paging', 'blobs', 'resync'];
+      this.v1State = null;
+      this.helloPending = this.sendV2({ t: 'hello', protocol: 2, caps });
+      // An older server ignores the hello; fall back to the version 1 state it sent on connect.
+      if (this.helloTimer) clearTimeout(this.helloTimer);
+      this.helloTimer = setTimeout(() => {
+        this.helloPending = false;
+        if (!this.v2 && this.v1State) this.receive(this.v1State);
+      }, 2000);
     };
-    ws.onmessage = (ev) => this.receive(JSON.parse(ev.data as string) as ServerMsg);
+    ws.onmessage = (ev) => this.receive(JSON.parse(ev.data as string) as ServerMsgV2);
     ws.onclose = () => {
       if (this.ws !== ws) return;
       this.connected = false;
@@ -248,24 +293,34 @@ export class Store {
     this.errorTimer = setTimeout(() => (this.error = null), 8000);
   }
 
+  /** The app state, from a version 1 `state` or a version 2 one (approvals already taken out). */
+  private receiveState(state: AppState): void {
+    this.app = state;
+    this.settings = state.settings;
+    this.conversations = state.conversations;
+    this.pending = state.pending ?? [];
+    this.usage = Object.fromEntries((state.usage ?? []).map((n) => [n.type ?? '', n]));
+    this.creating = false;
+    this.pendingRef = null;
+    if (!this.newCwd) this.newCwd = state.settings.defaultCwd;
+    // First load or a reconnect: fetch the open conversation again so nothing is stale. With
+    // version 2 a reconnect resubscribes from the last event seen and keeps what is loaded.
+    const wanted = this.convId ?? idFromHash();
+    if (wanted && state.conversations.some((c) => c.id === wanted)) {
+      if (this.v2 && wanted === this.subscribed && this.seq > 0) this.resubscribe();
+      else this.open(wanted, this.viewAgentId);
+    } else this.newConversation();
+  }
+
   /** Applies one message from the server. Public so tests can drive the store without a socket. */
-  receive(m: ServerMsg): void {
+  receive(msg: ServerMsg | ServerMsgV2): void {
+    // Version 2 messages that version 1 does not have, or that differ from it.
+    if (this.receiveV2(msg)) return;
+    const m = msg as ServerMsg;
     switch (m.t) {
-      case 'state': {
-        this.app = m.state;
-        this.settings = m.state.settings;
-        this.conversations = m.state.conversations;
-        this.pending = m.state.pending ?? [];
-        this.usage = Object.fromEntries((m.state.usage ?? []).map((n) => [n.type ?? '', n]));
-        this.creating = false;
-        this.pendingRef = null;
-        if (!this.newCwd) this.newCwd = m.state.settings.defaultCwd;
-        // First load or a reconnect: fetch the open conversation again so nothing is stale.
-        const wanted = this.convId ?? idFromHash();
-        if (wanted && m.state.conversations.some((c) => c.id === wanted)) this.open(wanted, this.viewAgentId);
-        else this.newConversation();
+      case 'state':
+        this.receiveState(m.state);
         return;
-      }
       case 'conversations':
         this.conversations = m.conversations;
         return;
@@ -275,6 +330,15 @@ export class Store {
         for (const a of m.agents) agents[a.id] = a;
         this.agents = agents;
         this.pending = [...this.pending.filter((p) => p.convId !== m.conv.id), ...m.pending];
+        const snap = m as typeof m & { seq?: number; drafts?: Record<string, Draft & { dseq: number }> };
+        if (typeof snap.seq === 'number') {
+          // A version 2 snapshot: the event number to resync from, and the drafts in progress.
+          this.seq = snap.seq;
+          for (const [agentId, d] of Object.entries(snap.drafts ?? {})) {
+            this.drafts[agentId] = { kind: d.kind, text: d.text };
+            this.dseq[agentId] = d.dseq;
+          }
+        }
         const view = this.viewAgentId && agents[this.viewAgentId] ? this.viewAgentId : m.conv.leadId;
         this.viewAgentId = view === m.conv.leadId ? null : view;
         this.loadItems(view);
@@ -290,14 +354,25 @@ export class Store {
         return;
       case 'deleted':
         this.pending = this.pending.filter((p) => p.convId !== m.convId);
+        this.approvals = this.approvals.filter((p) => p.convId !== m.convId);
         if (m.convId === this.convId) this.newConversation();
         return;
-      case 'items':
+      case 'items': {
         // A preview that closed before its reply came does not want it any more (see dropItems).
         if (m.convId !== this.convId || !this.wanted.has(m.agentId)) return;
-        this.items[m.agentId] = m.items;
-        this.drafts[m.agentId] = m.draft;
+        const paged = m as typeof m & { cursor?: number | null; more?: boolean };
+        const page = this.pages[m.agentId];
+        if (paged.cursor !== undefined && page?.loading && this.items[m.agentId]) {
+          // An older page: put it in front, keeping any item already here (ours is newer).
+          const have = new Set(this.items[m.agentId]!.map((i) => i.id));
+          this.items[m.agentId] = [...m.items.filter((i) => !have.has(i.id)), ...this.items[m.agentId]!];
+        } else {
+          this.items[m.agentId] = m.items;
+          if (this.drafts[m.agentId] === undefined || !this.v2) this.drafts[m.agentId] = m.draft;
+        }
+        if (paged.cursor !== undefined) this.pages[m.agentId] = { cursor: paged.cursor ?? null, more: !!paged.more, loading: false };
         return;
+      }
       case 'agent':
         if (m.agent.convId === this.convId) this.agents[m.agent.id] = m.agent;
         return;
@@ -305,8 +380,10 @@ export class Store {
         const it = m.item;
         if (it.kind === 'user') this.accepted((s) => s.convId === m.convId && s.text === it.text);
         if (m.convId !== this.convId) return;
+        if ((m as typeof m & { truncated?: boolean }).truncated) this.clipped[it.id] = true;
+        else delete this.clipped[it.id];
         const list = this.items[m.agentId];
-        if (!list) return; // not loaded; it is fetched whole when the agent is opened
+        if (!list) return; // not loaded; it is fetched when the agent is opened
         const i = list.findIndex((x) => x.id === m.item.id);
         if (i >= 0) list[i] = m.item;
         else list.push(m.item);
@@ -320,6 +397,7 @@ export class Store {
         return;
       case 'permission_resolved':
         this.pending = this.pending.filter((p) => p.id !== m.requestId);
+        this.approvals = this.approvals.filter((p) => p.id !== m.requestId);
         return;
       case 'settings':
         this.settings = m.settings;
@@ -354,13 +432,142 @@ export class Store {
     this.agents = {};
     this.items = {};
     this.drafts = {};
+    this.pages = {};
+    this.clipped = {};
+    this.dseq = {};
     this.wanted.clear();
     this.view = 'chat';
     if (location.hash !== `#/c/${convId}`) history.replaceState(null, '', `#/c/${convId}`);
-    this.send({ t: 'open', convId });
+    if (this.v2) {
+      // Version 2: events of this conversation only, starting with a snapshot.
+      this.unsubscribe();
+      this.seq = 0;
+      this.subscribed = convId;
+      this.subscribedOnServer = this.sendV2({ t: 'subscribe', convId });
+    } else {
+      this.send({ t: 'open', convId });
+    }
+  }
+
+  /** After a reconnect: subscribe again from the last event seen, keeping what is loaded. */
+  private resubscribe(): void {
+    if (!this.subscribed) return;
+    this.subscribedOnServer = this.sendV2({ t: 'subscribe', convId: this.subscribed, since: this.seq });
+  }
+
+  private unsubscribe(): void {
+    if (this.subscribed && this.subscribedOnServer) this.sendV2({ t: 'unsubscribe', convId: this.subscribed });
+    this.subscribed = null;
+    this.subscribedOnServer = false;
+  }
+
+  /** Sends a version 2 message (the same socket as version 1). */
+  private sendV2(msg: ClientMsgV2): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(JSON.stringify(msg));
+    return true;
+  }
+
+  /**
+   * Handles what is new in version 2. Returns true when the message was fully handled here; false lets
+   * the version 1 handler take it (most messages are the same in both).
+   */
+  private receiveV2(msg: ServerMsg | ServerMsgV2): boolean {
+    const m = msg as Record<string, unknown> & { t: string };
+    if (typeof m.seq === 'number' && (m.convId === this.subscribed || (m.t === 'agent' && (m.agent as AgentInfo)?.convId === this.subscribed))) {
+      this.seq = Math.max(this.seq, m.seq);
+    }
+    switch (m.t) {
+      case 'state': {
+        if (m.protocol === 2) {
+          this.v2 = true;
+          this.helloPending = false;
+          if (this.helloTimer) clearTimeout(this.helloTimer);
+          const st = m.state as AppState & { pending: ApprovalSummary[]; blobToken?: string };
+          this.approvals = st.pending ?? [];
+          this.blobToken = st.blobToken ?? null;
+          // Full requests arrive per conversation; the v1 handler below must not treat summaries as requests.
+          this.receiveState({ ...st, pending: [] } as AppState);
+          return true;
+        }
+        // The version 1 state sent on connect, while our hello is unanswered: kept in case the server
+        // never answers it (an older server). Otherwise it is an ordinary version 1 state.
+        if (this.helloPending) {
+          this.v1State = msg as ServerMsg;
+          return true;
+        }
+        return this.v2; // a version 2 tab ignores a state without `protocol`
+      }
+      case 'approval': {
+        if (!this.v2) return false;
+        const sum = m.summary as ApprovalSummary;
+        if (!this.approvals.some((a) => a.id === sum.id)) this.approvals = [...this.approvals, sum];
+        return true;
+      }
+      case 'resync':
+        // Too far behind to replay: start this conversation afresh; a snapshot follows.
+        if (m.convId === this.subscribed) {
+          this.items = {};
+          this.drafts = {};
+          this.pages = {};
+          this.dseq = {};
+        }
+        return true;
+      case 'draft': {
+        if (typeof m.dseq !== 'number') return false; // version 1: the whole draft
+        if (m.convId !== this.convId) return true;
+        const agentId = m.agentId as string;
+        const kind = m.kind as Draft['kind'];
+        if (typeof m.text === 'string') {
+          this.drafts[agentId] = { kind, text: m.text };
+          this.dseq[agentId] = m.dseq;
+        } else if ((this.dseq[agentId] ?? 0) + 1 === m.dseq && this.drafts[agentId]) {
+          this.drafts[agentId] = { kind, text: this.drafts[agentId]!.text + String(m.append ?? '') };
+          this.dseq[agentId] = m.dseq;
+        } else if (m.dseq === 1) {
+          this.drafts[agentId] = { kind, text: String(m.append ?? '') };
+          this.dseq[agentId] = 1;
+        } else {
+          // A step went missing: ask for the whole text once.
+          this.sendV2({ t: 'draft_sync', convId: this.convId!, agentId });
+        }
+        return true;
+      }
+      case 'draft_end':
+        if (m.convId === this.convId) {
+          this.drafts[m.agentId as string] = null;
+          delete this.dseq[m.agentId as string];
+        }
+        return true;
+      case 'item_full': {
+        if (m.convId !== this.convId) return true;
+        const item = m.item as Item;
+        const list = this.items[m.agentId as string];
+        const i = list?.findIndex((x) => x.id === item.id) ?? -1;
+        if (list && i >= 0) list[i] = item;
+        delete this.clipped[item.id];
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  /** Fetches the whole of an item that arrived clipped. */
+  fetchFull(agentId: string, itemId: string): void {
+    if (this.convId && this.clipped[itemId]) this.sendV2({ t: 'item_full', convId: this.convId, agentId, itemId });
+  }
+
+  /** Fetches the next older page of an agent's transcript, when there is one. */
+  loadEarlier(agentId: string): void {
+    const page = this.pages[agentId];
+    if (!this.convId || !page || !page.more || page.loading) return;
+    page.loading = true;
+    this.sendV2({ t: 'items', convId: this.convId, agentId, before: page.cursor, limit: Store.PAGE });
   }
 
   newConversation(): void {
+    this.unsubscribe();
     this.convId = null;
     this.viewAgentId = null;
     this.agents = {};
@@ -375,7 +582,14 @@ export class Store {
   loadItems(agentId: string): void {
     if (!this.convId) return;
     this.wanted.add(agentId);
-    if (!this.items[agentId]) this.send({ t: 'items', convId: this.convId, agentId });
+    if (this.items[agentId]) return;
+    if (this.v2) this.sendV2({ t: 'items', convId: this.convId, agentId, limit: Store.PAGE });
+    else this.send({ t: 'items', convId: this.convId, agentId });
+  }
+
+  /** Approvals waiting in a conversation, for its badge in the chat list. */
+  waitingIn(convId: string): number {
+    return this.v2 ? this.approvals.filter((a) => a.convId === convId).length : this.pending.filter((p) => p.convId === convId).length;
   }
 
   /** Forgets a transcript fetched only for a preview. It is fetched again if the agent is opened. */
@@ -383,6 +597,7 @@ export class Store {
     if (agentId === this.viewAgent?.id) return;
     this.wanted.delete(agentId);
     delete this.items[agentId];
+    delete this.pages[agentId];
   }
 
   /** Shows one agent's transcript. */
@@ -400,12 +615,14 @@ export class Store {
   sendMessage(key: string): boolean {
     const d = this.composerFor(key);
     const text = d.text.trim();
-    const images = d.images.map(({ mediaType, data }) => ({ mediaType, data }));
     const ref = crypto.randomUUID();
     const isNew = this.convId === null;
+    // A new chat sends its pictures inline (base64); an existing one sends references to the uploads.
+    const uploaded = d.images.filter((i) => i.ref).map((i) => i.ref!);
+    const inline = d.images.filter((i) => !i.ref && i.data).map(({ mediaType, data }) => ({ mediaType, data }));
     const msg: ClientMsg = isNew
-      ? { t: 'send', convId: null, cwd: this.newCwd, text, images, ref }
-      : { t: 'send', convId: this.convId, text, images, agentId: this.viewAgentId ?? undefined, ref };
+      ? { t: 'send', convId: null, cwd: this.newCwd, text, images: inline, ref }
+      : { t: 'send', convId: this.convId, text, images: inline, ...(uploaded.length ? { blobs: uploaded } : {}), agentId: this.viewAgentId ?? undefined, ref };
     if (!this.send(msg)) return false;
     if (isNew) {
       this.pendingRef = ref;

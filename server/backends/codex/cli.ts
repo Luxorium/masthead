@@ -9,7 +9,8 @@
  * to null on every model and starts app-server with `-c model_catalog_json=<file>`. The real tool list is
  * then checked with `codex debug prompt-input`, which renders what the model would see without calling it.
  */
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { killTree, realTreeDeps, spawnTree, type TreeDeps } from '../proctree.js';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -44,11 +45,19 @@ export const runCli: RunCli = (path, args, env) =>
     child.stdin?.end(); // Codex waits for stdin when it is left open
   });
 
-export const spawnAppServer: SpawnAppServer = (path, args, env) => {
-  const child = spawn(path, args, { env: env as NodeJS.ProcessEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+/**
+ * Starts app-server as the root of its own process tree (proctree.ts), so a stop also ends the shell
+ * commands it runs for the model (on Windows a plain kill would leave them behind).
+ */
+export function makeSpawnAppServer(deps: TreeDeps = realTreeDeps): SpawnAppServer {
+  return (path, args, env) => startTree(path, args, env, deps);
+}
+
+function startTree(path: string, args: string[], env: Record<string, string | undefined>, deps: TreeDeps): AppServerProcess {
+  const child = spawnTree(path, args, { env: env as NodeJS.ProcessEnv, stdio: ['pipe', 'pipe', 'pipe'] }, deps);
   let tail = '';
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (d: string) => (tail = (tail + d).slice(-4000)));
+  child.stderr!.setEncoding('utf8');
+  child.stderr!.on('data', (d: string) => (tail = (tail + d).slice(-4000)));
   let exited: ((detail: string) => void) | null = null;
   let done = false;
   const finish = (why: string) => {
@@ -59,12 +68,14 @@ export const spawnAppServer: SpawnAppServer = (path, args, env) => {
   child.on('exit', (code, signal) => finish(`${tail.trim()}${tail.trim() ? '\n' : ''}codex app-server exited (${signal ?? code})`));
   child.on('error', (e) => finish(e.message));
   return {
-    stdin: child.stdin,
-    stdout: child.stdout,
-    kill: () => void child.kill(),
+    stdin: child.stdin!,
+    stdout: child.stdout!,
+    kill: () => killTree(child, deps),
     onExit: (cb) => (exited = cb),
   };
-};
+}
+
+export const spawnAppServer: SpawnAppServer = makeSpawnAppServer();
 
 /** The person's own Codex: MASTHEAD_CODEX, then PATH, then the usual install places. */
 export function findCodex(env: Record<string, string | undefined>): string | null {

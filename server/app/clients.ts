@@ -7,6 +7,7 @@
 // Every message a tab sends passes `admit()` first: the one place a remote device's role (see
 // server/remote/authorise.ts) is enforced.
 import type { AgentInfo, AppState, ConversationMeta, Draft, Item, PermissionRequest, ServerMsg } from '../../shared/protocol.js';
+import { randomBytes } from 'node:crypto';
 import { CLIP_CHARS, PROTOCOL_VERSION, RING_SIZE, type ApprovalSummary, type Capability, type ErrorCode } from '../../shared/protocol-v2.js';
 import { allowedMessage } from '../remote/authorise.js';
 import type { Role } from '../remote/registry.js';
@@ -29,15 +30,20 @@ export interface HubHost {
 }
 
 interface Session {
-  version: 1 | 2;
+  /** 0: a remote socket that has not said hello with protocol 2 yet; it gets nothing. */
+  version: 0 | 1 | 2;
   caps: Set<Capability>;
   subscribed: Set<string>;
 }
 
 interface Ring {
   seq: number;
-  events: Array<{ seq: number; msg: Record<string, unknown> }>;
+  bytes: number;
+  events: Array<{ seq: number; msg: Record<string, unknown>; bytes: number }>;
 }
+
+/** A ring also stops growing past this many bytes of events. */
+const RING_BYTES = 8 * 1024 * 1024;
 
 interface DraftState {
   kind: Draft['kind'];
@@ -97,6 +103,8 @@ export function clipItem(item: Item): { item: Item; truncated: boolean } {
 }
 
 export class Hub {
+  /** Changes on every server start: a page holding a `seq` from another start must not replay with it. */
+  readonly epoch = randomBytes(6).toString('hex');
   private sessions = new Map<Client, Session>();
   private rings = new Map<string, Ring>();
   private drafts = new Map<string, DraftState>(); // `${convId}/${agentId}`
@@ -108,7 +116,14 @@ export class Hub {
   constructor(private host: HubHost) {}
 
   add(client: Client): void {
-    this.sessions.set(client, { version: 1, caps: new Set(), subscribed: new Set() });
+    // The version 1 adapter is for the local browser only: a remote device speaks version 2 from its
+    // first message and is sent nothing until then.
+    this.sessions.set(client, { version: client.role ? 0 : 1, caps: new Set(), subscribed: new Set() });
+  }
+
+  /** Whether this tab gets the version 1 greeting on connect. */
+  greets(client: Client): boolean {
+    return this.sessions.get(client)?.version === 1;
   }
 
   remove(client: Client): void {
@@ -123,22 +138,32 @@ export class Hub {
     return this.sessions.get(client)?.version === 2;
   }
 
-  /** May this tab send a message of this type? Local tabs may send everything. */
-  admit(client: Client, type: string): void {
-    if (!allowedMessage(client.role ?? 'local', type)) throw new ClientError('refused', 'This device may not do that.');
+  /**
+   * May this tab send this message? The role decides the type; a version 2 tab (every remote device is
+   * one) reads a conversation's details only while subscribed to it.
+   */
+  admit(client: Client, msg: { t: string; convId?: unknown }): void {
+    const s = this.sessions.get(client);
+    if (s?.version === 0 && msg.t !== 'hello') throw new ClientError('protocol', 'Say hello with protocol 2 first.');
+    if (!allowedMessage(client.role ?? 'local', msg.t)) throw new ClientError('refused', 'This device may not do that.');
+    if (s?.version === 2 && ['open', 'items', 'item_full', 'draft_sync'].includes(msg.t) && !s.subscribed.has(String(msg.convId ?? ''))) {
+      throw new ClientError('refused', 'Subscribe to that conversation first.');
+    }
   }
 
   private ring(convId: string): Ring {
     let r = this.rings.get(convId);
-    if (!r) this.rings.set(convId, (r = { seq: 0, events: [] }));
+    if (!r) this.rings.set(convId, (r = { seq: 0, bytes: 0, events: [] }));
     return r;
   }
 
   private record(convId: string, msg: Record<string, unknown>): Record<string, unknown> {
     const r = this.ring(convId);
     const event = { ...msg, seq: ++r.seq };
-    r.events.push({ seq: r.seq, msg: event });
-    if (r.events.length > RING_SIZE) r.events.splice(0, r.events.length - RING_SIZE);
+    const bytes = JSON.stringify(event).length;
+    r.events.push({ seq: r.seq, msg: event, bytes });
+    r.bytes += bytes;
+    while (r.events.length > RING_SIZE || (r.bytes > RING_BYTES && r.events.length > 1)) r.bytes -= r.events.shift()!.bytes;
     return event;
   }
 
@@ -169,6 +194,14 @@ export class Hub {
       was.dseq++;
       return { t: 'draft', convId, agentId, dseq: was.dseq, kind: draft.kind, append };
     }
+    // A new draft: an earlier one still waiting for its item ends now, so the wait cannot end this one.
+    const timer = this.ending.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.ending.delete(key);
+      this.emit(convId, { t: 'draft_end', convId, agentId });
+    }
+    this.finals.delete(key);
     const next: DraftState = { kind: draft.kind, text: draft.text, dseq: 1 };
     this.drafts.set(key, next);
     return { t: 'draft', convId, agentId, dseq: 1, kind: draft.kind, text: draft.text };
@@ -204,6 +237,7 @@ export class Hub {
       this.rings.delete(msg.convId);
       for (const k of this.drafts.keys()) if (k.startsWith(`${msg.convId}/`)) this.drafts.delete(k);
       for (const [k, t] of this.ending) if (k.startsWith(`${msg.convId}/`)) (clearTimeout(t), this.ending.delete(k));
+      for (const k of this.finals.keys()) if (k.startsWith(`${msg.convId}/`)) this.finals.delete(k);
     }
     this.sendTo(convId, v2, msg);
   }
@@ -221,6 +255,7 @@ export class Hub {
 
   private sendTo(convId: string | null, v2: Record<string, unknown> | null, msg: ServerMsg): void {
     for (const [client, s] of this.sessions) {
+      if (s.version === 0) continue;
       if (s.version === 1) {
         client.send(msg);
         continue;
@@ -261,7 +296,14 @@ export class Hub {
         if (!snap) throw new ClientError('not_found', 'That conversation no longer exists.');
         s.subscribed.add(convId);
         const ring = this.ring(convId);
-        const since = typeof raw.since === 'number' ? raw.since : null;
+        // A seq from another server start means nothing here: treat it as too old.
+        const sameStart = raw.epoch === undefined || raw.epoch === this.epoch;
+        const since = typeof raw.since === 'number' && sameStart ? raw.since : null;
+        if (!sameStart) {
+          client.send({ t: 'resync', convId });
+          client.send(this.snapshot(convId, snap));
+          return true;
+        }
         const oldest = ring.events[0]?.seq ?? ring.seq + 1;
         if (since !== null && since <= ring.seq && since >= oldest - 1) {
           for (const e of ring.events) if (e.seq > since) client.send(e.msg);
@@ -278,6 +320,7 @@ export class Hub {
       case 'draft_sync': {
         this.requireV2(s);
         const convId = String(raw.convId ?? '');
+        if (!this.rings.has(convId) && !this.host.snapshot(convId)) throw new ClientError('not_found', 'That conversation no longer exists.');
         const agentId = String(raw.agentId ?? '');
         const d = this.drafts.get(`${convId}/${agentId}`);
         if (!d) client.send({ t: 'draft_end', convId, agentId, seq: this.ring(convId).seq });
@@ -312,12 +355,13 @@ export class Hub {
   stateV2(client: Client): Record<string, unknown> {
     const st = this.host.state(client);
     const pending = st.pending.map((r) => ({ id: r.id, convId: r.convId, agentName: r.agentName, kind: r.kind }));
-    return { t: 'state', protocol: PROTOCOL_VERSION, state: { ...st, pending } };
+    return { t: 'state', protocol: PROTOCOL_VERSION, epoch: this.epoch, state: { ...st, pending } };
   }
 
   /** An error, in the form this tab understands. */
   error(client: Client, e: unknown, ref?: string): void {
     const base = { t: 'error', message: (e as Error)?.message ?? String(e), ...(ref ? { ref } : {}) };
-    client.send(this.isV2(client) ? { ...base, code: codeOf(e) } : base);
+    // Only a local version 1 tab gets the old shape; every other tab gets the code.
+    client.send(this.sessions.get(client)?.version === 1 ? base : { ...base, code: codeOf(e) });
   }
 }

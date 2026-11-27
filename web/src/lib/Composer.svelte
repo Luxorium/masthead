@@ -1,12 +1,12 @@
 <script lang="ts">
   import { displayName, modelLabel, type ImageAttachment } from '../../../shared/protocol.ts';
   import FolderPicker from './FolderPicker.svelte';
+  import { MAX_PICK_BYTES, MAX_UPLOAD_BYTES, shrinkIfLarge, toBase64, uploadImage } from './images.ts';
   import { shortPath, store } from './store.svelte.ts';
   import { T } from './text.ts';
   import { ui } from './ui.svelte.ts';
 
   const MAX_IMAGES = 8;
-  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
   /** Base64 grows by a third; this keeps a full message well under the server's 48 MB socket limit. */
   const MAX_TOTAL_BYTES = 30 * 1024 * 1024;
   const TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
@@ -25,7 +25,9 @@
   const direct = $derived(!isNew && agent !== null && agent.tier !== 'lead');
   const leadBusy = $derived(store.lead?.status === 'running');
   const anyLive = $derived(store.liveCount > 0);
-  const canSend = $derived((draft.text.trim().length > 0 || draft.images.length > 0) && store.connected && !store.creating && store.canRun);
+  /** Pictures still uploading, or that failed: sending waits for the first and needs the second removed. */
+  const imagesBusy = $derived(draft.images.some((i) => i.uploading || i.error));
+  const canSend = $derived((draft.text.trim().length > 0 || draft.images.length > 0) && !imagesBusy && store.connected && !store.creating && store.canRun);
   const leadName = $derived(displayName(store.lead?.name ?? 'alpha'));
   const placeholder = $derived(
     isNew
@@ -71,46 +73,68 @@
 
   async function addFiles(files: Iterable<File>) {
     for (const file of files) {
+      const name = file.name || T.composer.thatImage;
       if (!TYPES.includes(file.type)) {
         store.fail(T.composer.notImage(file.name || T.composer.thatFile));
         continue;
       }
-      if (file.size > MAX_IMAGE_BYTES) {
-        store.fail(T.composer.tooBig(file.name || T.composer.thatImage));
+      if (file.size > MAX_PICK_BYTES) {
+        store.fail(T.composer.tooBigToShrink(name));
         continue;
       }
       if (draft.images.length >= MAX_IMAGES) {
         store.fail(T.composer.tooMany(MAX_IMAGES));
         break;
       }
-      if (totalBytes() + file.size > MAX_TOTAL_BYTES) {
-        store.fail(T.composer.tooMuch(file.name || T.composer.thatImage));
-        continue;
-      }
-      let data: string;
+      // Large photos are made smaller here first; the server takes at most 5 MB per picture.
+      let shrunk: Awaited<ReturnType<typeof shrinkIfLarge>>;
       try {
-        data = await new Promise<string>((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(String(r.result).split(',')[1] ?? '');
-          r.onerror = () => rej(r.error);
-          r.readAsDataURL(file);
-        });
+        shrunk = await shrinkIfLarge(file);
       } catch {
-        store.fail(T.composer.unreadable(file.name || T.composer.thatImage));
+        store.fail(T.composer.unreadable(name));
         continue;
       }
-      // Checked again: another paste or drop may have added images while this one was read.
+      if (shrunk.blob.size > MAX_UPLOAD_BYTES) {
+        store.fail(T.composer.tooBig(name));
+        continue;
+      }
+      // Checked again: another paste or drop may have added images while this one was prepared.
       if (draft.images.length >= MAX_IMAGES) {
         store.fail(T.composer.tooMany(MAX_IMAGES));
         break;
       }
-      if (totalBytes() + file.size > MAX_TOTAL_BYTES) {
-        store.fail(T.composer.tooMuch(file.name || T.composer.thatImage));
+      const convId = store.convId;
+      if (!convId && totalBytes() + shrunk.blob.size > MAX_TOTAL_BYTES) {
+        store.fail(T.composer.tooMuch(name));
         continue;
       }
-      draft.images.push({ mediaType: file.type as ImageAttachment['mediaType'], data, url: URL.createObjectURL(file), name: file.name || 'image', size: file.size });
+      const base = { mediaType: shrunk.mediaType, data: '', url: URL.createObjectURL(shrunk.blob), name, size: shrunk.blob.size };
+      if (convId) {
+        // An existing chat: upload now, so sending is instant and carries only references.
+        draft.images.push({ ...base, uploading: true });
+        const entry = draft.images[draft.images.length - 1]!;
+        uploadImage(convId, shrunk.blob, shrunk.mediaType).then(
+          (ref) => {
+            entry.ref = ref;
+            entry.uploading = false;
+          },
+          (e: Error) => {
+            entry.uploading = false;
+            entry.error = e.message;
+          },
+        );
+      } else {
+        // A new chat has no conversation to upload into yet: the first message carries the picture.
+        try {
+          draft.images.push({ ...base, data: await toBase64(shrunk.blob) });
+        } catch {
+          URL.revokeObjectURL(base.url);
+          store.fail(T.composer.unreadable(name));
+        }
+      }
     }
   }
+
 
   function onPaste(e: ClipboardEvent) {
     const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
@@ -158,8 +182,9 @@
   {#if draft.images.length > 0}
     <div class="images">
       {#each draft.images as img, i (img.url)}
-        <div class="thumb">
+        <div class="thumb" class:busy={img.uploading} class:bad={!!img.error} title={img.error ?? ''}>
           <img src={img.url} alt={img.name} />
+          {#if img.uploading}<span class="state">{T.images.uploading}</span>{:else if img.error}<span class="state">{T.images.failed}</span>{/if}
           <button onclick={() => removeImage(i)} aria-label={T.composer.removeImage}>×</button>
         </div>
       {/each}
@@ -341,6 +366,27 @@
   }
   .thumb {
     position: relative;
+  }
+  .thumb.busy img {
+    opacity: 0.5;
+  }
+  .thumb.bad img {
+    outline: 2px solid var(--bad);
+  }
+  .thumb .state {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 1px 3px;
+    font-size: 10.5px;
+    text-align: center;
+    background: color-mix(in srgb, var(--raised) 85%, transparent);
+    color: var(--text);
+    border-radius: 0 0 8px 8px;
+  }
+  .thumb.bad .state {
+    color: var(--bad);
   }
   .thumb img {
     display: block;

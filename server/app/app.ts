@@ -69,8 +69,9 @@ export class App implements ConversationHost {
    * `settingsFile` is where changes to the settings are written. Tests pass their own file so they
    * never touch the person's real settings.
    */
-  constructor(opts: { store?: Store; claude?: ClaudeInfo; settings?: Settings; settingsFile?: string; registry?: BackendRegistry; remote?: RemoteAccess } = {}) {
+  constructor(opts: { store?: Store; claude?: ClaudeInfo; settings?: Settings; settingsFile?: string; registry?: BackendRegistry; remote?: RemoteAccess; awake?: { set(working: boolean): void; stop(): void } } = {}) {
     this.remote = opts.remote ?? null;
+    this.awake = opts.awake ?? null;
     // Local tabs see remote access change as it happens (requests, devices, the switch).
     this.remote?.onChange(() => this.hub.publishLocal({ t: 'remote', remote: this.remote!.state() }));
     this.settingsFile = opts.settingsFile ?? SETTINGS_FILE;
@@ -121,6 +122,7 @@ export class App implements ConversationHost {
     const busy = conv.busy();
     if (this.busy.get(conv.meta.id) !== busy) {
       this.busy.set(conv.meta.id, busy);
+      this.keepAwake();
       this.broadcast({ t: 'conversations', conversations: this.metas() });
     }
   }
@@ -225,7 +227,14 @@ export class App implements ConversationHost {
   }
 
   /** Stops every agent and writes everything to disk. */
+  /** Keeps the computer from sleeping while any agent works (setting `keepAwake`, on unless false). */
+  private awake: { set(working: boolean): void; stop(): void } | null;
+  private keepAwake(): void {
+    this.awake?.set((this.currentSettings as { keepAwake?: boolean }).keepAwake !== false && this.workingCount() > 0);
+  }
+
   shutdown(): void {
+    this.awake?.stop();
     for (const p of [...this.pending.values()]) p.resolve({ decision: 'deny', message: 'Masthead is shutting down.' });
     for (const conv of this.conversations.values()) conv.shutdown();
     this.flush();
@@ -293,7 +302,8 @@ export class App implements ConversationHost {
   connect(client: Client): void {
     this.hub.add(client);
     // A version 2 page says hello and gets its own `state`; this one is what a 0.1.x page expects.
-    client.send({ t: 'state', state: this.state(client) });
+    // A remote device gets nothing until its version 2 hello.
+    if (this.hub.greets(client)) client.send({ t: 'state', state: this.state(client) });
   }
 
   disconnect(client: Client): void {
@@ -306,7 +316,7 @@ export class App implements ConversationHost {
       const msg = raw as Record<string, unknown> | null;
       if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') throw new Error('Malformed message.');
       // The one gate for what a tab may send (a remote device's role).
-      this.hub.admit(client, msg.t);
+      this.hub.admit(client, msg as { t: string; convId?: unknown });
       if (this.hub.intercept(client, msg)) return;
       if (msg.t === 'hello' && this.hub.isV2(client)) {
         client.send(this.hub.stateV2(client));
@@ -370,7 +380,7 @@ export class App implements ConversationHost {
 
   private conv(id: unknown): Conversation {
     const conv = typeof id === 'string' ? this.conversations.get(id) : undefined;
-    if (!conv) throw new Error('That conversation no longer exists.');
+    if (!conv) throw new ClientError('not_found', 'That conversation no longer exists.');
     return conv;
   }
 
@@ -393,7 +403,7 @@ export class App implements ConversationHost {
       case 'items': {
         const conv = this.conv(msg.convId);
         const agent = conv.agents.get(String(msg.agentId));
-        if (!agent) throw new Error('That agent no longer exists.');
+        if (!agent) throw new ClientError('not_found', 'That agent no longer exists.');
         const paging = msg as { before?: unknown; limit?: unknown };
         if (typeof paging.limit === 'number') {
           // Newest page first; `cursor` asks for the next older page.
@@ -410,7 +420,7 @@ export class App implements ConversationHost {
         const text = typeof msg.text === 'string' ? msg.text : '';
         const images = this.checkImages(msg.images);
         if (!text.trim() && images.length === 0) throw new Error('The message is empty.');
-        if (text.length > MAX_TEXT) throw new Error('The message is too long.');
+        if (text.length > MAX_TEXT) throw new ClientError('too_large', 'The message is too long.');
         let conv: Conversation;
         let firstRefs: BlobRef[] | undefined;
         if (msg.convId === null || msg.convId === undefined) {
@@ -419,7 +429,7 @@ export class App implements ConversationHost {
           const wanted = (msg as { profile?: unknown }).profile;
           const profiles = this.currentSettings.profiles;
           const profile = typeof wanted === 'string' && profiles.some((p) => p.id === wanted) ? wanted : this.currentSettings.defaultProfile;
-          if (typeof wanted === 'string' && profile !== wanted) throw new Error(`There is no team profile "${wanted.slice(0, 40)}".`);
+          if (typeof wanted === 'string' && profile !== wanted) throw new ClientError('not_found', `There is no team profile "${wanted.slice(0, 40)}".`);
           // The lead's backend must be usable before a conversation starts on it.
           const leadBackend = (profiles.find((p) => p.id === profile) ?? profiles[0])?.tiers[0]?.backend ?? 'claude-code';
           if (!this.registry.get(leadBackend)) throw new Error(leadBackend === 'claude-code' ? (this.claude.error ?? 'Claude Code was not found.') : this.registry.unavailableReason(leadBackend));
@@ -475,6 +485,7 @@ export class App implements ConversationHost {
         this.dirty.delete(conv.meta.id);
         this.conversations.delete(conv.meta.id);
         this.busy.delete(conv.meta.id);
+        this.keepAwake();
         this.store.deleteConversation(conv.meta.id);
         this.broadcast({ t: 'deleted', convId: conv.meta.id });
         this.broadcast({ t: 'conversations', conversations: this.metas() });
@@ -491,6 +502,7 @@ export class App implements ConversationHost {
   private updateSettings(next: Settings): void {
     this.currentSettings = next;
     this.safely('settings', () => saveSettings(next, this.settingsFile));
+    this.keepAwake();
     this.scheduler.limitsChanged();
     // Running agents take up what can change without restarting them.
     for (const conv of this.conversations.values()) conv.settingsChanged();
@@ -515,16 +527,16 @@ export class App implements ConversationHost {
 
   private checkImages(images: unknown): ImageAttachment[] {
     if (!Array.isArray(images)) return [];
-    if (images.length > MAX_IMAGES) throw new Error(`At most ${MAX_IMAGES} images per message.`);
+    if (images.length > MAX_IMAGES) throw new ClientError('too_large', `At most ${MAX_IMAGES} images per message.`);
     let total = 0;
     return images.map((img) => {
       const i = img as ImageAttachment;
       if (!i || !IMAGE_TYPES.has(i.mediaType) || typeof i.data !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(i.data)) throw new Error('Unsupported image.');
       // Decoded size from the base64 length: 3 bytes per 4 characters, less the padding.
       const bytes = Math.floor((i.data.length * 3) / 4) - (i.data.endsWith('==') ? 2 : i.data.endsWith('=') ? 1 : 0);
-      if (bytes > MAX_IMAGE_BYTES) throw new Error('An image is larger than 5 MB.');
+      if (bytes > MAX_IMAGE_BYTES) throw new ClientError('too_large', 'An image is larger than 5 MB.');
       total += bytes;
-      if (total > MAX_TOTAL_IMAGE_BYTES) throw new Error('The images together are larger than 30 MB.');
+      if (total > MAX_TOTAL_IMAGE_BYTES) throw new ClientError('too_large', 'The images together are larger than 30 MB.');
       return { mediaType: i.mediaType, data: i.data };
     });
   }

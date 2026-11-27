@@ -244,8 +244,16 @@ try {
   check('the map shows three levels', (await page.locator('.map .tree.root > li > ul > li > ul > li > .card', { hasText: 'helper job' }).count()) === 1);
   const names = await page.locator('.map .card .name').allTextContents();
   check('agents are named Alpha, Bravo, Charlie, Delta', ['Alpha', 'Bravo', 'Charlie', 'Delta'].every((n) => names.includes(n)));
-  await page.locator('.map .card.tier-sonnet', { hasText: 'helper job' }).first().hover();
-  await page.waitForSelector('.map .preview');
+  // Hover until the preview shows: the card may still be moving as others appear, and a hover that
+  // lands mid-layout (or before the 220 ms delay passes) can miss. Move away between tries.
+  const helperCard = page.locator('.map .card.tier-sonnet', { hasText: 'helper job' }).first();
+  for (let tries = 0; tries < 5; tries++) {
+    await page.mouse.move(5, 5);
+    await helperCard.scrollIntoViewIfNeeded();
+    await helperCard.hover();
+    if (await page.locator('.map .preview').waitFor({ timeout: 3000 }).then(() => true, () => false)) break;
+  }
+  await page.waitForSelector('.map .preview', { timeout: 5000 });
   // Real content, not "Loading…": at least one chat line, or "Nothing yet.".
   await page.waitForSelector('.map .preview .p-line, .map .preview .p-empty:has-text("Nothing yet")', { timeout: 10_000 }).catch(() => {});
   await page.screenshot({ path: `${shots}/3-map-${scheme}.png` });
@@ -323,6 +331,37 @@ try {
   await page.waitForSelector(fake ? '.inbound.report' : '.md.assistant table');
   check('the conversation survives a reload', (await page.locator('.user .bubble').count()) === (fake ? 3 : 1));
   check('the sidebar lists it', (await page.locator('aside.left .row').count()) >= 1);
+
+  if (fake) {
+    // Pictures (fake only: it can return a tool result with an image on cue, and replies to an upload).
+    const loaded = (sel) => page.evaluate((q) => [...document.querySelectorAll(q)].some((i) => i.complete && i.naturalWidth > 0), sel);
+    await page.locator('textarea').fill('[[image]] Reply with exactly the word pic');
+    await page.locator('textarea').press('Enter');
+    await page.locator('.tool-images img').first().waitFor({ timeout: 30_000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('.tool-images img')].some((i) => i.complete && i.naturalWidth > 0), null, { timeout: 10_000 }).catch(() => {});
+    check('a picture from a tool shows as a thumbnail', await loaded('.tool-images img'));
+    const thumb = page.locator('.tool-images .thumb').first();
+    await thumb.click();
+    await page.locator('.viewer').waitFor();
+    check('a thumbnail opens the picture full size', (await page.locator('.viewer img').count()) === 1);
+    await page.keyboard.press('Escape');
+    await page.locator('.viewer').waitFor({ state: 'detached' });
+    check('Escape closes the picture and focus returns to the thumbnail', await thumb.evaluate((el) => el === document.activeElement));
+    // Upload: a small PNG attached in an existing chat is uploaded at once and shown in the sent message.
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==', 'base64');
+    await page.locator('.composer input[type=file]').setInputFiles({ name: 'dot.png', mimeType: 'image/png', buffer: png });
+    await page.waitForFunction(() => {
+      const t = document.querySelector('.composer .thumb');
+      return t && !t.classList.contains('busy');
+    }, null, { timeout: 10_000 });
+    check('an attached picture uploads before sending', (await page.locator('.composer .thumb.bad').count()) === 0);
+    await page.locator('textarea').fill('Reply with exactly the word seen');
+    await page.locator('textarea').press('Enter');
+    await page.locator('.user .thumbs img').first().waitFor({ timeout: 10_000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('.user .thumbs img')].some((i) => i.complete && i.naturalWidth > 0), null, { timeout: 10_000 }).catch(() => {});
+    check('the sent picture shows in the message', await loaded('.user .thumbs img'));
+    await page.screenshot({ path: `${shots}/5b-pictures-${scheme}.png` });
+  }
 
   // Phone: a 390 × 844 touch screen in the light theme, on the same server and conversation.
   {

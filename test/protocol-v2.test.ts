@@ -24,7 +24,7 @@ function setup() {
     const say = (m: Record<string, unknown>) => {
       got.length = 0;
       try {
-        hub.admit(client, String(m.t));
+        hub.admit(client, m as { t: string });
         hub.intercept(client, m);
       } catch (e) {
         hub.error(client, e);
@@ -172,12 +172,13 @@ test('v2: errors carry codes; roles are enforced at the gate; deleting a convers
   const phone = tab('read');
   phone.say(v2);
   assert.equal(phone.say({ t: 'subscribe', convId: 'c1' })[0]!.t, 'conversation', 'reading is allowed');
-  assert.throws(() => hub.admit(phone.client, 'send'), (e: ClientError) => e.code === 'refused');
-  assert.throws(() => hub.admit(phone.client, 'settings'), (e: ClientError) => e.code === 'refused');
+  assert.throws(() => hub.admit(phone.client, { t: 'send' }), (e: ClientError) => e.code === 'refused');
+  assert.throws(() => hub.admit(phone.client, { t: 'settings' }), (e: ClientError) => e.code === 'refused');
   const approver = tab('approve');
-  hub.admit(approver.client, 'permission');
+  approver.say(v2);
+  hub.admit(approver.client, { t: 'permission' });
   const local = tab();
-  hub.admit(local.client, 'device_revoke');
+  hub.admit(local.client, { t: 'device_revoke' });
   hub.publish({ t: 'deleted', convId: 'c1' });
   phone.got.length = 0;
   hub.publish({ t: 'agent', agent: agent('a', 'c1') });
@@ -277,4 +278,67 @@ test('v2: state carries backends for version 2 tabs only; check_backends re-dete
   reader.send = (m) => void out.push(m as Record<string, unknown>);
   app.handle(reader, { t: 'check_backends' });
   assert.equal(out[0]!.t, 'error');
+});
+
+test('review: a remote tab gets nothing before hello, and cannot read a conversation it has not subscribed to', () => {
+  const { hub, tab } = setup();
+  const phone = tab('read');
+  hub.publish({ t: 'agent', agent: agent('a', 'c1') });
+  hub.publish({ t: 'permission_request', request: request('p1') });
+  assert.deepEqual(phone.got, [], 'no version 1 events for a remote socket');
+  assert.equal(phone.say({ t: 'open', convId: 'c1' })[0]!.code, 'protocol');
+  phone.say(v2);
+  for (const m of [{ t: 'open', convId: 'c1' }, { t: 'items', convId: 'c1', agentId: 'a' }, { t: 'item_full', convId: 'c1', agentId: 'a', itemId: 'big' }, { t: 'draft_sync', convId: 'c1', agentId: 'a' }]) {
+    const out = phone.say(m);
+    assert.equal(out[0]!.code, 'refused', m.t);
+  }
+  // Subscribed to c2 only: c1's items stay closed (the cross-conversation read echo found).
+  phone.say({ t: 'subscribe', convId: 'c2' });
+  assert.equal(phone.say({ t: 'item_full', convId: 'c1', agentId: 'a', itemId: 'big' })[0]!.code, 'refused');
+  phone.say({ t: 'subscribe', convId: 'c1' });
+  assert.equal(phone.say({ t: 'item_full', convId: 'c1', agentId: 'a', itemId: 'big' })[0]!.t, 'item_full');
+  // A local version 1 tab is unaffected.
+  const local = tab();
+  assert.equal(local.say({ t: 'open', convId: 'c1' }).length, 0, 'v1 open passes the gate (App answers it)');
+});
+
+test('review: a seq from another server start is never replayed', () => {
+  const { hub, tab } = setup();
+  for (let i = 0; i < 15; i++) hub.publish({ t: 'agent', agent: agent('a', 'c1') });
+  const a = tab();
+  const [st] = a.say(v2);
+  assert.equal(st!.epoch, hub.epoch);
+  assert.deepEqual(a.say({ t: 'subscribe', convId: 'c1', since: 10, epoch: hub.epoch }).map((m) => m.seq), [11, 12, 13, 14, 15]);
+  assert.deepEqual(a.say({ t: 'subscribe', convId: 'c1', since: 10, epoch: 'an-earlier-start' }).map((m) => m.t), ['resync', 'conversation']);
+});
+
+test('review: a draft waiting for its item cannot end the next draft', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { hub, tab } = setup();
+  const a = tab();
+  a.say(v2);
+  a.say({ t: 'subscribe', convId: 'c1' });
+  a.got.length = 0;
+  const d = (text: string | null) => hub.publish({ t: 'draft', convId: 'c1', agentId: 'a', draft: text === null ? null : { kind: 'text', text } });
+  d('First');
+  d(null); // waits for its item
+  d('Second'); // a new draft starts: the first ends now
+  t.mock.timers.tick(2000);
+  assert.deepEqual(a.got.map((m) => [m.t, m.text]), [['draft', 'First'], ['draft_end', undefined], ['draft', 'Second']], 'no late end after Second started');
+});
+
+test('review: rings are capped by bytes as well as count; draft_sync needs a real conversation', () => {
+  const { hub, tab } = setup();
+  const big = 'z'.repeat(200 * 1024);
+  for (let i = 0; i < 60; i++) hub.publish({ t: 'item', convId: 'c1', agentId: 'a', item: { id: `i${i}`, ts: 1, kind: 'text', text: big } as Item });
+  const a = tab();
+  a.say(v2);
+  const replay = a.say({ t: 'subscribe', convId: 'c1', since: 1 });
+  assert.deepEqual(replay.map((m) => m.t), ['resync', 'conversation'], 'the oldest events were dropped for size');
+  const b = tab();
+  b.say(v2);
+  b.say({ t: 'subscribe', convId: 'c1' });
+  const ringsBefore = (hub as unknown as { rings: Map<string, unknown> }).rings.size;
+  assert.equal(b.say({ t: 'draft_sync', convId: 'ghost', agentId: 'a' })[0]!.code, 'refused', 'not subscribed');
+  assert.equal((hub as unknown as { rings: Map<string, unknown> }).rings.size, ringsBefore, 'no ring made for an unknown id');
 });

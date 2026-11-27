@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Item } from '../../../../shared/protocol.ts';
   import { T } from '../text.ts';
+  import Thumbs from '../images/Thumbs.svelte';
 
   let { item }: { item: Extract<Item, { kind: 'user' }> } = $props();
   // 0.1.x stored a count; 0.2.0 stores the images themselves (shown once images land, Stage B).
@@ -9,7 +10,9 @@
 
 <div class="user">
   <div class="bubble">
-    {#if count > 0}<div class="attached">{T.transcript.images(count)}</div>{/if}
+    {#if Array.isArray(item.images) && item.images.length > 0}
+      <Thumbs refs={item.images} label={T.images.sent} />
+    {:else if count > 0}<div class="attached">{T.transcript.images(count)}</div>{/if}
     {item.text}
   </div>
 </div>

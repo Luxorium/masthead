@@ -10,7 +10,7 @@ import { test } from 'node:test';
 const POSIX = process.platform !== 'win32';
 import { allowedMessage, authorise } from '../server/remote/authorise.ts';
 import { DeviceRegistry, refusalFor } from '../server/remote/registry.ts';
-import { CliTailscale, FakeTailscale, addCommand, identityFrom, removeCommand, serveStateFrom, type Identity } from '../server/remote/tailscale.ts';
+import { CachedWhois, CliTailscale, FakeTailscale, addCommand, identityFrom, removeCommand, serveStateFrom, type Identity } from '../server/remote/tailscale.ts';
 
 const SOCK = 'unix:/run/user/1000/masthead/remote.sock';
 const phone: Identity = { nodeId: 'nPHONE', nodeName: 'phone', os: 'iOS', addresses: ['100.64.0.2'], tagged: false, user: { login: 'me@example.com', name: 'Me' }, tailnetId: 'T1' };
@@ -39,18 +39,52 @@ function setup(opts: { tokenDays?: number; allowOtherTailnets?: boolean; allowTa
   return { dir, registry, tailscale, deps, advance, pair };
 }
 
-test('remote: a pending request gets a six-digit code, one per node, and asking again keeps it', () => {
+test('remote: a pending request gets a six-digit code; a second asker for the same node gets neither code nor secret', () => {
   const { registry } = setup();
   const a = registry.request(phone, '100.64.0.2');
   assert.ok(!('refused' in a));
   assert.match(a.request.code, /^\d{6}$/);
+  // The hijack bravo found: a forged second request must not rotate the first one's poll secret.
   const b = registry.request(phone, '100.64.0.2');
-  assert.ok(!('refused' in b));
-  assert.equal(b.request.id, a.request.id);
-  assert.notEqual(b.pollSecret, a.pollSecret, 'a new poll secret; the old one stops working');
-  assert.equal(registry.collect(a.request.id, a.pollSecret, phone.nodeId).state, 'gone');
-  assert.equal(registry.collect(b.request.id, b.pollSecret, phone.nodeId).state, 'pending');
-  assert.equal(registry.requests().length, 1);
+  assert.deepEqual(b, { refused: 'A request from this device is already waiting for approval.' });
+  assert.ok(!JSON.stringify(b).includes(a.request.code), 'the code is not revealed');
+  assert.equal(registry.collect(a.request.id, a.pollSecret, phone.nodeId).state, 'pending', "the first asker's secret still works");
+  registry.allow(a.request.id);
+  assert.equal(registry.collect(a.request.id, a.pollSecret, phone.nodeId).state, 'allowed');
+  assert.equal(registry.requests().length, 0);
+});
+
+test('remote: pending requests are capped per tailnet user', () => {
+  const { registry } = setup();
+  for (let i = 0; i < 3; i++) assert.ok(!('refused' in registry.request({ ...phone, nodeId: `n${i}` }, `100.64.1.${i}`)));
+  assert.match(JSON.stringify(registry.request({ ...phone, nodeId: 'n9' }, '100.64.1.9')), /Too many devices of this tailnet user/);
+  assert.ok(!('refused' in registry.request(foreign, '100.64.0.5')), 'another user is not blocked');
+});
+
+test('remote: refusals are logged at most once a minute per node and reason; the log rotates and reads a tail', () => {
+  const { registry, dir, advance } = setup();
+  for (let i = 0; i < 50; i++) registry.audit({ event: 'refuse', nodeId: 'nX', detail: 'unknown token' });
+  assert.equal(registry.readAudit().length, 1);
+  advance(61_000);
+  registry.audit({ event: 'refuse', nodeId: 'nX', detail: 'unknown token' });
+  assert.equal(registry.readAudit().length, 2);
+  writeFileSync(join(dir, 'audit.jsonl'), 'x'.repeat(1024 * 1024 + 10) + '\n');
+  registry.audit({ event: 'request', nodeId: 'nY' });
+  assert.deepEqual(registry.readAudit().map((e) => e.event), ['request'], 'rotated past 1 MB');
+  assert.ok(statSync(join(dir, 'audit.jsonl.1')).size > 1024 * 1024);
+});
+
+test('remote: an approval that expires tells the transport, as revoke does', () => {
+  const dir = join(mkdtempSync(join(tmpdir(), 'masthead-remote-')), 'remote');
+  let clock = 0;
+  const expired: string[] = [];
+  const registry = new DeviceRegistry({ dir, now: () => clock, onExpire: (id) => void expired.push(id) });
+  const r = registry.request(phone, '100.64.0.2');
+  assert.ok(!('refused' in r));
+  registry.allow(r.request.id);
+  clock += 31 * 24 * 3600_000;
+  registry.sweep();
+  assert.deepEqual(expired, ['nPHONE']);
 });
 
 test('remote: allow issues the token once, only to the node that asked, and only its hash is stored', () => {
@@ -272,4 +306,45 @@ test('tailscale: the CLI provider adds and removes its entry with exactly its ow
   await cli.addServe(7443, SOCK);
   await cli.removeServe(7443, SOCK);
   assert.deepEqual(changes, [['serve', '--bg', '--https=7443', SOCK], ['serve', '--https=7443', 'off']]);
+});
+
+test('tailscale: whois is cached a minute per address and at most four run at once', async () => {
+  let calls = 0;
+  let running = 0;
+  let peak = 0;
+  let clock = 0;
+  const inner = new FakeTailscale();
+  inner.identities.set('100.64.0.2', phone);
+  const slow = Object.assign(Object.create(inner), {
+    whois: async (a: string) => {
+      calls++;
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running--;
+      return a === '100.64.0.2' ? phone : null;
+    },
+  });
+  const cached = new CachedWhois(slow, { now: () => clock });
+  await Promise.all(Array.from({ length: 20 }, () => cached.whois('100.64.0.2')));
+  assert.equal(calls, 1, 'twenty requests at once: one lookup');
+  await Promise.all(Array.from({ length: 12 }, (_, i) => cached.whois(`100.64.9.${i}`)));
+  assert.ok(peak <= 4, `peak ${peak}`);
+  clock += 61_000;
+  await cached.whois('100.64.0.2');
+  assert.equal(calls, 14, 'looked up again after a minute');
+});
+
+test('tailscale: anything Masthead does not fully understand counts as in use, never as off', () => {
+  const host = 'h.example.ts.net';
+  // The real shape on the development machine (2026-11-27), names replaced.
+  const real = { TCP: { '443': { HTTPS: true }, '8443': { HTTPS: true } }, Web: { [`${host}:443`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:1234' } } } } };
+  assert.deepEqual(serveStateFrom(real, host, 7443, SOCK), { kind: 'off' });
+  assert.equal(serveStateFrom(real, host, 443, SOCK).kind, 'elsewhere');
+  assert.equal(serveStateFrom({ ...real, Foreground: { abc: { TCP: {} } } } as never, host, 7443, SOCK).kind, 'elsewhere', 'a foreground session');
+  assert.equal(serveStateFrom({ Services: { 'svc:x': {} } } as never, host, 7443, SOCK).kind, 'elsewhere', 'a newer layout');
+  assert.equal(serveStateFrom({ Web: { [`${host}:7443`]: { Handlers: 'odd' } } } as never, host, 7443, SOCK).kind, 'elsewhere');
+  assert.equal(serveStateFrom({ TCP: { '7443': { TCPForward: '127.0.0.1:22' } } } as never, host, 7443, SOCK).kind, 'elsewhere');
+  assert.equal(serveStateFrom(null as never, host, 7443, SOCK).kind, 'elsewhere');
+  assert.equal(serveStateFrom({ Foreground: {} } as never, host, 7443, SOCK).kind, 'off', 'an empty key is nothing');
 });

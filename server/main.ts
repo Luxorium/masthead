@@ -13,7 +13,7 @@ import { chooseTarget, startRemote } from './transport/remote.js';
 import { RemoteAccess } from './remote/access.js';
 import { CliTailscale } from './remote/tailscale.js';
 import { serviceFor, ServiceError } from './service/index.js';
-import { awakeCommand } from './service/awake.js';
+import { Awake, awakeCommand } from './service/awake.js';
 import { doctor, doctorExitCode, formatChecks, sdkBinaryPackage, systemDoctorFs } from './doctor.js';
 import { findClaude } from './backends/claude/env.js';
 import { CONFIG_DIR } from './paths.js';
@@ -163,7 +163,7 @@ async function runServer(): Promise<void> {
   const p = port();
   // Remote access over Tailscale: off by default; Masthead adds and removes only its own serve entry.
   const remote = new RemoteAccess({ dir: join(DATA_DIR, 'remote'), tailscale: new CliTailscale(), target: chooseTarget(process.env, DATA_DIR) });
-  const app = new App({ remote });
+  const app = new App({ remote, awake: new Awake() });
   const dev = process.env.MASTHEAD_DEV === '1';
   let devWeb = 7718;
   try {

@@ -11,7 +11,10 @@ import {
   type Query,
   type SDKMessage,
   type SDKUserMessage,
+  type SpawnOptions as SdkSpawnOptions,
+  type SpawnedProcess,
 } from '@anthropic-ai/claude-agent-sdk';
+import { killTree, realTreeDeps, spawnTree, type TreeDeps } from '../proctree.js';
 import { EFFORTS, type Effort, type Question } from '../../../shared/protocol.js';
 import type { Backend, BackendCaps, BackendInfo, Content, ModelInfo, PermissionAsk, Session, SessionEvents, SessionSpec } from '../types.js';
 import { agentEnv } from './env.js';
@@ -96,6 +99,8 @@ export interface ClaudeBackendOptions {
   /** As found at start-up (findClaude), for detect(). */
   version?: string | null;
   error?: string;
+  /** How the Claude Code process is started and stopped; tests replace it. */
+  treeDeps?: TreeDeps;
   /** Starts a session; tests replace it. Defaults to the Agent SDK's `query`. */
   query?: typeof sdkQuery;
 }
@@ -184,9 +189,9 @@ export class ClaudeSession implements Session {
       strictMcpConfig: s.lean,
       systemPrompt: { type: 'preset', preset: 'claude_code', append: s.instructions },
       canUseTool: (toolName, toolInput, o) => this.canUseTool(toolName, toolInput, o),
-      stderr: (data) => {
-        this.stderrTail = (this.stderrTail + data).slice(-STDERR_KEEP);
-      },
+      stderr: (data) => this.onStderr(data),
+      // Masthead starts Claude Code itself, so a stop ends the commands it started too (proctree.ts).
+      spawnClaudeCodeProcess: (o) => this.spawnProcess(o),
     };
     if (s.resume) options.resume = s.resume;
     if (s.permissionMode !== 'inherit') {
@@ -194,6 +199,41 @@ export class ClaudeSession implements Session {
       if (s.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
     }
     return options;
+  }
+
+  private onStderr(data: string): void {
+    this.stderrTail = (this.stderrTail + data).slice(-STDERR_KEEP);
+  }
+
+  /** Starts Claude Code in its own process tree; the SDK's kill ends the whole tree. */
+  private spawnProcess(o: SdkSpawnOptions): SpawnedProcess {
+    const deps = this.opts.treeDeps ?? realTreeDeps;
+    const child = spawnTree(o.command, o.args, { cwd: o.cwd, env: o.env as NodeJS.ProcessEnv, stdio: ['pipe', 'pipe', 'pipe'] }, deps);
+    // A custom spawner gets no stderr handling from the SDK: read it here (the missing-session check needs it).
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (d: string) => this.onStderr(d));
+    // The SDK aborts this after its graceful-close window (stdin EOF, ~2 s): then end the tree.
+    o.signal?.addEventListener('abort', () => killTree(child, deps), { once: true });
+    return {
+      stdin: child.stdin!,
+      stdout: child.stdout!,
+      get killed() {
+        return child.killed;
+      },
+      get exitCode() {
+        return child.exitCode;
+      },
+      get signalCode() {
+        return child.signalCode;
+      },
+      kill: () => {
+        killTree(child, deps);
+        return true;
+      },
+      on: ((event: 'exit' | 'error', listener: (...a: any[]) => void) => void child.on(event, listener)) as SpawnedProcess['on'],
+      once: ((event: 'exit' | 'error', listener: (...a: any[]) => void) => void child.once(event, listener)) as SpawnedProcess['once'],
+      off: ((event: 'exit' | 'error', listener: (...a: any[]) => void) => void child.off(event, listener)) as SpawnedProcess['off'],
+    };
   }
 
   private async canUseTool(toolName: string, input: Record<string, unknown>, o: Parameters<CanUseTool>[2]): Promise<PermissionResult> {

@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeFileAtomic } from '../storage/atomic.js';
 import { DeviceRegistry, ROLES, type AuditEntry, type Device, type Role } from './registry.js';
-import type { ServeState, TailnetStatus, TailscaleProvider } from './tailscale.js';
+import { CachedWhois, type ServeState, type TailnetStatus, type TailscaleProvider } from './tailscale.js';
 
 export const DEFAULT_REMOTE_PORT = 7443;
 
@@ -37,6 +37,8 @@ export interface RemoteState {
   problem?: string;
   command?: string;
   target: RemoteTarget['kind'];
+  /** Said plainly when the target is a loopback port (Windows): what the person must watch for. */
+  warning?: string;
   allowOtherTailnets: boolean;
   allowTagged: boolean;
   devices: Array<Omit<Device, 'tokenHash'>>;
@@ -70,11 +72,22 @@ export class RemoteAccess {
     mkdirSync(opts.dir, { recursive: true, mode: 0o700 });
     this.file = join(opts.dir, 'config.json');
     this.config = this.load();
-    this.registry = new DeviceRegistry({ dir: opts.dir, now: opts.now, allowOtherTailnets: this.config.allowOtherTailnets, allowTagged: this.config.allowTagged });
+    this.registry = new DeviceRegistry({
+      dir: opts.dir,
+      now: opts.now,
+      allowOtherTailnets: this.config.allowOtherTailnets,
+      allowTagged: this.config.allowTagged,
+      // An approval that runs out ends the device's open sockets, as a revoke does.
+      onExpire: (nodeId) => {
+        for (const fn of this.deviceListeners) fn(nodeId, { revoked: true });
+      },
+    });
+    this.provider = new CachedWhois(opts.tailscale, { now: opts.now });
   }
 
+  private provider: TailscaleProvider;
   get tailscale(): TailscaleProvider {
-    return this.opts.tailscale;
+    return this.provider;
   }
   get target(): RemoteTarget {
     return this.opts.target;
@@ -245,6 +258,9 @@ export class RemoteAccess {
       serve: this.serveKind,
       ...(this.problem ? { problem: this.problem.text, ...(this.problem.command ? { command: this.problem.command } : {}) } : {}),
       target: this.opts.target.kind,
+      ...(this.opts.target.kind === 'loopback'
+        ? { warning: 'On this computer Tailscale reaches Masthead through a local port, so another program running here could pretend to be one of your devices. Approve a device only while you are pairing it, and only when the code on its screen matches.' }
+        : {}),
       allowOtherTailnets: this.config.allowOtherTailnets,
       allowTagged: this.config.allowTagged,
       devices: this.registry.list().map(({ tokenHash: _t, ...d }) => d),

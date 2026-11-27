@@ -132,9 +132,9 @@ test('remote: port and policy settings; a port cannot change while on', async ()
 
 test('remote: targets per platform', () => {
   assert.deepEqual(chooseTarget({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/d', 'linux'), { kind: 'socket', path: '/run/user/1000/masthead/remote.sock' });
-  assert.deepEqual(chooseTarget({}, '/d', 'darwin'), { kind: 'socket', path: '/d/remote/remote.sock' });
+  assert.deepEqual(chooseTarget({}, '/d', 'darwin', 501), { kind: 'socket', path: '/tmp/masthead-501/remote.sock' }, 'no runtime folder: a private folder in /tmp');
   assert.deepEqual(chooseTarget({}, '/d', 'win32'), { kind: 'loopback', port: 7719 });
-  assert.equal(chooseTarget({}, '/' + 'x'.repeat(120), 'linux').kind, 'loopback', 'a socket path too long falls back');
+  assert.deepEqual(chooseTarget({ XDG_RUNTIME_DIR: '/' + 'x'.repeat(120) }, '/d', 'linux', 7), { kind: 'socket', path: '/tmp/masthead-7/remote.sock' }, 'a long runtime path never falls back to a port on Unix');
   assert.equal(remoteCsp(`https://${HOST}:${PORT}`).includes(`connect-src 'self' wss://${HOST}:${PORT}`), true);
 });
 
@@ -191,7 +191,14 @@ test('remote: pairing end to end, the device socket with its role, revoke', asyn
     assert.equal((await open(phone, 'f'.repeat(64))).status, 403, 'a made-up token');
     const dev = await open(phone, token);
     assert.ok(dev.ws, 'connected');
-    const state = dev.got.find((m) => m.t === 'state') as { state: Record<string, unknown> };
+    assert.deepEqual(dev.got, [], 'a device is sent nothing before its version 2 hello');
+    dev.ws!.send(JSON.stringify({ t: 'subscribe', convId: 'x' }));
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(dev.got[0]?.code, 'protocol', 'and may send nothing else first');
+    dev.ws!.send(JSON.stringify({ t: 'hello', protocol: 2 }));
+    await new Promise((r) => setTimeout(r, 50));
+    const state = dev.got.find((m) => m.t === 'state') as { state: Record<string, unknown>; protocol: number };
+    assert.equal(state.protocol, 2);
     assert.equal('remote' in state.state, false, 'a device never sees the device list');
     const say = async (m: Record<string, unknown>) => {
       dev.got.length = 0;
@@ -211,6 +218,7 @@ test('remote: pairing end to end, the device socket with its role, revoke', asyn
     app.handle(localClient, { t: 'device_revoke', nodeId: 'nPHONE' });
     assert.equal(await closed, 4001);
     assert.equal((await open(phone, token)).status, 403);
+    assert.equal(JSON.parse((await call(target, port, '/api/remote/whoami', { headers: headers(phone, { 'x-masthead-device': token }) })).body).state, 'unknown', 'a revoked token: may ask again');
     // The audit log reached the local session.
     local.length = 0;
     app.handle(localClient, { t: 'remote_audit' });
@@ -234,4 +242,40 @@ test('remote: a local session without remote access gets a clear error; devices 
   got.length = 0;
   app.handle(c, { t: 'remote_audit' });
   assert.match(String(got[0]?.message), /not available/);
+});
+
+test('remote: page files are served without a whois; a hijacking second request gets nothing', async () => {
+  const { access, app, webDir, target, tailscale } = setup();
+  let lookups = 0;
+  const orig = tailscale.whois.bind(tailscale);
+  tailscale.whois = async (a: string) => (lookups++, orig(a));
+  await access.setEnabled(true);
+  const running = await startRemote(app, access, { webDir });
+  try {
+    for (let i = 0; i < 5; i++) assert.equal((await call(target, undefined, '/', { headers: headers(phone) })).status, 200);
+    assert.equal(lookups, 0, 'no whois for page files');
+    const first = JSON.parse((await call(target, undefined, '/api/remote/request', { method: 'POST', headers: headers(phone) })).body);
+    // A second asker claiming the same device (another local user on a loopback listener).
+    const second = await call(target, undefined, '/api/remote/request', { method: 'POST', headers: headers(phone) });
+    assert.equal(second.status, 403);
+    assert.doesNotMatch(second.body, new RegExp(first.code));
+    assert.doesNotMatch(second.body, /pollSecret/);
+    const poll = await call(target, undefined, `/api/remote/request/${first.requestId}`, { method: 'POST', headers: headers(phone), body: JSON.stringify({ pollSecret: first.pollSecret }) });
+    assert.deepEqual(JSON.parse(poll.body), { state: 'pending' }, "the real device's poll still works");
+  } finally {
+    await running.stop();
+  }
+});
+
+test('remote: the socket folder must be a private folder of this user, not a symlink or someone else\'s', async () => {
+  if (!POSIX) return;
+  const { privateFolder } = await import('../server/transport/remote.ts');
+  const { symlinkSync } = await import('node:fs');
+  const base = mkdtempSync(join(tmpdir(), 'mh-pf-'));
+  privateFolder(join(base, 'ok'));
+  assert.equal(statSync(join(base, 'ok')).mode & 0o777, 0o700);
+  mkdirSync(join(base, 'real'));
+  symlinkSync(join(base, 'real'), join(base, 'link'));
+  assert.throws(() => privateFolder(join(base, 'link')), /not a private folder/);
+  assert.throws(() => privateFolder(join(base, 'ok'), 12345), /not a private folder/, 'owned by another uid');
 });

@@ -375,7 +375,7 @@ export class Agent {
           effort: this.info.effort,
           cwd: this.host.cwd,
           env: {},
-          instructions: systemAppend({ tier: this.tier, name: this.name, parentName: this.host.parentName(this), settings, effort: this.info.effort, background: backend.caps.background }),
+          instructions: systemAppend({ tier: this.tier, name: this.name, parentName: this.host.parentName(this), settings, effort: this.info.effort, caps: { efforts: backend.caps.efforts, background: backend.caps.background, midTurnDelivery: backend.caps.midTurnDelivery } }),
           tools: this.host.tools(this),
           canAskPerson: this.tier === 'lead',
           permissionMode: settings.permissionMode,

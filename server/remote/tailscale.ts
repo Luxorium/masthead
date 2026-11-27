@@ -88,9 +88,17 @@ interface ServeJson {
 /** Reads Masthead's entry out of `tailscale serve status --json`. */
 export function serveStateFrom(json: ServeJson, dnsName: string, port: number, target: string): ServeState {
   const hostPort = `${dnsName}:${port}`;
+  // Only the layout Masthead understands counts as "off" or "ours". Anything else (a foreground
+  // session, services, a shape from a newer Tailscale) is someone else's: refuse rather than overwrite.
+  if (json === null || typeof json !== 'object' || Array.isArray(json)) return { kind: 'elsewhere', target: 'an unrecognised serve configuration' };
+  const unknown = Object.entries(json).filter(([k, v]) => !['Web', 'TCP', 'AllowFunnel'].includes(k) && v !== null && !(typeof v === 'object' && Object.keys(v as object).length === 0) && v !== false);
+  if (unknown.length) return { kind: 'elsewhere', target: `serve configuration Masthead does not know (${unknown.map(([k]) => k).join(', ')})` };
   if (json.AllowFunnel?.[hostPort]) return { kind: 'funnel' };
   const web = json.Web?.[hostPort];
   if (!web && !json.TCP?.[String(port)]) return { kind: 'off' };
+  if (web && (typeof web.Handlers !== 'object' || web.Handlers === null)) return { kind: 'elsewhere', target: 'an unrecognised serve entry' };
+  const tcp = json.TCP?.[String(port)] as Record<string, unknown> | undefined;
+  if (tcp && (!web || Object.keys(tcp).some((k) => k !== 'HTTPS'))) return { kind: 'elsewhere', target: 'a TCP forward' };
   const handlers = web?.Handlers ?? {};
   const names = Object.keys(handlers);
   const root = handlers['/'];
@@ -211,5 +219,53 @@ export class FakeTailscale implements TailscaleProvider {
   }
   async whois(address: string) {
     return this.identities.get(address) ?? null;
+  }
+}
+
+/**
+ * Wraps a provider so a burst of requests from the tailnet cannot start a `tailscale whois` each: an
+ * address's answer is kept for a minute, and at most a few lookups run at once (the rest wait).
+ */
+export class CachedWhois implements TailscaleProvider {
+  private cache = new Map<string, { at: number; id: Identity | null; pending?: Promise<Identity | null> }>();
+  private running = 0;
+  private waiting: Array<() => void> = [];
+  constructor(
+    private inner: TailscaleProvider,
+    private opts: { ttlMs?: number; maxConcurrent?: number; now?: () => number } = {},
+  ) {}
+  status() {
+    return this.inner.status();
+  }
+  serveState(port: number, target: string) {
+    return this.inner.serveState(port, target);
+  }
+  addServe(port: number, target: string) {
+    return this.inner.addServe(port, target);
+  }
+  removeServe(port: number, target: string) {
+    return this.inner.removeServe(port, target);
+  }
+  async whois(address: string): Promise<Identity | null> {
+    const now = (this.opts.now ?? Date.now)();
+    const hit = this.cache.get(address);
+    if (hit?.pending) return hit.pending;
+    if (hit && now - hit.at < (this.opts.ttlMs ?? 60_000)) return hit.id;
+    const pending = this.limited(() => this.inner.whois(address));
+    this.cache.set(address, { at: now, id: null, pending });
+    const id = await pending.catch(() => null);
+    this.cache.set(address, { at: now, id });
+    if (this.cache.size > 1000) this.cache.clear();
+    return id;
+  }
+  private async limited<T>(fn: () => Promise<T>): Promise<T> {
+    while (this.running >= (this.opts.maxConcurrent ?? 4)) await new Promise<void>((r) => this.waiting.push(r));
+    this.running++;
+    try {
+      return await fn();
+    } finally {
+      this.running--;
+      this.waiting.shift()?.();
+    }
   }
 }

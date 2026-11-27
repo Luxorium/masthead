@@ -87,7 +87,8 @@ export const T = {
     waiting: (name: string, from: string) => `${name} is waiting for an answer from ${from}. What you send here answers it.`,
     starting: 'Starting…',
     notImage: (name: string) => `Only pictures can be attached (PNG, JPEG, GIF, WebP). For ${name}, put it in the folder and mention it.`,
-    tooBig: (name: string) => `${name} is larger than 5 MB.`,
+    tooBig: (name: string) => `${name} is still larger than 5 MB after shrinking it. Try a smaller picture.`,
+    tooBigToShrink: (name: string) => `${name} is too large (over 40 MB).`,
     tooMuch: (name: string) => `${name} would take this message over 30 MB of pictures. Send it in another message.`,
     tooMany: (max: number) => `At most ${max} pictures per message.`,
     unreadable: (name: string) => `${name} could not be read.`,
@@ -97,6 +98,7 @@ export const T = {
 
   transcript: {
     jump: 'Jump to latest',
+    earlierMore: 'Show earlier',
     earlier: (n: number) => `Show earlier (${plural(n, 'more item', 'more items')})`,
     askedBy: 'Asked by',
     finished: (name: string) => `${name} finished`,
@@ -226,6 +228,20 @@ export const T = {
     high: 'Long',
     xhigh: 'Longest',
   } as Record<string, string>,
+
+  images: {
+    viewer: 'Picture',
+    of: (i: number, n: number) => `${i} of ${n}`,
+    openTab: 'Open in a new tab',
+    close: 'Close the picture',
+    prev: 'Previous picture',
+    next: 'Next picture',
+    open: (alt: string) => `Open ${alt}`,
+    sent: 'Picture you sent',
+    fromTool: 'Picture from a tool',
+    uploading: 'Uploading…',
+    failed: 'Upload failed',
+  },
 
   card: {
     question: (name: string) => `Question from ${name}`,

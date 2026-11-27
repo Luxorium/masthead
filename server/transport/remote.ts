@@ -2,7 +2,7 @@
 // platform has one; on Windows (where Tailscale cannot serve a Unix socket) a loopback port, where
 // the device token is the only protection against another local program that forges the forwarded
 // address. Everything here assumes a request came through tailscaled and checks it again anyway.
-import { chmodSync, mkdirSync, unlinkSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, unlinkSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -101,7 +101,13 @@ export async function serveRemote(
 
     if (url.pathname === '/api/remote/whoami') {
       // What an unapproved device's page asks first: who am I to this computer, and may I ask?
-      const d = await decide(req, String(req.headers['x-masthead-device'] ?? '') || undefined);
+      const token = String(req.headers['x-masthead-device'] ?? '') || undefined;
+      let d = await decide(req, token);
+      // A stored token that no longer works (revoked, expired): the device may simply ask again.
+      if (d.kind === 'refused' && token) {
+        const fresh = await decide(req);
+        if (fresh.kind === 'unknown') d = fresh;
+      }
       if (d.kind === 'refused') return json(res, 200, { state: 'refused', reason: d.reason });
       if (d.kind === 'unknown') return json(res, 200, { state: 'unknown', device: { name: d.identity.nodeName, os: d.identity.os, user: d.identity.user?.login } });
       if (d.kind === 'remote') return json(res, 200, { state: 'approved', role: d.role, device: { name: d.device.nodeName } });
@@ -112,6 +118,7 @@ export async function serveRemote(
       const d = await decide(req);
       if (d.kind !== 'unknown') return json(res, 403, { code: 'refused', message: d.kind === 'refused' ? d.reason : 'Forbidden' });
       const addr = String(req.headers['x-forwarded-for']).split(',')[0]!.trim();
+      for (const [k, ts] of recent) if (ts.every((t) => now() - t >= 60_000)) recent.delete(k);
       const times = (recent.get(addr) ?? []).filter((t) => now() - t < 60_000);
       if (times.length >= REQUESTS_PER_MINUTE) return json(res, 429, { code: 'refused', message: 'Too many requests; wait a minute.' });
       recent.set(addr, [...times, now()]);
@@ -136,10 +143,11 @@ export async function serveRemote(
       return json(res, 200, c);
     }
 
-    if (opts.blobs) {
-      const tokenOk = (await decide(req, String(req.headers['x-masthead-device'] ?? '') || undefined)).kind === 'remote';
+    if (opts.blobs && (url.pathname === '/blob' || url.pathname.startsWith('/blob/'))) {
+      // Fetching needs only the socket's blob token; uploading needs an approved device that may send.
       if (handleBlobGet(req, res, url, { blobs: opts.blobs, tokens })) return;
-      const d = tokenOk ? await decide(req, String(req.headers['x-masthead-device'])) : null;
+      const token = String(req.headers['x-masthead-device'] ?? '') || undefined;
+      const d = token && req.method === 'POST' ? await decide(req, token) : null;
       const canSend = d?.kind === 'remote' && d.role === 'full';
       if (handleBlobPost(req, res, url, { blobs: opts.blobs, authorised: canSend, convExists: opts.convExists ?? (() => false) })) return;
     }
@@ -185,8 +193,7 @@ export async function serveRemote(
 
   const target: RemoteTarget = access.target;
   if (target.kind === 'socket') {
-    mkdirSync(dirname(target.path), { recursive: true, mode: 0o700 });
-    chmodSync(dirname(target.path), 0o700);
+    privateFolder(dirname(target.path));
     try {
       unlinkSync(target.path); // a socket left by a previous run
     } catch {
@@ -232,13 +239,27 @@ export async function serveRemote(
 }
 
 /** Where `tailscale serve` should point on this platform. */
-export function chooseTarget(env: Record<string, string | undefined>, dataDir: string, platform: NodeJS.Platform = process.platform): RemoteTarget {
-  // Tailscale serves Unix sockets on Unix-like systems only; Windows gets a loopback port.
+export function chooseTarget(env: Record<string, string | undefined>, dataDir: string, platform: NodeJS.Platform = process.platform, uid: number = process.getuid?.() ?? 0): RemoteTarget {
+  // Tailscale serves Unix sockets on Unix-like systems only; Windows gets a loopback port, which any
+  // local program can reach: the pairing code is the only guard there, and the settings say so.
   if (platform === 'win32') return { kind: 'loopback', port: 7719 };
+  void dataDir;
+  // A Unix socket path may be at most about 104 bytes (macOS) or 108 (Linux): use the runtime folder
+  // when its path is short, else a private folder of our own in /tmp, so Unix never needs a port.
   const runtime = env.XDG_RUNTIME_DIR;
-  const path = runtime && runtime.startsWith('/') ? `${runtime}/masthead/remote.sock` : `${dataDir}/remote/remote.sock`;
-  // A Unix socket path may be at most about 104 bytes (macOS) or 108 (Linux).
-  return Buffer.byteLength(path) < 100 ? { kind: 'socket', path } : { kind: 'loopback', port: 7719 };
+  if (runtime && runtime.startsWith('/') && Buffer.byteLength(`${runtime}/masthead/remote.sock`) < 100) return { kind: 'socket', path: `${runtime}/masthead/remote.sock` };
+  return { kind: 'socket', path: `/tmp/masthead-${uid}/remote.sock` };
+}
+
+/**
+ * Makes the socket's folder ours and private. In a shared place such as /tmp someone else could have
+ * made it first (or a symlink by that name): refuse rather than listen inside it.
+ */
+export function privateFolder(dir: string, uid: number = process.getuid?.() ?? -1): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const st = lstatSync(dir);
+  if (!st.isDirectory() || st.isSymbolicLink() || (uid >= 0 && st.uid !== uid)) throw new Error(`${dir} is not a private folder of this user; remove it and try again.`);
+  chmodSync(dir, 0o700);
 }
 
 /**

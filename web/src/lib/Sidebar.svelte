@@ -21,7 +21,7 @@
   }
 
   function waiting(id: string): number {
-    return store.pending.filter((p) => p.convId === id).length;
+    return store.waitingIn(id);
   }
 </script>
 

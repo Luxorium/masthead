@@ -44,3 +44,42 @@ jobs:
           # What a user runs: --omit=optional skips the SDK's private Claude Code binary.
           npm install -g --omit=optional "$RUNNER_TEMP"/*.tgz
           masthead --version
+
+  browser:
+    # The page in a real browser (Playwright's Chromium) against a server on the fake backend:
+    # no Claude account, no Claude Code. scripts/ci-e2e.mjs makes fresh folders and a free port.
+    name: browser / ${{ matrix.os }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Cache Playwright's Chromium
+        uses: actions/cache@v4
+        with:
+          path: .playwright-browsers
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install Chromium
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then npx playwright-core install --with-deps chromium; else npx playwright-core install chromium; fi
+      - name: Browser test on the fake backend
+        run: node scripts/ci-e2e.mjs e2e-shots
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-shots-${{ matrix.os }}
+          path: e2e-shots
+          if-no-files-found: ignore

@@ -42,10 +42,15 @@
   async function showEarlier() {
     const el = scroller;
     const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+    // Everything loaded is shown already: ask the server for the next older page (protocol v2).
+    if (start === 0 && agent) store.loadEarlier(agent.id);
     limit += PAGE;
     await tick();
     if (el) el.scrollTop = el.scrollHeight - fromBottom;
   }
+  /** Older items exist on the server that the page has not loaded yet. */
+  const moreOnServer = $derived(!!(agent && store.pages[agent.id]?.more));
+  const earlierCount = $derived(start > 0 ? start : 0);
 
 
   function onScroll() {
@@ -99,8 +104,10 @@
       <p class="muted center">{T.empty.nothingYet}</p>
     {/if}
 
-    {#if start > 0}
-      <button class="earlier" onclick={showEarlier}>{T.transcript.earlier(start)}</button>
+    {#if start > 0 || moreOnServer}
+      <button class="earlier" onclick={showEarlier} disabled={!!(agent && store.pages[agent.id]?.loading)}>
+        {earlierCount > 0 ? T.transcript.earlier(earlierCount) : T.transcript.earlierMore}
+      </button>
     {/if}
 
     {#each visible as item (key(item))}

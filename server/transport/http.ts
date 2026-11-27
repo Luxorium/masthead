@@ -23,6 +23,9 @@ const TYPES: Record<string, string> = {
 };
 
 const MAX_WS_PAYLOAD = 48 * 1024 * 1024;
+/** Bytes waiting in a socket's buffer past which draft deltas are dropped, and past which it is closed. */
+const DROP_BUFFERED = 4 * 1024 * 1024;
+const CLOSE_BUFFERED = 32 * 1024 * 1024;
 const PING_MS = 30_000;
 /** The socket's subprotocol. The page also offers `key.<secret>`, which is checked and never echoed. */
 const PROTOCOL = 'masthead';
@@ -177,7 +180,12 @@ export function attach(app: ServedApp, ws: WebSocket, tokens: BlobTokens, remote
     blobToken,
     ...(remote ? { role: remote.role } : {}),
     send(msg: ServerMsg) {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
+      if (ws.readyState !== ws.OPEN) return;
+      // Back-pressure: a tab that cannot keep up loses draft deltas first (it notices the gap in
+      // `dseq` and asks for the whole text); one far behind is closed, and resyncs when it reconnects.
+      if (ws.bufferedAmount > CLOSE_BUFFERED) return void ws.close(4002, 'Too far behind.');
+      if (ws.bufferedAmount > DROP_BUFFERED && (msg as { t?: string }).t === 'draft') return;
+      ws.send(JSON.stringify(msg));
     },
   };
   remote?.onClient?.(client);
@@ -187,7 +195,7 @@ export function attach(app: ServedApp, ws: WebSocket, tokens: BlobTokens, remote
     try {
       parsed = JSON.parse(data.toString());
     } catch {
-      client.send({ t: 'error', message: 'Malformed message.' });
+      client.send({ t: 'error', code: 'invalid', message: 'Malformed message.' } as ServerMsg);
       return;
     }
     app.handle(client, parsed);

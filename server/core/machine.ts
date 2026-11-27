@@ -67,7 +67,9 @@ export type Event =
   | { type: 'ApprovalOpened' }
   | { type: 'ApprovalClosed' }
   | { type: 'Woken'; by: 'person' | 'agent'; parentCanReceive: boolean }
-  | { type: 'Restored' };
+  | { type: 'Restored' }
+  /** The runtime changed the agent's status itself (it started a process, a turn began, it was ended). */
+  | { type: 'Status'; status: AgentStatus };
 
 export type Effect =
   /** Let the runtime send what was delivered; `urgent` passes a pause (the person's own messages). */
@@ -79,7 +81,8 @@ export type Effect =
   | { type: 'pauseRuntime' }
   | { type: 'resumeRuntime'; note: string | null }
   | { type: 'dropHeld' }
-  | { type: 'stopChildren'; why: string }
+  /** Stop its live children; `why` defaults to '"<name>" ended before this agent finished.' */
+  | { type: 'stopChildren'; why?: string }
   | { type: 'notice'; text: string; level?: 'info' | 'error' }
   /** Ask the agent it waits on to answer (the shell batches reminders per recipient). */
   | { type: 'remind'; recipient: string }
@@ -89,7 +92,12 @@ export type Effect =
   | { type: 'save' };
 
 export interface Ctx {
+  /** Awake time: run clock, live-since, background cap (a sleep must not count). */
   now: number;
+  /** Wall-clock time for deadlines (a usage limit's reset); defaults to `now`. */
+  wall?: number;
+  /** The agent is in a turn right now (the shell knows better than the phase); defaults to running && busy. */
+  inTurn?: boolean;
   /** The runtime still has input no finished turn has consumed (or a start pending). */
   busy: boolean;
   /** Automatic effort is on (effort goes back to low after a piece of work). */
@@ -172,13 +180,15 @@ function clockTime(ms: number): string {
 /** Applies one event. Pure: the input state is not changed. */
 export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState; effects: Effect[] } {
   // A finished agent only reacts to being woken, restored or sent to; anything else is stale news.
-  if (prev.phase === 'ended' && ev.type !== 'Woken' && ev.type !== 'Restored' && ev.type !== 'Input') return { state: prev, effects: [] };
+  if (prev.phase === 'ended' && ev.type !== 'Woken' && ev.type !== 'Restored' && ev.type !== 'Input' && !(ev.type === 'Status' && (ev.status === 'queued' || ev.status === 'running'))) {
+    return { state: prev, effects: [] };
+  }
   const s = clone(prev);
   const fx: Effect[] = [];
   const wasLive = live(prev);
 
   const finish = (kind: 'done' | 'failed', text: string, error?: string) => {
-    if (s.holds.children > 0) fx.push({ type: 'stopChildren', why: 'ended before this agent finished.' });
+    if (s.holds.children > 0) fx.push({ type: 'stopChildren' });
     endAs(kind, error);
     if (ctx.autoEffort) fx.push({ type: 'setEffortLow' });
     if (prev.owesReport) {
@@ -203,11 +213,14 @@ export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState
   };
   /** Rows 11/11a: pause at a usage limit, or give up after MAX_PAUSES windows in a row. Returns false to give up. */
   const pause = (limit: UsageLimit): boolean => {
-    const until = limit.resetsAt && limit.resetsAt > ctx.now ? limit.resetsAt : ctx.now + DEFAULT_PAUSE_MS;
+    const wall = ctx.wall ?? ctx.now;
+    const until = limit.resetsAt && limit.resetsAt > wall ? limit.resetsAt : wall + DEFAULT_PAUSE_MS;
     const sameWindow = s.holds.pause !== undefined && !s.holds.pause.personWoke;
     if (!sameWindow) {
       if (s.limitStreak + 1 > MAX_PAUSES) {
         s.limitStreak = 0;
+        // The lead carries on: what was held for it goes out (a sub-agent ends, and its held messages with it).
+        if (s.holds.pause && s.lead) fx.push({ type: 'resumeRuntime', note: null });
         s.holds.pause = undefined;
         return false;
       }
@@ -330,9 +343,9 @@ export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState
       break;
     case 'Tick': {
       const p = s.holds.pause;
-      if (p && p.until <= ctx.now) {
+      if (p && p.until <= (ctx.wall ?? ctx.now)) {
         // row 20
-        const inTurn = s.phase === 'running' && ctx.busy;
+        const inTurn = ctx.inTurn ?? (s.phase === 'running' && ctx.busy);
         s.holds.pause = undefined;
         fx.push({ type: 'resumeRuntime', note: inTurn ? null : `${RESUME_NOTE}${p.backgroundStopped ? BACKGROUND_STOPPED_NOTE : ''}` });
         if (!inTurn) {
@@ -363,11 +376,10 @@ export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState
     }
     case 'Stop': {
       if (s.lead) {
-        // the lead keeps its session: its pause ends and, if nothing else holds it, it goes idle
-        if (s.holds.pause) {
-          s.holds.pause = undefined;
-          fx.push({ type: 'dropHeld' });
-        }
+        // the lead keeps its session: what was held for it is dropped, its pause ends and, if nothing
+        // else holds it, it goes idle
+        s.holds.pause = undefined;
+        fx.push({ type: 'dropHeld' });
         released();
         break;
       }
@@ -398,6 +410,25 @@ export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState
         if (ev.parentCanReceive) s.owesReport = true;
       }
       break;
+    case 'Status': {
+      const st = ev.status;
+      if (st === 'queued' || st === 'running') {
+        // While paused the shell owns the status; otherwise the runtime's start or turn is taken as it is.
+        if (!s.holds.pause) {
+          s.phase = st;
+          s.end = undefined;
+        }
+      } else if (st === 'waiting' || st === 'idle') {
+        s.phase = st;
+      } else if (s.phase !== 'queued') {
+        // Ended outside the machine (shutdown); a 'queued' state is a wake-up the runtime has not shown yet.
+        s.phase = 'ended';
+        s.end = { kind: st };
+        s.holds = { children: 0, background: 0, approvals: 0 };
+        s.owesReport = false;
+      }
+      break;
+    }
     case 'Restored': // row 27
       s.holds = { children: 0, background: 0, approvals: 0 };
       s.limitStreak = 0;
