@@ -160,3 +160,15 @@ test('doctor: the real file system helper reads modes and writability', { skip: 
   assert.equal(systemDoctorFs.writable(dir), true);
   assert.equal(systemDoctorFs.stat(join(dir, 'missing')), null);
 });
+
+test('doctor: says whether the computer can be kept awake, as a warning at most', async () => {
+  const ok = byName(await doctor(deps({ awakeTool: () => ({ cmd: 'systemd-inhibit', found: true }) })), 'Keep awake');
+  assert.ok(ok.ok && !ok.warn);
+  const missing = byName(await doctor(deps({ awakeTool: () => ({ cmd: 'systemd-inhibit', found: false }) })), 'Keep awake');
+  assert.ok(missing.ok && missing.warn, 'a missing tool never fails doctor');
+  assert.match(missing.detail, /may sleep/);
+  const none = byName(await doctor(deps({ platform: 'freebsd', awakeTool: () => ({ cmd: null, found: false }) })), 'Keep awake');
+  assert.ok(none.warn);
+  assert.equal(doctorExitCode(await doctor(deps({ awakeTool: () => ({ cmd: 'caffeinate', found: false }) }))), 0);
+  assert.equal(byName(await doctor(deps()), 'Keep awake'), undefined, 'not checked when no probe is given');
+});

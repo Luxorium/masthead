@@ -32,6 +32,8 @@ export interface DoctorDeps {
   service?: ServiceManager | null;
   /** The folder of the Agent SDK's private Claude Code binary package, or null when it is not installed. See `sdkBinaryPackage`. */
   sdkBinary(): string | null;
+  /** The program that keeps the computer awake while agents work (server/service/awake.ts), or null where there is none, and whether it is on PATH. */
+  awakeTool?(): { cmd: string | null; found: boolean };
 }
 
 export const MIN_NODE = 22;
@@ -163,6 +165,15 @@ function sdkBinaryCheck(deps: DoctorDeps): Check {
   };
 }
 
+function awakeCheck(deps: DoctorDeps): Check | null {
+  if (!deps.awakeTool) return null;
+  const name = 'Keep awake';
+  const t = deps.awakeTool();
+  if (!t.cmd) return { name, ok: true, warn: true, detail: `not supported on ${deps.platform}; the computer may sleep while agents work` };
+  if (!t.found) return { name, ok: true, warn: true, detail: `${t.cmd} was not found; the computer may sleep while agents work`, fix: deps.platform === 'linux' ? 'Install systemd (systemd-inhibit), or keep the computer awake yourself' : undefined };
+  return { name, ok: true, detail: `${t.cmd} holds off idle sleep while agents work` };
+}
+
 export async function doctor(deps: DoctorDeps): Promise<Check[]> {
   return [
     nodeCheck(deps.nodeVersion),
@@ -173,6 +184,7 @@ export async function doctor(deps: DoctorDeps): Promise<Check[]> {
     await portCheck(deps),
     await serviceCheck(deps),
     sdkBinaryCheck(deps),
+    ...[awakeCheck(deps)].filter((c): c is Check => c !== null),
   ];
 }
 

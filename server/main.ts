@@ -13,6 +13,7 @@ import { chooseTarget, startRemote } from './transport/remote.js';
 import { RemoteAccess } from './remote/access.js';
 import { CliTailscale } from './remote/tailscale.js';
 import { serviceFor, ServiceError } from './service/index.js';
+import { awakeCommand } from './service/awake.js';
 import { doctor, doctorExitCode, formatChecks, sdkBinaryPackage, systemDoctorFs } from './doctor.js';
 import { findClaude } from './backends/claude/env.js';
 import { CONFIG_DIR } from './paths.js';
@@ -119,6 +120,10 @@ async function doctorCommand(p: number): Promise<void> {
     },
     service: serviceFor(process.platform),
     sdkBinary: () => sdkBinaryPackage(),
+    awakeTool: () => {
+      const c = awakeCommand(process.platform, process.pid);
+      return { cmd: c?.cmd ?? null, found: c ? onPath(c.cmd, process.env, process.platform, existsSync) : false };
+    },
   });
   if (process.argv.includes('--json')) console.log(JSON.stringify(checks, null, 2));
   else console.log(formatChecks(checks));

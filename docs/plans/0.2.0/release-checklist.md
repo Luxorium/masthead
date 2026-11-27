@@ -84,3 +84,18 @@ On a Linux machine that runs 0.1.4 as installed by `scripts/install.sh`, with re
 1. After first start, `icacls "%LOCALAPPDATA%\Masthead\secret"` lists only the current user (no
    inherited entries, no Users/Everyone).
 2. From a second, non-admin Windows account: the file cannot be read.
+
+## 9. The computer stays awake while agents work (all three)
+
+Set the power settings so the machine sleeps after 1 to 2 minutes idle, with `keepAwake` on (default).
+1. Start a team on a long task (or the fake backend's `[[background 600s]]`) and leave the machine alone.
+2. Expect: it does not sleep while any agent is working. Linux: `systemd-inhibit --list` shows
+   "Masthead … idle … Agents are working". macOS: `pmset -g assertions` shows `PreventUserIdleSystemSleep`
+   by caffeinate. Windows: `powercfg /requests` (admin) lists the PowerShell process under SYSTEM.
+3. The screen still turns off on its own schedule; closing the lid or choosing Sleep still sleeps at once.
+4. When all agents are idle, the hold is gone within about 5 s (same commands) and the machine sleeps
+   on its normal schedule.
+5. Switch `keepAwake` off while agents work: the hold is released at once.
+6. Kill the server process (`kill -9` / Task Manager): the hold disappears with it.
+7. Put the machine to sleep by hand while agents work, wake it after a few minutes: each conversation
+   that was working shows "This computer was asleep from HH:MM to HH:MM; work carried on afterwards".
