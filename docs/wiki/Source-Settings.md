@@ -48,7 +48,7 @@ Returns a new copy of the built-in Claude team profile: id `claude` (`CLAUDE_PRO
 | id | model | effort | max | lean | colour |
 |---|---|---|---|---|---|
 | `lead` | `claude-fable-5-2` | `xhigh` | 1 | false | amber |
-| `opus` | `claude-opus-5-5` | `xhigh` | 3 | true | violet |
+| `opus` | `claude-opus-5-5` | `xhigh` | 3 | false | violet |
 | `sonnet` | `claude-sonnet-5-5` | `high` | 4 | true | blue |
 | `haiku` | `claude-haiku-5-5` | `medium` | 4 | true | teal |
 
@@ -56,7 +56,7 @@ Every tier has `backend: 'claude-code'` and a label from `modelLabel(model)` ("O
 
 ### `defaultSettings()`
 
-The settings used when no file exists or it cannot be read: `version: 2`, `profiles: [claudeProfile()]`, `defaultProfile: 'claude'`, `permissionMode: 'inherit'`, `autoEffort: true`, `leanSubagents: true`, `leanOpus: true`, `collapseReports: false`, `maxRunMinutes: 0`, `keepAwake: true`, `autoCompact: true`, `defaultCwd: HOME`. The function passes the result through `withCompat()`, which fills in `tiers`.
+The settings used when no file exists or it cannot be read: `version: 2`, `profiles: [claudeProfile()]`, `defaultProfile: 'claude'`, `permissionMode: 'inherit'`, `autoEffort: true`, `leanSubagents: true`, `leanOpus: false`, `collapseReports: false`, `maxRunMinutes: 0`, `keepAwake: true`, `autoCompact: true`, `defaultCwd: HOME`. The function passes the result through `withCompat()`, which fills in `tiers`.
 
 ### `clampInt(v, lo, hi, fallback)` (internal)
 

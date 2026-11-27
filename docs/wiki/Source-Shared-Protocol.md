@@ -11,7 +11,7 @@ How the messages are used, step by step, is on [Browser/server protocol](Browser
 
 ### Version
 
-`VERSION`, the same string as `version` in `package.json` (both read `'0.2.0'`). It is used by `server/main.ts` (the start-up line and `--version`), `AppState.version`, the `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/<VERSION>` variable (`server/backends/claude/env.ts`) and the version of the team-tool MCP server (`server/backends/claude/mcp.ts`). `server/settings/settings.ts` imports it but does not use it.
+`VERSION`, the same string as `version` in `package.json` (both read `'0.2.1-beta.1'`). It is used by `server/main.ts` (the start-up line and `--version`), `AppState.version`, the `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/<VERSION>` variable (`server/backends/claude/env.ts`) and the version of the team-tool MCP server (`server/backends/claude/mcp.ts`). `server/settings/settings.ts` imports it but does not use it.
 
 ### Tiers (the Claude shape)
 
@@ -57,8 +57,8 @@ See [Team rules](Team-Rules.md).
 ### Agents
 
 - `AgentStatus`: `queued`, `running`, `waiting`, `idle` (lead only), `done`, `failed`, `stopped`. See [Agent life cycle](Agent-Life-Cycle.md) and [State machine](State-Machine.md).
-- `AgentUsage`: `context`, `contextMax`, `output`, `costUsd`, `turns`.
-- `AgentInfo`: `id`, `convId`, `name`, `tier` (typed as `Tier`, but for a non-claude profile it holds a `<profile>:<index>` string; `Conversation.create` casts it with `as Tier`), `parentId`, `title`, `task`, `status`, `model`, `effort`, `createdAt`, `endedAt?`, `usage`, `activity?`, `error?`, `waitingFor?` (the agent it is waiting to hear from), `pausedUntil?` (paused at a usage limit until about this time, in ms since 1970), `archived?` (ms since 1970: archived by a team compaction; such a helper cannot be woken, its chat stays readable through `read_archive` and the Archived helpers row, and the person may restore it).
+- `AgentUsage`: `context`, `contextMax`, `output`, `costUsd`, `costPartial?`, `turns`. `costPartial` is true when `costUsd` is short: a session ended mid-turn (stopped, crashed, run-time limit) and the backend reports cost only when a turn finishes, so that turn's cost never arrived (`Agent.sessionGone()` sets it and still counts the turn). Absent means complete.
+- `AgentInfo`: `id`, `convId`, `name`, `tier` (typed as `Tier`, but for a non-claude profile it holds a `<profile>:<index>` string; `Conversation.create` casts it with `as Tier`), `parentId`, `title`, `task`, `status`, `model`, `effort`, `createdAt`, `endedAt?`, `usage`, `activity?`, `error?`, `waitingFor?` (the agent it is waiting to hear from), `pausedUntil?` (paused at a usage limit until about this time, in ms since 1970), `activitySince?` (0.2.1, ms since 1970: when its current state began; the runtime sets it when the status or activity line changes (`Agent.setStatus()`, `setActivity()`), the conversation when `waitingFor` or `pausedUntil` changes (`Conversation.show()`); usage updates do not move it), `lastOutputAt?` (0.2.1, ms since 1970: when it last produced output, i.e. a `text`, `thinking` or `tool` item (`Agent.addItem()`) or streamed draft text (`onDraft()`, sent with the agent's next change)), `archived?` (ms since 1970: archived by a team compaction; such a helper cannot be woken, its chat stays readable through `read_archive` and the Archived helpers row, and the person may restore it).
 
 ### Transcripts
 
@@ -71,8 +71,12 @@ See [Team rules](Team-Rules.md).
 - `ConversationMeta`: `id`, `title`, `cwd`, `createdAt`, `updatedAt`, `leadId`, `profileId?` (0.2.0; missing in 0.1.x files, which means `claude`), `team?` (the profile's tiers copied when the conversation was created), and four fields for [team compaction](Compact-Team.md), all optional:
   - `compactSuggested?: boolean`: with automatic tidying off, the lead has been told once that it may suggest `/compact`; it is not told again.
   - `autoCompact?: false`: the person switched automatic tidying off for this conversation only. Absent means "follow the setting"; `true` is never stored (`Conversation.setAutoCompact(true)` removes the field).
-  - `compactMark?: { finished, memoryArmed }`: the cool-down. `finished` is how many helpers had finished when tidying last fired (it fires again only after 15 more); `memoryArmed` is false until the lead's memory has dropped back below the 70 % mark.
+  - `compactMark?: { finished, memoryArmed }`: the cool-down. `finished` is how many helpers had finished when tidying last fired (it fires again only after 10 more); `memoryArmed` is false until the lead's memory is no longer full (below 70 % and below 200k tokens, `memoryFull()`).
   - `compact?: CompactState`: a compaction under way or just ended, saved so a restart carries on.
+
+  Two more, for restarts (0.2.1; see [Restarting the app](Walkthrough-Restarting-the-App.md#the-leads-turn-after-a-restart)):
+  - `leadCut?: boolean`: the lead was cut off mid-turn by a stop (`Conversation.shutdown()`) or a crash (a lead saved as `running`/`queued`, seen by `restore()`); the next start asks it to carry on, once, then clears it.
+  - `restartResent?: string`: the item id of the person's message that was sent to the lead again (or announced as unanswered) after a restart; it is never sent twice.
 
   And `busy?` (filled in when the list is sent, never stored).
 - `CompactKeep`: `{ name, why, forced? }`, one helper the compaction keeps. `forced` marks helpers kept whatever the lead said: one still working (`why` "still working"), or one above a kept helper ("started bravo, which stays").

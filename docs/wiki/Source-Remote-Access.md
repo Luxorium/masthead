@@ -55,9 +55,9 @@ Masthead shows these commands; it never runs them. Other errors are shown as Tai
 
 Port and policy. Changing the port while switched on throws `Switch remote access off before changing its port.` A port must be an integer from 1024 to 65535 and not 7717, 8443 or 10000. `allowOtherTailnets` and `allowTagged` change only for boolean values. It passes the policy to the registry, saves and calls `changed()`. `App` calls it for every `remote_settings` message, before `setEnabled`.
 
-### `decide(requestId, decision, role = 'full')`
+### `decide(requestId, decision, role = 'read')`
 
-The person's choice from a local session. `allow` checks the role and calls `registry.allow`; `deny` calls `registry.deny`. Both throw `That request is no longer waiting.` when the registry says no.
+The person's choice from a local session. Without a role the device gets the most limited one, `read` (0.2.1; it was `full`); `App` passes `role ?? 'read'` too. `allow` checks the role and calls `registry.allow`; `deny` calls `registry.deny`. Both throw `That request is no longer waiting.` when the registry says no.
 
 ### Revoke, role and forget: `onDevice`, `revoke`, `setRole`, `forget`
 

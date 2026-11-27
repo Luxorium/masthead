@@ -580,7 +580,7 @@ export class Store {
         return;
       case 'rate_limit':
         // The banner (rateLimit) is derived from usage, so it follows the worst window known.
-        this.usage[m.notice.type ?? ''] = m.notice;
+        if (m.notice) this.usage[m.notice.type ?? ''] = m.notice;
         return;
       case 'dirs':
         this.dirs = { path: m.path, parent: m.parent, entries: m.entries, error: m.error };

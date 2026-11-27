@@ -1,3 +1,4 @@
+import { scratchEnv } from '../service/scratch.js';
 import { randomUUID } from 'node:crypto';
 import type { query } from '@anthropic-ai/claude-agent-sdk';
 import {
@@ -16,7 +17,7 @@ import {
 import { ClaudeBackend } from '../backends/claude/session.js';
 import type { Backend, Content, PermissionAnswer, PermissionAsk, Session, SessionEvents, ToolDef, TurnResult, UsageUpdate } from '../backends/types.js';
 import { toolLine } from '../../shared/toolline.js';
-import { systemAppend } from '../core/prompts.js';
+import { effortHeader, systemAppend } from '../core/prompts.js';
 import { SlotCancelled, type Scheduler } from '../core/scheduler.js';
 
 export type { Content } from '../backends/types.js';
@@ -47,6 +48,8 @@ export interface AgentHost {
   backgroundIdle?(agent: Agent): void;
   /** Stores an image from a tool result; optional until the blob store is wired. */
   storeImage?(agent: Agent, data: string, mediaType: string): { ref: unknown } | { error: string };
+  /** The conversation's scratch folder (its TMPDIR); undefined when there is none. */
+  scratchDir?(agent: Agent): string | undefined;
   /** The backend to run this agent on. Undefined: the agent fails with a neutral not-found error (tests use `query`). */
   backend?(agent: Agent): Backend | undefined;
   /** Starts a Claude Code session in the default backend. Only tests set this. */
@@ -83,6 +86,8 @@ const DRAFT_INTERVAL_MS = 70;
 /** A run's outcome keeps at most this many turn texts and this many characters, newest first. */
 const RUN_TEXT_TURNS = 8;
 const RUN_TEXT_CHARS = 60_000;
+/** A turn text at least this long is a full answer: the run's outcome starts at the last one (see runText). */
+const FULL_ANSWER_CHARS = 400;
 /**
  * How long to wait, after the last background command ends, for the turn the backend starts by
  * itself to tell the agent about it. In a real run (Claude Code 2.1.331) system/init followed the
@@ -139,6 +144,8 @@ export class Agent {
    * the agent last took up work, oldest first, and this list empties when the run's outcome is sent.
    */
   private runTexts: string[] = [];
+  /** Per entry of runTexts: whether that turn answered a message it was sent (see runText). */
+  private runAnswers: boolean[] = [];
   /**
    * Bumped by end() and dispose(). A start that was waiting for a slot or for the old process to exit
    * checks it, so an agent stopped meanwhile is never launched (`closing` cannot tell: it stays true
@@ -158,10 +165,22 @@ export class Agent {
    */
   private background = new Set<string>();
   private idleTimer: NodeJS.Timeout | null = null;
+  /** Runs while a turn has ended with messages unanswered and the turn for them has not started (see stallCheck). */
+  private stallTimer: NodeJS.Timeout | null = null;
+  /**
+   * How long a turn may end with messages still unanswered before the backend starts the turn for them.
+   * Past it they count as answered and the run ends, so an agent can never show working for ever.
+   * A property so tests can shorten it.
+   */
+  static unansweredGraceMs = 60_000;
   /** Between the first sign of a turn (init, stream, assistant) and its result. */
   private inTurn = false;
   /** The autoEffort setting the current process's tools were built with. */
   private launchedAutoEffort: boolean | null = null;
+  /** The effort the agent was last told (launch prompt or a message header); null when it is not told any. */
+  private toldEffort: Effort | null = null;
+  /** The permission mode the running session has (launched with, or changed to since). */
+  private permissionMode: string | null = null;
   /** Settings changed in a way the running process cannot take; relaunch it before its next turn. */
   private stale = false;
   /** The latest rate-limit notice of each window this process reported. */
@@ -226,6 +245,7 @@ export class Agent {
 
   setStatus(status: AgentStatus, error?: string): void {
     const changed = this.info.status !== status || this.info.error !== error;
+    if (this.info.status !== status || (status !== 'running' && this.info.activity !== undefined)) this.info.activitySince = Date.now();
     this.info.status = status;
     this.info.error = error;
     if (status !== 'running') this.info.activity = undefined;
@@ -236,6 +256,7 @@ export class Agent {
 
   addItem(item: NewItem): Item {
     const full = { id: item.id ?? randomUUID(), ts: Date.now(), ...item } as Item;
+    if (full.kind === 'text' || full.kind === 'thinking' || full.kind === 'tool') this.info.lastOutputAt = full.ts;
     this.host.itemChanged(this, full);
     return full;
   }
@@ -292,6 +313,12 @@ export class Agent {
   }
 
   private userMessage(content: Content): Msg {
+    // Say the effort only when it changed since the agent was last told (e.g. reset to low after work).
+    if (this.toldEffort !== null && this.toldEffort !== this.info.effort) {
+      this.toldEffort = this.info.effort;
+      const head = effortHeader(this.info.effort);
+      content = typeof content === 'string' ? head + content : [{ type: 'text', text: head }, ...content];
+    }
     const id = randomUUID();
     this.unanswered.add(id);
     return { id, content };
@@ -311,7 +338,12 @@ export class Agent {
       if (!granted && this.starting && generation === this.generation && !this.compactRun) this.setStatus('queued');
     });
     slot
-      .then(() => this.exited ?? undefined)
+      .then(() => {
+        // Its last process is still finishing (a clean end lets a running turn complete): it is not done
+        // any more, it waits for that process to exit before resuming the session.
+        if (this.exited && !this.live && generation === this.generation && this.starting && !this.compactRun) this.setStatus('queued');
+        return this.exited ?? undefined;
+      })
       .then(
       () => {
         if (generation !== this.generation) {
@@ -371,6 +403,8 @@ export class Agent {
     if (this.isLead) this.info.model = tier.model;
     const ceiling = tier.effort;
     this.info.effort = settings.autoEffort ? capEffort(this.info.effort, ceiling) : ceiling;
+    // The prompt states this effort (only with automatic effort and more than one level).
+    this.toldEffort = settings.autoEffort && backend.caps.efforts.length > 1 ? this.info.effort : null;
     const first = !this.sessionId && this.seed !== null ? [this.userMessage(this.seed)] : [];
     // A session opened only to compact sends nothing yet: what waits goes out after the compaction.
     this.sent = this.compactRun ? [] : [...first, ...this.backlog];
@@ -380,6 +414,7 @@ export class Agent {
     const lean = !this.isLead && tier.lean;
     this.resumedFrom = this.sessionId;
     this.launchedAutoEffort = settings.autoEffort;
+    this.permissionMode = settings.permissionMode;
     this.limits.clear();
     this.limited = false;
     this.lastLimit = null;
@@ -388,6 +423,7 @@ export class Agent {
     this.clearBackground();
     this.closing = false;
 
+    const tmpDir = this.host.scratchDir?.(this);
     let session: Session;
     try {
       session = backend.open(
@@ -396,8 +432,9 @@ export class Agent {
           model: this.info.model,
           effort: this.info.effort,
           cwd: this.host.cwd,
-          env: {},
-          instructions: systemAppend({ tier: this.tier, name: this.name, parentName: this.host.parentName(this), settings, effort: this.info.effort, caps: { efforts: backend.caps.efforts, background: backend.caps.background, midTurnDelivery: backend.caps.midTurnDelivery } }),
+          env: tmpDir && backend.caps.sessionEnv ? scratchEnv(tmpDir) : {},
+          ...(tmpDir ? { dirs: [tmpDir] } : {}),
+          instructions: systemAppend({ tier: this.tier, name: this.name, parentName: this.host.parentName(this), settings, effort: this.info.effort, tmpDir, tmpIsEnv: backend.caps.sessionEnv, caps: { efforts: backend.caps.efforts, background: backend.caps.background, midTurnDelivery: backend.caps.midTurnDelivery } }),
           tools: this.toolsForSession(),
           canAskPerson: this.isLead,
           permissionMode: settings.permissionMode,
@@ -507,6 +544,8 @@ export class Agent {
   }
 
   private onDraft(d: { kind: 'text' | 'thinking'; append: string } | null): void {
+    // Sent with the agent's next change, not on its own: drafts stream many times a second.
+    if (d?.append) this.info.lastOutputAt = Date.now();
     if (d === null) this.setDraft(null, true);
     else if (d.append === '') {
       // A new text or thinking block.
@@ -525,6 +564,12 @@ export class Agent {
 
   /** Clean-up when the current session has ended, whichever way. */
   private sessionGone(): void {
+    // A turn cut off by the end of its process still counts; its cost (sent only at the turn's end) is lost.
+    if (this.inTurn) {
+      this.info.usage.turns += 1;
+      this.info.usage.costPartial = true;
+      this.host.agentChanged(this);
+    }
     this.session = null;
     this.afterTurn = [];
     this.costBefore = this.info.usage.costUsd;
@@ -578,12 +623,6 @@ export class Agent {
     // unanswered, so the run goes on into the turn they start.
     const later = this.afterTurn.splice(0);
     if (this.session && !this.closing) for (const m of later) this.session.send(m.id, m.content);
-    // The backend names the ids a turn consumed: [] for a turn it started by itself; null when it
-    // cannot tell (an older Claude Code), and then everything counts as answered so the agent can
-    // never stay busy for ever. A process that dies clears everything anyway.
-    if (r.consumed) for (const id of r.consumed) this.unanswered.delete(id);
-    else this.unanswered.clear();
-
     this.inTurn = false;
     this.info.usage.turns += 1;
     this.closeOpenTools();
@@ -600,7 +639,18 @@ export class Agent {
       this.host.turnEnded(this, { text: this.runText(), error, interrupted: false, usageLimit: usageLimit ?? this.lastLimit ?? {} });
       return;
     }
-    this.addRunText(r.text);
+    // A turn of a process being closed (the agent was ended, and a clean end lets a running turn
+    // finish): it is no part of any run. What it consumed was sent before the end, and its text must not
+    // join the report of the run that resumes the session afterwards.
+    if (this.closing) return;
+    // The backend names the ids a turn consumed: [] for a turn it started by itself; null when it
+    // cannot tell (an older Claude Code), and then everything counts as answered so the agent can
+    // never stay busy for ever. A process that dies clears everything anyway.
+    if (r.consumed) for (const id of r.consumed) this.unanswered.delete(id);
+    else this.unanswered.clear();
+    // A turn the backend started by itself ([]: a finished background command) answers no message: its
+    // text never replaces the report before it. An older Claude Code that cannot tell (null) counts as answering.
+    this.addRunText(r.text, r.consumed === null || r.consumed.length > 0);
     const text = this.runText();
     this.lastText = text || this.lastText;
     this.host.agentChanged(this);
@@ -627,6 +677,7 @@ export class Agent {
     if (this.unanswered.size > 0) {
       // Another turn follows for input that arrived meanwhile.
       if (error) this.addItem({ kind: 'notice', level: 'error', text: error });
+      this.stallCheck();
       return;
     }
     // With background work still running the run is not over: Claude Code starts a turn by itself
@@ -659,33 +710,52 @@ export class Agent {
   }
 
   /** Adds a turn's final text to the run, keeping at most RUN_TEXT_TURNS texts and RUN_TEXT_CHARS characters. */
-  private addRunText(text: string): void {
+  private addRunText(text: string, answers = true): void {
     if (!text.trim() || this.runTexts[this.runTexts.length - 1] === text) return;
     this.runTexts.push(text);
+    this.runAnswers.push(answers);
     let total = this.runTexts.reduce((n, t) => n + t.length, 0);
     while (this.runTexts.length > 1 && (this.runTexts.length > RUN_TEXT_TURNS || total > RUN_TEXT_CHARS)) {
       total -= this.runTexts.shift()!.length;
+      this.runAnswers.shift();
       this.runTextsCut = true;
     }
   }
 
+  /**
+   * The run's outcome: its turn texts from the last full answer on. A full answer is FULL_ANSWER_CHARS
+   * or more from a turn that answered a message it was sent: a later one replaces an earlier one (an
+   * agent asked again rewrites its report). Short texts after it ("Noted"), and any text of a turn the
+   * backend started by itself (a finished background command), are kept with it, never replace it.
+   */
   private runText(): string {
-    const text = this.runTexts.join('\n\n');
-    return this.runTextsCut && text ? `(earlier text not shown)\n\n${text}` : text;
+    let from = 0;
+    for (let i = this.runTexts.length - 1; i >= 0; i--) {
+      if (this.runAnswers[i] && this.runTexts[i]!.length >= FULL_ANSWER_CHARS) {
+        from = i;
+        break;
+      }
+    }
+    const text = this.runTexts.slice(from).join('\n\n');
+    return this.runTextsCut && from === 0 && text ? `(earlier text not shown)\n\n${text}` : text;
   }
 
   private clearRunTexts(): void {
     this.runTexts = [];
+    this.runAnswers = [];
     this.runTextsCut = false;
   }
 
   private turnStarted(): void {
+    // A process being closed may still finish a turn; it says nothing about the agent's state.
+    if (this.closing) return;
     // The backend also starts turns by itself, for instance when a background command finishes.
     // Not while the conversation has paused the agent at the usage limit: that state is its own.
     if ((this.info.status === 'idle' || this.info.status === 'waiting') && this.info.pausedUntil === undefined) this.setStatus('running');
     this.inTurn = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
+    this.clearStall();
   }
 
   private backgroundChanged(ids: string[]): void {
@@ -699,7 +769,34 @@ export class Agent {
   private clearBackground(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
+    this.clearStall();
     this.background.clear();
+  }
+
+  private clearStall(): void {
+    if (this.stallTimer) clearTimeout(this.stallTimer);
+    this.stallTimer = null;
+  }
+
+  /**
+   * A turn ended with messages still unanswered: the backend should start the turn for them at once.
+   * If none starts within unansweredGraceMs (a backend that lost them), they count as answered and the
+   * run ends as usual.
+   */
+  private stallCheck(): void {
+    this.clearStall();
+    const session = this.session;
+    if (!session || this.closing) return;
+    this.stallTimer = setTimeout(() => {
+      this.stallTimer = null;
+      if (this.session !== session || this.closing || this.inTurn || this.unanswered.size === 0) return;
+      this.unanswered.clear();
+      this.addItem({ kind: 'notice', level: 'info', text: 'A message to this agent got no turn of its own; Masthead counts it as answered.' });
+      const text = this.runText();
+      if (!this.hasBackgroundWork) this.clearRunTexts();
+      this.host.turnEnded(this, { text, interrupted: false });
+    }, Agent.unansweredGraceMs);
+    this.stallTimer.unref?.();
   }
 
   /**
@@ -721,6 +818,7 @@ export class Agent {
   private setActivity(activity: string | undefined): void {
     if (this.info.activity === activity) return;
     this.info.activity = activity;
+    this.info.activitySince = Date.now();
     this.host.agentChanged(this);
   }
 
@@ -835,6 +933,23 @@ export class Agent {
       }
     }
     if (this.launchedAutoEffort !== null && settings.autoEffort !== this.launchedAutoEffort) this.stale = true;
+    if (this.permissionMode !== null && settings.permissionMode !== this.permissionMode) {
+      const session = this.session;
+      const mode = settings.permissionMode;
+      this.permissionMode = mode;
+      if (!session.setPermissionMode) this.stale = true;
+      else {
+        // Called at once, so a message delivered right after goes out under the new mode.
+        const relaunch = () => {
+          if (this.session === session) this.stale = true;
+        };
+        try {
+          Promise.resolve(session.setPermissionMode(mode)).catch(relaunch);
+        } catch {
+          relaunch();
+        }
+      }
+    }
   }
 
   /** Set while compact() runs; messages delivered meanwhile wait in the backlog. */

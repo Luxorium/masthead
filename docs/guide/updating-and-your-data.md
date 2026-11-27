@@ -36,6 +36,8 @@ safest way back.
 ## Updating
 
 Updating restarts Masthead, which stops any helper that is working. Wait until they have finished.
+When updating from 0.2.0, a main assistant that was in the middle of a task does not carry on by
+itself afterwards: send it any message.
 
 New versions are listed on the [releases page](https://github.com/Luxorium/masthead/releases).
 Masthead is not on the npm registry; it may be later.
@@ -45,6 +47,11 @@ Masthead is not on the npm registry; it may be later.
 (the `.tgz` file listed under the release), then `masthead stop` and `masthead`. If you use the
 service, run `masthead service install` instead of `masthead`; it restarts the service with the new
 version.
+
+**Once after updating to 0.2.1 or later, if you use the service:** run `masthead service install`
+(or `scripts/install.sh` again). It rewrites the service so that one program running out of memory no
+longer stops Masthead. `masthead doctor` and `masthead service status` say when the service is out
+of date.
 
 **If you installed from source:**
 

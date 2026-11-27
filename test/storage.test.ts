@@ -193,6 +193,33 @@ test('store: readItems pages a stored transcript; delete removes images too', ()
   assert.equal(existsSync(join(root, 'c')), false);
 });
 
+test('store: a finished tool is stored without its input; every reader gets it back; old transcripts still load', () => {
+  const root = join(tmp(), 'conversations');
+  const store = new Store(root);
+  store.saveConversation({ meta: { id: 'c', title: 't', cwd: '/', createdAt: 1, updatedAt: 1, leadId: 'l' }, agents: [] });
+  const input = { command: 'x'.repeat(1000) };
+  store.appendItem('c', 'l', { id: 't1', ts: 1, kind: 'tool', name: 'Bash', input, done: false } as never);
+  for (let i = 0; i < 3; i++) store.appendItem('c', 'l', { id: `i${i}`, ts: 2 + i, kind: 'text', text: String(i) } as never);
+  store.appendItem('c', 'l', { id: 't1', ts: 1, kind: 'tool', name: 'Bash', input, result: 'ok', isError: false, done: true } as never);
+  const lines = readFileSync(join(root, 'c', 'items', 'l.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(lines.filter((l) => l.includes('xxxx')).length, 1, 'the input is written once');
+  const full = { id: 't1', ts: 1, kind: 'tool', name: 'Bash', input, result: 'ok', isError: false, done: true };
+  assert.deepEqual(store.loadItems('c', 'l')[0], full);
+  assert.deepEqual(store.readItems('c', 'l', { limit: 10 }).items[0], full);
+  // A page that ends before the start line still carries the input; the cursor is unchanged by it.
+  const p1 = store.readItems('c', 'l', { limit: 2 });
+  assert.deepEqual(p1.items.map((i) => i.id), ['i2', 't1']);
+  assert.deepEqual((p1.items[1] as { input?: unknown }).input, input);
+  const p2 = store.readItems('c', 'l', { before: p1.cursor, limit: 10 });
+  assert.deepEqual(p2.items.map((i) => i.id), ['t1', 'i0', 'i1'], 'its start line is on the older page, as any earlier line is (the reader keeps the newer one)');
+  // 0.2.0 wrote the input on both lines: still read as before.
+  const old = transcript([
+    { id: 't', kind: 'tool', input: { a: 1 }, done: false },
+    { id: 't', kind: 'tool', input: { a: 1 }, done: true, result: 'r' },
+  ]);
+  assert.deepEqual(readPage(old, { limit: 5 }).items, [{ id: 't', kind: 'tool', input: { a: 1 }, done: true, result: 'r' }]);
+});
+
 // ---- HTTP routes ----
 async function withServer(blobs: BlobStore, tokens: BlobTokens, authorised: boolean, fn: (port: number) => Promise<void>) {
   const server: Server = createServer((req, res) => {

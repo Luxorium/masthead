@@ -48,12 +48,13 @@ Returns `{ request, pollSecret }` or `{ refused }`. In order:
 4. Too many from this tailnet user are refused: 3, or 6 in loopback mode.
 5. Otherwise a new request gets a random id, a six-digit `code` from `randomInt` (zero-padded) and a 24-byte random poll secret. Only `sha256(pollSecret)` is kept. A `request` line is logged.
 
-**Poll secrets are never rotated.** A second request from the same node does not return the first request's code or a new secret; it is refused. On a loopback listener another local user could forge this node's address, and that must not take over the first asker's request. A page that lost its secret waits for the request to expire. The doc comment on `request()` still says "asking again returns the same code (with a new poll secret)", which the code no longer does. Tested by "a pending request gets a six-digit code; a second asker for the same node gets neither code nor secret" and "pending requests are capped per tailnet user".
+**Poll secrets are never rotated.** A second request from the same node does not return the first request's code or a new secret; it is refused. On a loopback listener another local user could forge this node's address, and that must not take over the first asker's request. A page that lost its secret waits for the request to expire. Tested by "a pending request gets a six-digit code; a second asker for the same node gets neither code nor secret" and "pending requests are capped per tailnet user".
 
 **Loopback mode** (`opts.loopback`, set when the remote listener is a loopback port, on Windows): any local program can claim to be any device, so a node may have up to three waiting requests, each with its own code and poll secret, and the matching code on the device's screen is the guard. A denial in this mode locks out that request only: no cool-down is set for the node. Tested by "a forged first request cannot block the real device; deny locks out that request only".
 
-## Deciding: `allow(requestId, role = 'full')` and `deny(requestId)`
+## Deciding: `allow(requestId, role = 'read')` and `deny(requestId)`
 
+- Without a role, `allow` gives the most limited one, `read` (0.2.1; it was `full`).
 - `allow` returns `null` for an unknown, denied or already-allowed request, or an unknown role. Otherwise it makes a 32-byte random token (64 hex characters), stores a `Device` with `tokenHash`, `expiresAt = now + tokenMs` and the request's details, saves, keeps the token on the pending request until the device collects it, and logs `allow` with the role. A new approval of a node replaces any earlier approval and its token.
 - `deny` returns `false` for an unknown or already-allowed request. Otherwise it removes the request, sets the node's 10-minute cool-down (not in loopback mode) and logs `deny`. Tested by "deny refuses the node for a while, then it may ask again".
 

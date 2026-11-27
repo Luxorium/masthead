@@ -27,7 +27,9 @@
   appears above the message box. Choose an answer, or **Allow**, **Allow for this session** or
   **Deny**. Chats waiting for you are marked **Needs your answer** in the chat list.
 - **It may bring in helpers.** See [Helpers and the team](helpers-and-team.md).
-- **To stop**, press the **■** button (**Stop**), which takes the place of **↑** while the main
+- **When the main assistant asks you something**, a **Waiting for your answer** button takes you
+  to its question.
+- **To stop**, press the **■ Stop** button, which takes the place of **↑** while the main
   assistant is working and the box is empty. **Stop all** also stops every helper.
 - **Closing the browser tab stops nothing.** The work carries on and the page catches up when you
   come back. Stopping Masthead itself (`masthead stop`) stops the work.

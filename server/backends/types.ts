@@ -65,6 +65,8 @@ export interface BackendCaps {
   lean: boolean;
   /** Can compact a session's memory on request (Session.compact). */
   compact: boolean;
+  /** SessionSpec.env reaches only this session's process (false: a process shared by sessions, e.g. Codex's app-server). */
+  sessionEnv: boolean;
 }
 
 /** A JSON Schema object describing a tool's input. */
@@ -90,6 +92,8 @@ export interface SessionSpec {
   canAskPerson: boolean;
   permissionMode: string;
   lean: boolean;
+  /** Folders outside cwd the agent may use without asking (its scratch folder). */
+  dirs?: string[];
   /** Extra environment variables. The adapter builds the process environment (no credentials added or removed). */
   env: Record<string, string | undefined>;
 }
@@ -114,6 +118,11 @@ export interface Session {
   /** May return a promise; a rejection means the change did not reach the session. */
   setEffort(effort: Effort): void | Promise<void>;
   setModel?(model: string): void | Promise<void>;
+  /**
+   * A new permission mode (SessionSpec.permissionMode) for a running session, from now on or from the
+   * next turn. A rejection means it did not take: the runtime relaunches the session before its next turn.
+   */
+  setPermissionMode?(mode: string): void | Promise<void>;
   /** graceful: end the input and let the backend finish; now: end the process at once. */
   close(how: 'graceful' | 'now'): void;
   contextUsage?(): Promise<{ used: number; max: number }>;

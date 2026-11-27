@@ -41,8 +41,8 @@ The two places that use `--omit=optional` are installs that need no build: the i
 | `build:web` | `vite build` |
 | `dev:web` | `vite` (the page with hot reload) |
 | `check` | `tsc -p tsconfig.server.json --noEmit && svelte-check --tsconfig ./tsconfig.web.json` |
-| `test` | `node --import tsx --test test/*.test.ts` |
-| `test:web` | `vitest run --config web/vitest.config.ts` |
+| `test` | `node scripts/run-tests.mjs` (runs `node --import tsx --test test/*.test.ts` in a per-run temp folder) |
+| `test:web` | `node scripts/run-tests.mjs -- vitest run --config web/vitest.config.ts` |
 | `test:live` | `node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED --import tsx test/live.e2e.ts` |
 | `start` | `node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED dist/server/main.js serve` |
 | `prepack` | `npm run build` |

@@ -38,6 +38,23 @@ export interface DoctorDeps {
   awakeTool?(): { cmd: string | null; found: boolean };
   /** Windows: whether only the current user can reach a file (icacls). See isPrivate in transport/auth.ts. */
   isPrivate?(file: string): boolean;
+  /** Linux: the running service's memory and child processes (server/service/usage.ts), null when not running. */
+  serviceUsage?(): { memoryBytes: number | null; children: number | null } | null;
+  /** os.totalmem() */
+  totalMemory?: number;
+  /** Linux: what /tmp is (server/service/usage.ts tmpInfo). */
+  tmp?(): { path: string; fstype: string; size: number; free: number } | null;
+}
+
+/** The service using this share of RAM or more is worth a warning. */
+export const MEMORY_WARN_SHARE = 0.5;
+/** A tmpfs /tmp smaller than this, or with less than TMP_FREE_SHARE of it free, is worth a warning. */
+export const TMP_SMALL_BYTES = 2 * 1024 ** 3;
+export const TMP_FREE_SHARE = 0.2;
+
+export function formatBytes(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  return `${Math.round(n / 1024 ** 2)} MB`;
 }
 
 export const MIN_NODE = 22;
@@ -156,6 +173,7 @@ async function serviceCheck(deps: DoctorDeps): Promise<Check> {
     const s = await deps.service.status();
     if (!s.installed) return { name, ok: true, warn: true, detail: `not installed (${deps.service.kind})`, fix: `${mastheadCommand(deps.platform)} service install` };
     if (s.running === false) return { name, ok: false, detail: s.detail, fix: `${mastheadCommand(deps.platform)} service install` };
+    if (s.outdated) return { name, ok: true, warn: true, detail: `${s.detail}; ${s.outdated}`, fix: `${mastheadCommand(deps.platform)} service install (or run scripts/install.sh again if you installed with it)` };
     return { name, ok: true, warn: s.running === null, detail: s.detail };
   } catch (e) {
     return { name, ok: false, warn: true, detail: `could not be checked: ${(e as Error).message}` };
@@ -165,6 +183,46 @@ async function serviceCheck(deps: DoctorDeps): Promise<Check> {
 /** The GitHub release tarball of a Masthead version (Masthead is not published to the npm registry). */
 export function releaseTarball(version: string): string {
   return `https://github.com/Luxorium/masthead/releases/download/v${version}/luxorium-masthead-${version}.tgz`;
+}
+
+function memoryCheck(deps: DoctorDeps): Check | null {
+  if (!deps.serviceUsage || !deps.totalMemory) return null;
+  let u: ReturnType<NonNullable<DoctorDeps['serviceUsage']>>;
+  try {
+    u = deps.serviceUsage();
+  } catch {
+    return null;
+  }
+  if (!u || u.memoryBytes === null) return null;
+  const name = 'Service memory';
+  const kids = u.children === null ? '' : `, ${u.children} child process${u.children === 1 ? '' : 'es'} (agents' tools and browsers)`;
+  const detail = `${formatBytes(u.memoryBytes)} of ${formatBytes(deps.totalMemory)} RAM${kids}`;
+  if (u.memoryBytes < deps.totalMemory * MEMORY_WARN_SHARE) return { name, ok: true, detail };
+  return {
+    name,
+    ok: true,
+    warn: true,
+    detail: `${detail}: high; if memory runs out, the system kills processes and agents' work can be lost`,
+    fix: 'Close conversations you no longer need and ask agents to close browsers they have finished with; everything in the service stops when Masthead restarts.',
+  };
+}
+
+function tmpCheck(deps: DoctorDeps): Check | null {
+  if (!deps.tmp) return null;
+  const t = deps.tmp();
+  if (!t || t.fstype !== 'tmpfs' || t.size <= 0) return null;
+  const name = 'Temporary folder';
+  const detail = `${t.path} is in memory (tmpfs): ${formatBytes(t.free)} free of ${formatBytes(t.size)}`;
+  const small = t.size < TMP_SMALL_BYTES;
+  const full = t.free < t.size * TMP_FREE_SHARE;
+  if (!small && !full) return { name, ok: true, detail };
+  return {
+    name,
+    ok: true,
+    warn: true,
+    detail: `${detail}${full ? ': nearly full' : ': small'}`,
+    fix: `Masthead's agents use their own scratch folders on disk; other programs still use ${t.path}. Remove what you no longer need from ${t.path}, or make it larger (systemctl edit tmp.mount, Options=size=...).`,
+  };
 }
 
 function sdkBinaryCheck(deps: DoctorDeps): Check {
@@ -200,6 +258,7 @@ export async function doctor(deps: DoctorDeps): Promise<Check[]> {
     secretCheck(deps),
     await portCheck(deps),
     await serviceCheck(deps),
+    ...[memoryCheck(deps), tmpCheck(deps)].filter((c): c is Check => c !== null),
     sdkBinaryCheck(deps),
     ...[awakeCheck(deps)].filter((c): c is Check => c !== null),
   ];

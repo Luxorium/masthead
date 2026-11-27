@@ -4,10 +4,10 @@
 // run (`runConformance('claude-code', …, { live: true })`). Cases the backend's caps rule out are skipped.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, test } from 'node:test';
+import { after, describe, test } from 'node:test';
 import { EFFORTS } from '../shared/protocol.ts';
 import type { Backend, PermissionAnswer, PermissionAsk, Session, SessionEvents, SessionSpec, ToolDef, TurnResult } from '../server/backends/types.ts';
 
@@ -108,10 +108,21 @@ export class Recorder implements SessionEvents {
   }
 }
 
+/** Session folders made by spec(); removed when the test file ends (also for live runs outside run-tests). */
+const folders: string[] = [];
+after(() => {
+  for (const d of folders.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+});
+function workFolder(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'masthead-conf-'));
+  folders.push(dir);
+  return dir;
+}
+
 export function spec(over: Partial<SessionSpec> & { model: string }): SessionSpec {
   return {
     effort: 'low',
-    cwd: mkdtempSync(join(tmpdir(), 'masthead-conf-')),
+    cwd: workFolder(),
     instructions: 'You are taking part in an automated test. Follow each instruction literally and briefly.',
     tools: [],
     canAskPerson: true,

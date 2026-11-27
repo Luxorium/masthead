@@ -42,7 +42,7 @@ export function claudeProfile(): TeamProfile {
     builtIn: true,
     tiers: [
       t('lead', 'claude-fable-5-2', 'xhigh', 1, false, 'amber'),
-      t('opus', 'claude-opus-5-5', 'xhigh', 3, true, 'violet'),
+      t('opus', 'claude-opus-5-5', 'xhigh', 3, false, 'violet'),
       t('sonnet', 'claude-sonnet-5-5', 'high', 4, true, 'blue'),
       t('haiku', 'claude-haiku-5-5', 'medium', 4, true, 'teal'),
     ],
@@ -58,7 +58,7 @@ export function defaultSettings(): Settings {
     permissionMode: 'inherit',
     autoEffort: true,
     leanSubagents: true,
-    leanOpus: true,
+    leanOpus: false,
     collapseReports: false,
     maxRunMinutes: 0,
     keepAwake: true,

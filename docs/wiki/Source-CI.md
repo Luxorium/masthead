@@ -75,7 +75,7 @@ Read from the file; no release run was watched for this page.
 
 ## `scripts/ci-e2e.mjs` step by step
 
-Plain Node with no shell, so it runs the same on all three systems. It needs a build and Playwright's Chromium. Usage: `node scripts/ci-e2e.mjs [screenshot folder]` (default `<temp>/masthead-e2e-shots`).
+Plain Node with no shell, so it runs the same on all three systems. It needs a build and Playwright's Chromium. Usage: `node scripts/ci-e2e.mjs [screenshot folder]` (default `shots/` inside its own `masthead-e2e-…` test folder). The test folder is removed when the test passed and kept, with its path printed, when it failed.
 
 1. Makes the screenshot folder, and a fresh temporary folder with `data`, `config` and `work` inside. The test checks the empty first load, so every run starts clean.
 2. Writes `config/settings.json`: `permissionMode: "default"` (so the fake's approval request shows a card), `defaultCwd` = the `work` folder, and tier limits Opus 3, Sonnet 2, Haiku 2.

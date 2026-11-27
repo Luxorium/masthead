@@ -75,6 +75,9 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `server/service/index.ts` | [Service](Source-Service.md) | [Platforms](Platforms.md#background-service) |
 | `server/service/launchd.ts` | [Service](Source-Service.md): [launchd.ts](Source-Service.md#launchdts) | [Platforms](Platforms.md#background-service) |
 | `server/service/systemd.ts` | [Service](Source-Service.md): [systemd.ts](Source-Service.md#systemdts) | [Platforms](Platforms.md#background-service) |
+| `server/service/laststop.ts` | [Service](Source-Service.md#laststopts) | |
+| `server/service/scratch.ts` | [Service](Source-Service.md#scratchts) | [Security model](Security-Model.md#in-short-how-masthead-stays-safe) |
+| `server/service/usage.ts` | [Service](Source-Service.md#usagets) | |
 | `server/service/taskscheduler.ts` | [Service](Source-Service.md): [taskscheduler.ts](Source-Service.md#taskschedulerts) | [Platforms](Platforms.md#background-service) |
 | `server/service/types.ts` | [Service](Source-Service.md) | [Platforms](Platforms.md#background-service) |
 
@@ -90,6 +93,10 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 
 | File | Explained on | Also see |
 |---|---|---|
+| `web/src/lib/AgentSpan.svelte` | [Web components](Source-Web-Components.md#agentspansvelte) | |
+| `web/src/lib/progress.ts` | [Web store](Source-Web-Store.md#progress-without-asking-progressts-progresssveltets) | |
+| `web/src/lib/progress.svelte.ts` | [Web store](Source-Web-Store.md#progress-without-asking-progressts-progresssveltets) | |
+| `web/src/lib/transcript/AnswerMarker.svelte` | [Web components](Source-Web-Components.md#answermarkersvelte) | |
 | `web/index.html` | [Web Front End](Source-Web-Front-End.md#the-page-shell-indexhtml) |  |
 | `web/public/favicon.svg` | [Web Styles](Source-Web-Styles.md#webpublicfaviconsvg) |  |
 | `web/src/App.svelte` | [Web Front End](Source-Web-Front-End.md#layout-appsvelte) |  |
@@ -151,6 +158,7 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `web/test/markdown.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/permission-card.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/pure.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/progress.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) | |
 | `web/test/remote-section.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/remote-signin.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/restricted-device.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
@@ -186,6 +194,7 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `scripts/ci-e2e.mjs` | [CI](Source-CI.md): [scripts/ci-e2e.mjs step by step](Source-CI.md#scriptsci-e2emjs-step-by-step) | [Building, testing and installing](Building-Testing-Installing.md#browser-test-on-the-fake-backend) |
 | `scripts/install.sh` | [Installing](Source-Install-Scripts.md): [What install.sh does](Source-Install-Scripts.md#what-installsh-does) | [Building, testing and installing](Building-Testing-Installing.md#installing-from-source) |
 | `scripts/path.sh` | [Installing](Source-Install-Scripts.md): [path.sh](Source-Install-Scripts.md#pathsh) | |
+| `scripts/run-tests.mjs` | [Test runner](Source-Tests.md#test-runner-scriptsrun-testsmjs) | [Building, testing and installing](Building-Testing-Installing.md) |
 | `scripts/uninstall.sh` | [Installing](Source-Install-Scripts.md): [What uninstall.sh does](Source-Install-Scripts.md#what-uninstallsh-does) | |
 | `svelte.config.js` | [Build configuration](Source-Build-Config.md): [svelte.config.js](Source-Build-Config.md#svelteconfigjs) | |
 | `tsconfig.server.json` | [Build configuration](Source-Build-Config.md): [tsconfig.server.json](Source-Build-Config.md#tsconfigserverjson) | |
@@ -234,6 +243,13 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `test/storage-wiring.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 | `test/storage.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 | `test/unit.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
+| `test/workdir.ts` | [Work folders of live and browser runs](Source-Tests.md#work-folders-of-live-and-browser-runs-testworkdirts) | [Live tests](Live-Tests.md) |
+| `test/service-health.test.ts` | [Tests](Source-Tests.md#server-tests-npm-test) | [Service](Source-Service.md) |
+| `test/restart.test.ts` | [Restarting the app](Walkthrough-Restarting-the-App.md#the-leads-turn-after-a-restart) | [Tests](Source-Tests.md) |
+| `test/review-restart.test.ts` | [Runtime](Source-Runtime.md#every-rule-kept-from-01x-and-where-it-lives-now) | [Tests](Source-Tests.md) |
+| `test/scratch-app.test.ts` | [Tests](Source-Tests.md#server-tests-npm-test) | [Service](Source-Service.md#scratchts) |
+| `test/restart.live.ts` | [Live tests](Live-Tests.md#claude-code-testrestartlivets) | [Restarting the app](Walkthrough-Restarting-the-App.md) |
+| `test/settings.live.ts` | [Live tests](Live-Tests.md#claude-code-testsettingslivets) | |
 
 ## Related pages
 

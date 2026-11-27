@@ -96,7 +96,8 @@ test('characterisation: 0.1.x conversations restore as today', async () => {
   assert.equal(stored.meta.busy, undefined);
   await tick();
   const notes = host.items.filter((x) => x.agent === 'alpha' && x.item.kind === 'notice').map((x) => (x.item as { text: string }).text);
-  assert.deepEqual(notes, ['Masthead was restarted; these agents were stopped while working: bravo (Review), charlie. Message one to resume it.']);
+  // An old chat (idle for longer than the resume window): the lead is not woken, it is told with the next message.
+  assert.deepEqual(notes, ['Masthead was restarted while helpers were working, so they were stopped: bravo (Review, started by alpha); charlie (started by bravo). The lead is told with your next message.']);
   assert.match(conv.message(by('alpha'), 'delta', 'x'), /^Error: the person stopped "delta"/);
 
   const old = Conversation.restore(quietHost(), all[1]!);

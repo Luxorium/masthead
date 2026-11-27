@@ -360,9 +360,8 @@ try {
   const busyOne = rowOf('busy one');
   await busyOne.locator('.dot.running, .dot.waiting').first().waitFor({ timeout: 90_000 });
   const stopBtn = busyOne.getByRole('button', { name: /^Stop / });
-  await stopBtn.hover();
-  check('the stop button says "Stop" on hover', await stopBtn.locator('.label').isVisible());
-  await page.screenshot({ path: `${shots}/3b-stop-hover-${scheme}.png` });
+  check('the stop button on a working helper\'s row is labelled "Stop"', await stopBtn.locator('.label').isVisible());
+  await page.screenshot({ path: `${shots}/3b-stop-${scheme}.png` });
   await stopBtn.click();
   await busyOne.locator('.doing', { hasText: 'Stopped' }).waitFor({ timeout: 20_000 }).catch(() => {});
   check('the row\'s ■ stops the agent', (await busyOne.locator('.doing', { hasText: 'Stopped' }).count()) === 1);
@@ -563,6 +562,56 @@ try {
 
   }
 
+  // ---- Progress without asking (0.2.1): time on an activity, the "waiting for helpers" list, and
+  // "Waiting for your answer". Fake only (helpers finish on cue); in a fresh chat.
+  if (fake) {
+    log('progress without asking');
+    await page.locator('button', { hasText: 'New chat' }).first().click();
+    const pbox = page.locator('.composer textarea');
+    const pspawn = (title, task) => `Call the tool spawn_agent with input ${JSON.stringify({ title, task }).replace(/\[/g, '\\u005b')}`;
+    await pbox.fill(pspawn('slow reader', '[[background 900s]] Reply with exactly the word busy'));
+    await pbox.press('Enter');
+    // The chat names the helper it waits for; the button opens what each one is doing, with a time.
+    const waitToggle = page.locator('.waiting-on button[aria-expanded]');
+    await waitToggle.waitFor({ timeout: 20_000 });
+    check('"waiting for helpers" names them', /Waiting for 1 helper: \w+/.test((await waitToggle.textContent()) ?? ''));
+    check('the helper list starts closed', (await waitToggle.getAttribute('aria-expanded')) === 'false');
+    await waitToggle.focus();
+    await page.keyboard.press('Enter');
+    check('Enter opens the helper list', (await waitToggle.getAttribute('aria-expanded')) === 'true');
+    const helperLine = page.locator('.waiting-on .helpers li').first();
+    check('each helper shows what it is doing and for how long', / · (under 1 min|\d+ min)/.test((await helperLine.textContent()) ?? ''));
+    // The team row says the same.
+    if (!(await page.locator('aside.right').isVisible())) await page.locator('button.team-btn').click();
+    const slowRow = page.locator('aside.right div.row', { hasText: 'slow reader' }).first();
+    await slowRow.locator('.doing .since').waitFor({ timeout: 10_000 });
+    check('the team row shows the time on its activity', / · (under 1 min|\d+ min)/.test((await slowRow.locator('.doing').textContent()) ?? ''));
+    await helperLine.locator('button').click();
+    check('a helper\'s name opens its chat', (await page.locator('nav.crumbs').count()) === 1);
+    await page.locator('nav.crumbs button.back').click();
+
+    // A question from the lead buried under a helper's report gets a marker by the message box.
+    await pbox.fill(pspawn('quick one', '[[background 4s]] Reply with exactly the word done'));
+    await pbox.press('Enter');
+    await page.waitForTimeout(1000);
+    await pbox.fill('Which folder should I use?');
+    await pbox.press('Enter');
+    const marker = page.locator('button.answer-marker');
+    const markerShown = await marker.waitFor({ timeout: 20_000 }).then(() => true, () => false);
+    check('"Waiting for your answer" appears once the question is buried', markerShown);
+    if (markerShown) {
+      await marker.click();
+      await page.waitForTimeout(400);
+      check('it highlights the question', /Which folder should I use\?/.test((await page.locator('.item.highlight').textContent().catch(() => '')) ?? ''));
+      check('and moves focus to it', await page.evaluate(() => !!document.activeElement?.closest('.item')));
+      await axeCheck(page, 'waiting for your answer');
+      await pbox.fill('Reply with exactly the word docs');
+      await pbox.press('Enter');
+      await marker.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
+      check('the marker goes once the person answers', (await marker.count()) === 0);
+    }
+  }
+
   if (fake) {
     // Tidying the team (fake only: helpers finish on cue). Automatic path: 15 finished helpers and a
     // lead turn end cross the threshold; Masthead archives them and posts a summary.
@@ -688,7 +737,7 @@ try {
       });
       log(`phone: stop square ${JSON.stringify(box)}`);
       check("phone: a working helper's row has the Stop square, at least 44 px and fully on screen", box.w >= 44 && box.h >= 44 && box.inside && box.onTop);
-      check('phone: the Stop square says Stop on touch screens (no hover there)', (await stop.locator('.label').isVisible()) && /Stop/.test((await stop.getAttribute('aria-label')) ?? ''));
+      check('phone: the Stop square on a working helper\'s row is labelled Stop', (await stop.locator('.label').isVisible()) && /Stop/.test((await stop.getAttribute('aria-label')) ?? ''));
       check('phone: the team drawer does not scroll sideways with a working helper', await noSideways(p));
       await p.screenshot({ path: `${shots}/8b-phone-stop-light.png` });
       await stop.tap();

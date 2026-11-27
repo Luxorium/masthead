@@ -34,6 +34,7 @@ export const FAKE_CAPS: BackendCaps = {
   contextUsage: true,
   lean: true,
   compact: true,
+  sessionEnv: true,
 };
 
 export const FAKE_MODELS: ModelInfo[] = [
@@ -122,6 +123,7 @@ export class FakeSession implements Session {
   ) {
     this.effort = spec.effort;
     this.model = spec.model;
+    this.permissionMode = spec.permissionMode;
     this.ended = new Promise<void>((r) => (this.end = r));
     queueMicrotask(() => this.boot());
   }
@@ -175,6 +177,12 @@ export class FakeSession implements Session {
 
   setModel(model: string): void {
     this.model = model;
+  }
+
+  /** The mode in effect: bypassPermissions runs commands without asking, like Claude Code. */
+  permissionMode: string;
+  setPermissionMode(mode: string): void {
+    this.permissionMode = mode;
   }
 
   close(how: 'graceful' | 'now'): void {
@@ -350,6 +358,10 @@ export class FakeSession implements Session {
         const input = step.kind === 'command' ? { command: step.command } : { questions: [{ question: 'Which colour?', options: [{ label: 'teal' }, { label: 'red' }] }] };
         if (step.kind === 'question' && !this.spec.canAskPerson) return { text: 'I may not ask the person.' };
         this.ev.toolStarted({ id, name, input });
+        if (step.kind === 'command' && this.permissionMode === 'bypassPermissions') {
+          this.ev.toolFinished({ id, result: `ran: ${step.command}`, isError: false });
+          return { text: `Ran ${step.command}.` };
+        }
         const ctl = new AbortController();
         this.asks.add(ctl);
         const answer = await this.ev.askPermission({

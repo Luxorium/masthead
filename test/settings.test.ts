@@ -21,7 +21,8 @@ test('settings v2: defaults hold the claude profile, and the compatibility view 
   assert.deepEqual(s.profiles[0]!.tiers.map((t) => t.colour), ['amber', 'violet', 'blue', 'teal']);
   assert.equal(s.tiers.opus.model, 'claude-opus-5-5');
   assert.equal(s.leanSubagents, true);
-  assert.equal(s.leanOpus, true);
+  assert.equal(s.leanOpus, false, 'since 0.2.1 the Opus level has the person\'s connectors');
+  assert.deepEqual(s.profiles[0]!.tiers.map((t) => t.lean), [false, false, true, true]);
   assert.deepEqual(sanitizeSettings(JSON.parse(JSON.stringify(s))), s, 'a saved v2 file reads back the same');
 });
 

@@ -24,7 +24,7 @@ import {
   type TierSpec,
 } from '../../shared/protocol.js';
 import { Agent, clip, type AgentHost, type TurnOutcome } from '../runtime/agent.js';
-import { initial, live, statusOf, step, type AgentState, type Effect, type Event, type StopBy } from './machine.js';
+import { backgroundOnly, initial, live, statusOf, step, type AgentState, type Effect, type Event, type StopBy } from './machine.js';
 import { messageEnvelope, reportEnvelope } from './prompts.js';
 import type { Scheduler } from './scheduler.js';
 import type { StoredConversation } from '../storage/store.js';
@@ -47,18 +47,37 @@ export interface ConversationHost {
   backend?(tier: string): Backend | undefined;
   /** Stores an image from a tool result as a blob of this conversation. */
   storeImage?(convId: string, data: string, mediaType: string): { ref: unknown } | { error: string };
+  /** The conversation's scratch folder, made if need be; undefined when there is none. */
+  scratchDir?(convId: string): string | undefined;
   /** Tests replace the clock; the app uses the real one. */
   clock?: Clock;
   /** An agent's transcript from storage (for read_archive). */
   readItems?(convId: string, agentId: string): Item[];
+  /** The last `n` items of an agent's transcript, oldest first (cheaper than readItems for a long one). */
+  lastItems?(convId: string, agentId: string, n: number): Item[];
   /** The team compaction's state changed (meta.compact): tell the page. */
   compactChanged?(conv: Conversation): void;
+  /** Why Masthead was last restarted, when it is known (e.g. the computer ran out of memory); said once per chat it affected. */
+  restartReason?(): string | null | undefined;
+  /** Saves the conversation at once (not after the usual short delay): once-only marks must survive a crash loop. */
+  saveNow?(conv: Conversation): void;
 }
 
 /** Suggest compacting the team once, past this many finished helpers… */
-const COMPACT_SUGGEST_HELPERS = 15;
+const COMPACT_SUGGEST_HELPERS = 10;
 /** …or past this share of the lead's memory. */
 const COMPACT_SUGGEST_MEMORY = 0.7;
+/** …or past this many tokens in it, whichever comes first (a 1M window reaches 70% only at 700k). */
+const COMPACT_SUGGEST_TOKENS = 200_000;
+/** Whether the lead's memory counts as full, and how to say so. */
+function memoryFull(u: { context: number; contextMax: number }): { full: boolean; words: string } {
+  const share = u.contextMax > 0 ? u.context / u.contextMax : 0;
+  if (share >= COMPACT_SUGGEST_MEMORY) return { full: true, words: `${Math.round(share * 100)}% full` };
+  if (u.context >= COMPACT_SUGGEST_TOKENS) return { full: true, words: `at ${Math.round(u.context / 1000)}k tokens` };
+  return { full: false, words: '' };
+}
+/** How many helpers compact their memory at once. */
+const COMPACT_PARALLEL = 3;
 /** What the person is told when tidying ends (no "memory freed" figure: the backend reports it only after the next turn). */
 export function compactSummary(c: CompactState, stayed: number): string {
   const n = c.archive.length;
@@ -147,6 +166,18 @@ function clockTime(ms: number): string {
 const CLOSED_WHILE_WORKING = 'Masthead was closed while this agent was working.';
 /** What that error becomes once the lead has been told, so it is told only once. */
 const CLOSED_LEAD_TOLD = 'Masthead was closed while this agent was working. The lead was told.';
+/** A helper cut off by a restart (told or not): it did not finish, whatever its status says. */
+function cutOffByRestart(a: Agent): boolean {
+  return a.status === 'stopped' && (a.info.error === CLOSED_WHILE_WORKING || a.info.error === CLOSED_LEAD_TOLD);
+}
+/**
+ * After a restart within this time of the conversation's last activity, the lead gets a turn of its own
+ * to deal with what the restart cut off. Older conversations (an upgrade over chats untouched for days)
+ * are not woken: their lead is told with the person's next message.
+ */
+const RESUME_WINDOW_MS = 6 * 60 * 60_000;
+/** The note on a person's message sent while the agent is still answering the one before. */
+export const SENT_WHILE_ANSWERING = '[Sent while you were still answering the previous message. If your answer already covers it, do not repeat yourself.]';
 
 /** Effects that would tell a parent about a child stopped as part of stopping the parent itself. */
 const QUIET: ReadonlySet<Effect['type']> = new Set(['report', 'childEndedQuietly', 'stopChildren']);
@@ -242,6 +273,8 @@ export class Conversation implements AgentHost, TeamActions {
     const conv = new Conversation(stored.meta, host);
     for (const a of stored.agents) {
       const info = { ...a.info, title: a.info.title ?? '', activity: undefined, waitingFor: undefined, pausedUntil: undefined };
+      // A lead saved mid-turn: the server died under it (a clean stop records it in meta.leadCut instead).
+      if (info.parentId === null && (info.status === 'running' || info.status === 'queued')) conv.meta.leadCut = true;
       if (info.status === 'queued' || info.status === 'running' || info.status === 'waiting') {
         // The app was closed while this agent was working.
         info.status = info.parentId === null ? 'idle' : 'stopped';
@@ -258,14 +291,105 @@ export class Conversation implements AgentHost, TeamActions {
     const sent = stored.agentMessages;
     if (typeof sent === 'number' && Number.isFinite(sent)) conv.agentMessages = Math.min(MAX_AGENT_MESSAGES, Math.max(0, Math.trunc(sent)));
     const lost = conv.adoptTeam();
-    const note = conv.restartNote();
     // Deferred: the app only keeps items of a conversation it has registered, which happens after this returns.
     queueMicrotask(() => {
       if (lost) conv.lead.addItem({ kind: 'notice', level: 'info', text: lost });
-      if (note) conv.lead.addItem({ kind: 'notice', level: 'info', text: note.text });
+      conv.afterRestart();
       conv.resumeCompact();
     });
     return conv;
+  }
+
+  /**
+   * What a restart left undone. Helpers it cut off, and a message from the person the lead never got
+   * to answer, are given to the lead in one turn of its own, so nothing waits for the person to type.
+   * Each is told once (marked in the saved state). For a conversation idle for longer than
+   * RESUME_WINDOW_MS the lead is not woken: the page says what happened, and the lead hears of the
+   * helpers with the person's next message.
+   */
+  private afterRestart(): void {
+    if (!this.agents.has(this.meta.leadId)) return; // a damaged file without its lead: nothing to tell
+    const note = this.restartNote();
+    const unanswered = this.unansweredPersonMessage();
+    // The lead itself was mid-turn (its unanswered message, if any, is sent again below instead).
+    const leadCut = this.meta.leadCut === true && !unanswered;
+    const recent = this.now() - this.meta.updatedAt <= RESUME_WINDOW_MS;
+    // Why the server restarted (out of memory), when known: every chat active in the window says so once
+    // (once per server start, since restore runs once), also when the restart cut nothing off.
+    const why = this.host.restartReason?.();
+    if (why && (recent || note || unanswered || leadCut)) this.lead.addItem({ kind: 'notice', level: 'info', text: why });
+    if (!note && !unanswered && !leadCut) {
+      if (this.meta.leadCut) this.clearLeadCut();
+      return;
+    }
+    if (!recent) {
+      if (note) this.lead.addItem({ kind: 'notice', level: 'info', text: `${note.page} The lead is told with your next message.` });
+      if (unanswered) this.lead.addItem({ kind: 'notice', level: 'info', text: 'Masthead was restarted before the lead answered your last message. Send it again if you still need an answer.' });
+      if (unanswered) this.markResent(unanswered.id);
+      if (leadCut) this.lead.addItem({ kind: 'notice', level: 'info', text: 'Masthead was restarted while the lead was working. Send a message to have it carry on.' });
+      this.clearLeadCut();
+      this.host.saveNow?.(this);
+      return;
+    }
+    const parts: string[] = [];
+    if (leadCut) {
+      this.lead.addItem({ kind: 'notice', level: 'info', text: 'Masthead was restarted while the lead was working; it was asked to carry on.' });
+      parts.push('[You were cut off mid-turn by a restart; check where you were and carry on.]');
+    }
+    this.clearLeadCut();
+    if (note) {
+      this.lead.addItem({ kind: 'notice', level: 'info', text: `${note.page} The lead was asked to resume what is still needed.` });
+      parts.push(`[${note.lead}]`);
+      this.markTold(note.agents);
+    }
+    if (unanswered) {
+      this.lead.addItem({ kind: 'notice', level: 'info', text: 'Masthead was restarted before the lead answered your last message, so it was sent to the lead again.' });
+      this.markResent(unanswered.id);
+      const pictures = Array.isArray(unanswered.images) && unanswered.images.length ? ' It had pictures, which are not sent again; ask the person for them if you need them.' : '';
+      parts.push(`[Masthead was restarted before you answered the person's message below, so it is sent again. You may have started on it already: check before repeating work.${pictures}]\n\n${unanswered.text}`);
+    }
+    this.deliverTo(this.lead, parts.join('\n\n'), 'masthead');
+    this.touch();
+    // The marks are on disk before anything else can happen: a crash loop must not send it all again.
+    this.host.saveNow?.(this);
+  }
+
+  private clearLeadCut(): void {
+    if (this.meta.leadCut === undefined) return;
+    this.meta.leadCut = undefined;
+    this.host.metaChanged(this);
+  }
+
+  /** The lead was told about these cut-off helpers: not again. */
+  private markTold(agents: Agent[]): void {
+    for (const a of agents) {
+      a.info.error = CLOSED_LEAD_TOLD;
+      this.agentChanged(a);
+    }
+  }
+
+  private markResent(itemId: string): void {
+    this.meta.restartResent = itemId;
+    this.host.metaChanged(this);
+  }
+
+  /**
+   * The person's last message to the lead, when nothing of the lead's own (text, thinking, a tool call)
+   * came after it and it was not sent again after an earlier restart: the server died before the lead
+   * got to it.
+   */
+  private unansweredPersonMessage(): (Item & { kind: 'user' }) | null {
+    const items = this.host.lastItems?.(this.meta.id, this.lead.id, 50) ?? this.host.readItems?.(this.meta.id, this.lead.id) ?? [];
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]!;
+      if (it.kind === 'text' || it.kind === 'thinking' || it.kind === 'tool') return null;
+      if (it.kind === 'user') {
+        // A /compact command is not a message for the lead to answer.
+        if (this.meta.restartResent === it.id || !it.text.trim() || it.text.startsWith('/compact')) return null;
+        return it;
+      }
+    }
+    return null;
   }
 
   /**
@@ -292,11 +416,21 @@ export class Conversation implements AgentHost, TeamActions {
    * Agents cut off by a shutdown or restart that the lead has not been told about. Derived from the
    * stored error text, so it survives being saved and further restarts until the lead is told.
    */
-  private restartNote(): { text: string; agents: Agent[] } | null {
+  private restartNote(): { lead: string; page: string; agents: Agent[] } | null {
     const agents = [...this.agents.values()].filter((a) => a.status === 'stopped' && a.info.error === CLOSED_WHILE_WORKING && a.info.archived === undefined);
     if (agents.length === 0) return null;
-    const names = agents.map((a) => `${a.name}${a.info.title ? ` (${a.info.title})` : ''}`).join(', ');
-    return { text: `Masthead was restarted; these agents were stopped while working: ${names}. Message one to resume it.`, agents };
+    const names = agents
+      .map((a) => {
+        const facts = [a.info.title, this.parent(a) ? `started by ${this.parent(a)!.name}` : ''].filter(Boolean).join(', ');
+        return `${a.name}${facts ? ` (${facts})` : ''}`;
+      })
+      .join('; ');
+    const one = agents.length === 1;
+    return {
+      lead: `Masthead was restarted, which stopped ${one ? 'this helper' : 'these helpers'} before ${one ? 'it' : 'they'} finished: ${names}. ${one ? 'Its' : 'Their'} work so far is kept in ${one ? 'its' : 'their'} session. Resume ${one ? 'it' : 'each one you still need'} with send_message (it carries on where it stopped), or tell its parent; ${one ? 'it is' : 'they are'} not finished work.`,
+      page: `Masthead was restarted while ${one ? 'a helper was' : 'helpers were'} working, so ${one ? 'it was' : 'they were'} stopped: ${names}.`,
+      agents,
+    };
   }
 
   toStored(): StoredConversation {
@@ -412,19 +546,21 @@ export class Conversation implements AgentHost, TeamActions {
     // The person clears a stop mark; answering a waiting agent directly ends its wait.
     this.apply(target, { type: 'Woken', by: 'person', parentCanReceive: false });
     if (this.st(target).holds.answer) this.apply(target, { type: 'AnswerArrived' }, { busy: true });
-    let content = text;
+    // Sent while the agent is still answering the person's previous message: two quick messages must not
+    // get two answers that say the same thing.
+    // Only when what it is answering came from the person: a busy turn for a helper's report is not a
+    // previous message of theirs.
+    let content = target.busy && target.hasProcess && this.personPending.has(target.id) ? `${SENT_WHILE_ANSWERING}\n\n${text}` : text;
+    this.personPending.add(target.id);
     if (target === this.lead) {
       const hint = this.compactHint();
       if (hint) content = `[${hint}]\n\n${content}`;
     }
     const note = target === this.lead ? this.restartNote() : null;
     if (note) {
-      // Told with the person's next message, so the lead spends no turn of its own on it.
-      content = `[${note.text}]\n\n${text}`;
-      for (const a of note.agents) {
-        a.info.error = CLOSED_LEAD_TOLD;
-        this.agentChanged(a);
-      }
+      // Helpers cut off by a restart long ago, when the lead was not woken for them (see afterRestart).
+      content = `[${note.lead}]\n\n${content}`;
+      this.markTold(note.agents);
     }
     // The person may know the limit is gone: their message goes through at once, unlike agents' messages,
     // after what agents sent it meanwhile, in order.
@@ -494,6 +630,11 @@ export class Conversation implements AgentHost, TeamActions {
       else a.dispose();
     }
     const lead = this.lead;
+    if (lead.status === 'running' || lead.status === 'queued') {
+      // The lead is cut off mid-turn: the next start gives it a turn to carry on (afterRestart).
+      this.meta.leadCut = true;
+      this.host.metaChanged(this);
+    }
     if (lead.status !== 'idle') lead.setStatus('idle');
   }
 
@@ -515,11 +656,18 @@ export class Conversation implements AgentHost, TeamActions {
   caps(agent: Agent): { efforts: Effort[] } {
     return this.backend(agent)?.caps ?? { efforts: [...EFFORTS] };
   }
+  /** Agents of this tier run without the person's connected services (for spawn_agent's description). */
+  lean(tier: Tier): boolean {
+    return this.spec(tier).lean === true;
+  }
   storeImage(_agent: Agent, data: string, mediaType: string): { ref: unknown } | { error: string } {
     return this.host.storeImage ? this.host.storeImage(this.meta.id, data, mediaType) : { error: 'images are not stored here' };
   }
   claudePath(): string | null {
     return this.host.claudePath();
+  }
+  scratchDir(_agent: Agent): string | undefined {
+    return this.host.scratchDir?.(this.meta.id);
   }
   parentName(agent: Agent): string | null {
     return this.parent(agent)?.name ?? null;
@@ -555,17 +703,38 @@ export class Conversation implements AgentHost, TeamActions {
 
   turnEnded(agent: Agent, outcome: TurnOutcome): void {
     this.touch();
+    // Turn ends come only once nothing it was sent is unanswered: the person's messages are answered too.
+    this.personPending.delete(agent.id);
     const usageLimit = (outcome as { usageLimit?: UsageLimit }).usageLimit;
     const fx = this.apply(agent, { type: 'TurnEnded', text: outcome.text, error: outcome.error, interrupted: outcome.interrupted, usageLimit });
     const st = this.st(agent);
     if (st.holds.pause) return;
     if (this.isLead(agent)) void agent.refreshContext();
+    this.tellReportWaits(agent, st);
     // Its turn is over: agents waiting for its answer are reminded, or told there is none.
     if (st.phase !== 'ended' && !fx.some((f) => f.type === 'end')) this.checkWaitsOn(agent, outcome.interrupted);
     if (this.isLead(agent) && !outcome.interrupted && !outcome.error) this.leadTurnEndedForCompact();
   }
 
+  /** Helpers whose parent was told their report waits on a background command, this run. */
+  private toldWaiting = new Set<string>();
+  /** Agents with a message from the person that no finished turn has answered yet (see userSend). */
+  private personPending = new Set<string>();
+
+  /**
+   * A helper that finished its turn but still has background commands running owes its report until
+   * they end (up to BACKGROUND_WAIT_MS). Its parent sees that once, in its transcript (no turn).
+   */
+  private tellReportWaits(agent: Agent, st: AgentState): void {
+    if (this.isLead(agent) || !st.owesReport || !backgroundOnly(st) || this.toldWaiting.has(agent.id)) return;
+    const parent = this.parent(agent);
+    if (!parent) return;
+    this.toldWaiting.add(agent.id);
+    parent.addItem({ kind: 'notice', level: 'info', text: `"${agent.name}" has finished its turn but is waiting on a background command; its report comes when that ends (at most ${BACKGROUND_WAIT_MS / 60_000} minutes).` });
+  }
+
   processLost(agent: Agent, message: string, usageLimit?: UsageLimit): void {
+    this.personPending.delete(agent.id);
     this.host.cancelPermissions(agent.id);
     // At a usage limit the agent pauses instead of failing; it resumes (and takes a slot again) later.
     this.apply(agent, { type: 'ProcessLost', error: message, usageLimit });
@@ -616,6 +785,8 @@ export class Conversation implements AgentHost, TeamActions {
    * and the runtime own (live children, background work, the report debt) are read fresh first.
    */
   private apply(agent: Agent, ev: Event, opts: { busy?: boolean; inTurn?: boolean; drop?: ReadonlySet<Effect['type']> } = {}): Effect[] {
+    // Woken or sent more work: a new piece of work, whose report may wait on a background command again.
+    if (ev.type === 'Woken' || ev.type === 'Input') this.toldWaiting.delete(agent.id);
     const prev = this.st(agent);
     prev.holds.children = this.liveChildren(agent).length;
     prev.holds.background = this.hasBackgroundWork(agent) ? 1 : 0;
@@ -641,6 +812,7 @@ export class Conversation implements AgentHost, TeamActions {
     const waitingFor = st.holds.answer ? this.agents.get(st.holds.answer.from)?.name : undefined;
     const pausedUntil = st.holds.pause?.until;
     const changed = agent.info.waitingFor !== waitingFor || agent.info.pausedUntil !== pausedUntil;
+    if (changed) agent.info.activitySince = Date.now();
     agent.info.waitingFor = waitingFor;
     agent.info.pausedUntil = pausedUntil;
     // queued/running are the runtime's to show (it starts the process); ended comes with the `end` effect.
@@ -658,6 +830,7 @@ export class Conversation implements AgentHost, TeamActions {
         agent.addItem({ kind: 'notice', level: f.level ?? 'info', text: f.text });
         return;
       case 'end':
+        this.toldWaiting.delete(agent.id);
         agent.end(f.kind, f.error);
         // Nobody can wait for its answer any more.
         this.releaseWaitsOn(agent);
@@ -840,12 +1013,11 @@ export class Conversation implements AgentHost, TeamActions {
   private compactHint(): string | undefined {
     if (this.autoCompactOn() || this.meta.compactSuggested || this.compactRunning()) return undefined;
     const finished = this.archivable().length;
-    const u = this.lead.info.usage;
-    const memory = u.contextMax > 0 ? u.context / u.contextMax : 0;
-    if (finished < COMPACT_SUGGEST_HELPERS && memory < COMPACT_SUGGEST_MEMORY) return undefined;
+    const memory = memoryFull(this.lead.info.usage);
+    if (finished < COMPACT_SUGGEST_HELPERS && !memory.full) return undefined;
     this.meta.compactSuggested = true;
     this.host.metaChanged(this);
-    const why = finished >= COMPACT_SUGGEST_HELPERS ? `the team has ${finished} finished helpers` : `your memory is ${Math.round(memory * 100)}% full`;
+    const why = finished >= COMPACT_SUGGEST_HELPERS ? `the team has ${finished} finished helpers` : `your memory is ${memory.words}`;
     return `Masthead: ${why}. You may suggest once, in your reply, that the person type /compact to tidy the team.`;
   }
 
@@ -888,20 +1060,19 @@ export class Conversation implements AgentHost, TeamActions {
     if (!this.autoCompactOn() || this.compactRunning() || this.st(this.lead).holds.approvals > 0) return;
     const finishedNow = this.finishedTotal();
     const archivable = this.archivable().length;
-    const u = this.lead.info.usage;
-    const memory = u.contextMax > 0 ? u.context / u.contextMax : 0;
+    const memory = memoryFull(this.lead.info.usage);
     const mark = this.meta.compactMark ?? { finished: 0, memoryArmed: true };
     // Memory re-arms once it has dropped below the mark again (after a compaction).
-    if (!mark.memoryArmed && memory < COMPACT_SUGGEST_MEMORY) {
+    if (!mark.memoryArmed && !memory.full) {
       this.meta.compactMark = { ...mark, memoryArmed: true };
       this.host.metaChanged(this);
       return;
     }
     const helpers = archivable >= COMPACT_SUGGEST_HELPERS && finishedNow >= mark.finished + COMPACT_SUGGEST_HELPERS;
-    const full = mark.memoryArmed && memory >= COMPACT_SUGGEST_MEMORY;
+    const full = mark.memoryArmed && memory.full;
     if (!helpers && !full) return;
     this.meta.compactMark = { finished: finishedNow, memoryArmed: !full && mark.memoryArmed };
-    this.startCompact('', { auto: true, reason: helpers ? `the team has ${archivable} finished helpers` : `the lead's memory is ${Math.round(memory * 100)}% full` });
+    this.startCompact('', { auto: true, reason: helpers ? `the team has ${archivable} finished helpers` : `the lead's memory is ${memory.words}` });
   }
 
   /**
@@ -967,6 +1138,10 @@ export class Conversation implements AgentHost, TeamActions {
       if (this.isLead(a) || this.archivedAgent(a) || !a.live) continue;
       if (!kept.has(a.id)) kept.set(a.id, { name: a.name, why: 'still working', forced: true });
     }
+    // Nor helpers a restart cut off: their work is unfinished, not done.
+    for (const a of this.archivable()) {
+      if (cutOffByRestart(a) && !kept.has(a.id)) kept.set(a.id, { name: a.name, why: 'stopped by a restart before it finished', forced: true });
+    }
     for (const id of [...kept.keys()]) {
       for (let p = this.parent(this.agents.get(id)!); p && !this.isLead(p); p = this.parent(p)) {
         if (!kept.has(p.id)) kept.set(p.id, { name: p.name, why: `started ${kept.get(id)!.name}, which stays`, forced: true });
@@ -974,13 +1149,15 @@ export class Conversation implements AgentHost, TeamActions {
     }
     const archive = this.archivable().filter((a) => !kept.has(a.id)).map((a) => a.name);
     const next: CompactState = { ...c, keep: [...kept.values()], archive, note: note.trim().slice(0, 500) || c.note };
+    const cut = [...kept.values()].filter((k) => k.forced && k.why === 'stopped by a restart before it finished').map((k) => k.name);
+    const cutNote = cut.length ? ` Also kept, because a restart stopped them before they finished: ${cut.join(', ')}; resume or stop them.` : '';
     if (c.auto) {
       this.setCompact({ ...next, phase: 'archiving' });
       this.archiveAndCompact();
-      return `Archiving ${archive.length} and keeping ${kept.size}; then everyone who stays compacts its memory, you last. The person is told.`;
+      return `Archiving ${archive.length} and keeping ${kept.size}; then everyone who stays compacts its memory, you last. The person is told.${cutNote}`;
     }
     this.setCompact({ ...next, phase: 'proposed' });
-    return `The person sees a card: keep ${kept.size}, archive ${archive.length}. You will hear the outcome.`;
+    return `The person sees a card: keep ${kept.size}, archive ${archive.length}. You will hear the outcome.${cutNote}`;
   }
 
   /** The person's answer to the card: which helpers to keep (forced ones always stay), and whether to go ahead. */
@@ -1026,37 +1203,56 @@ export class Conversation implements AgentHost, TeamActions {
 
   private compacting = false;
 
-  /** Compacts each pending agent's memory in turn; a helper that is working is skipped. */
+  /**
+   * Compacts each pending agent's memory: helpers up to COMPACT_PARALLEL at once, then the lead (last,
+   * once its turn is over). A helper that is working is skipped. `pending` loses each name as it finishes.
+   */
   private async runCompact(): Promise<void> {
     if (this.compacting) return;
     this.compacting = true;
     try {
-      for (;;) {
-        const c = this.meta.compact;
-        if (!c || c.phase !== 'compacting') return;
-        const name = c.pending[0];
-        if (name === undefined) break;
-        const a = this.find(name);
-        // The lead is usually inside the turn that called compact_team: it compacts when that turn ends.
-        if (a && this.isLead(a) && (a.status === 'running' || a.status === 'queued' || a.busy)) return;
-        let failed: { name: string; why: string } | undefined;
-        if (!a || this.archivedAgent(a)) failed = undefined;
-        else if (a.status === 'running' || a.status === 'queued' || (a.busy && !this.isLead(a))) failed = { name, why: 'still working' };
-        else {
-          const compact = (a as { compact?: () => Promise<{ ok: boolean; error?: string }> }).compact;
-          const r = compact ? await compact.call(a).catch((e: unknown) => ({ ok: false, error: String((e as Error)?.message ?? e) })) : { ok: false, error: 'this agent program cannot compact its memory' };
-          if (!r.ok) failed = { name, why: r.error ?? 'compaction failed' };
+      const active = () => (this.meta.compact?.phase === 'compacting' ? this.meta.compact : null);
+      const leadName = this.lead.name;
+      const inFlight = new Set<string>();
+      const finish = (name: string, failed: { name: string; why: string } | undefined) => {
+        const now = active();
+        if (!now) return; // cancelled meanwhile
+        this.setCompact({ ...now, pending: now.pending.filter((n) => n !== name), failed: failed ? [...now.failed, failed] : now.failed });
+      };
+      const worker = async () => {
+        for (;;) {
+          const name = active()?.pending.find((n) => n !== leadName && !inFlight.has(n));
+          if (name === undefined) return;
+          inFlight.add(name);
+          finish(name, await this.compactOne(name));
         }
-        const now = this.meta.compact;
-        if (!now || now.phase !== 'compacting') return; // cancelled meanwhile
-        this.setCompact({ ...now, pending: now.pending.slice(1), failed: failed ? [...now.failed, failed] : now.failed });
+      };
+      await Promise.all(Array.from({ length: COMPACT_PARALLEL }, worker));
+      const c = active();
+      if (!c) return;
+      if (c.pending.includes(leadName)) {
+        // The lead is usually inside the turn that called compact_team: it compacts when that turn ends.
+        const a = this.lead;
+        if (a.status === 'running' || a.status === 'queued' || a.busy) return;
+        finish(leadName, await this.compactOne(leadName));
       }
-      const c = this.meta.compact!;
-      this.setCompact({ ...c, phase: 'done' });
-      this.lead.addItem({ kind: 'notice', level: 'info', text: compactSummary(c, this.compactOrder().length) });
+      const end = active();
+      if (!end) return;
+      this.setCompact({ ...end, phase: 'done' });
+      this.lead.addItem({ kind: 'notice', level: 'info', text: compactSummary(end, this.compactOrder().length) });
     } finally {
       this.compacting = false;
     }
+  }
+
+  /** One agent's compaction: undefined when done (or nothing to do), else why not. */
+  private async compactOne(name: string): Promise<{ name: string; why: string } | undefined> {
+    const a = this.find(name);
+    if (!a || this.archivedAgent(a)) return undefined;
+    if (a.status === 'running' || a.status === 'queued' || (a.busy && !this.isLead(a))) return { name, why: 'still working' };
+    const compact = (a as { compact?: () => Promise<{ ok: boolean; error?: string }> }).compact;
+    const r = compact ? await compact.call(a).catch((e: unknown) => ({ ok: false, error: String((e as Error)?.message ?? e) })) : { ok: false, error: 'this agent program cannot compact its memory' };
+    return r.ok ? undefined : { name, why: r.error ?? 'compaction failed' };
   }
 
   /** The person cancels the compaction (until its compacting step ends). Archived helpers stay archived. */
@@ -1106,8 +1302,12 @@ export class Conversation implements AgentHost, TeamActions {
         })
         .join('\n');
     }
+    // Any finished helper's chat, archived or not; never the lead's, nor a helper still working.
     const a = this.find(name);
-    if (!a || !this.archivedAgent(a)) return `Error: there is no archived helper named "${name}". Call read_archive without a name for the list.`;
+    const finished = (x: Agent) => x.status === 'done' || x.status === 'stopped' || x.status === 'failed';
+    if (!a || this.isLead(a) || !(this.archivedAgent(a) || finished(a))) {
+      return `Error: there is no finished or archived helper named "${name}". Call read_archive without a name for the archived ones, or list_agents.`;
+    }
     let lines = this.chatLines(a);
     if (search?.trim()) {
       const w = search.trim().toLowerCase();
@@ -1242,6 +1442,7 @@ export class Conversation implements AgentHost, TeamActions {
       if (st.holds.pause) state = `paused until ${clockTime(st.holds.pause.until)} (usage limit)`;
       const bg = st.holds.backgroundSince;
       if (bg !== undefined) state = `waiting on a background command for ${duration(awake - bg)}`;
+      if (cutOffByRestart(a)) state = 'stopped by a restart before it finished';
       if (a.status === 'running' && a.info.activity) state += `: ${a.info.activity}`;
       const facts = [state];
       const since = st.liveSince;

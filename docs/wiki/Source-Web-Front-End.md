@@ -21,6 +21,7 @@ The 0.2.0 aim for the page (`docs/plans/0.2.0/web.md` section 0) is "simple by d
 | `web/src/lib/ui.svelte.ts` | Simple/Advanced, theme, widths, panels | [below](#simple-and-advanced-uisveltets) |
 | `web/src/lib/text.ts`, `words.ts` | Every word the page shows | [Text and words](Source-Web-Text.md) |
 | `web/src/lib/tiers.ts` | Tier colours and profiles | [Styles](Source-Web-Styles.md#tier-colours-tiersts) |
+| `web/src/lib/progress.ts`, `progress.svelte.ts` | Time on an activity, the open question (0.2.1) | [Web store](Source-Web-Store.md#progress-without-asking-progressts-progresssveltets) |
 | `web/src/lib/markdown.ts` | Safe Markdown, draft rendering | [below](#rendering-markdown-safely-markdownts) |
 | `web/src/lib/tools.ts` | Tool-line words | [below](#toolsts) |
 | `web/src/lib/images.ts`, `images/*.svelte` | Pictures | [Images](Source-Web-Images.md) |
@@ -121,6 +122,7 @@ What Advanced changes, and nothing else (the plan says it is only what is on scr
 - The team panel opens by itself on wide screens when the first helper starts.
 - Under the message box, a line with the model, its thinking time and the "when to ask" mode.
 - Settings > General shows "Let them decide how long to think".
+- Settings > Teams shows Edit, Make a copy, Reset or Remove per team and "Change it first" on the Codex proposal (0.2.1); Simple shows the teams, "Team for new chats" and a line pointing to "Show team controls". The team panel names the chat's team in both modes.
 
 Approval cards show in both modes.
 
@@ -142,11 +144,11 @@ A drawer is the `aside` made `position: fixed` with a shadow, at most 88% of the
 - **Skip link** (`a.skip`, `app.css`): off screen until focused, then jumps to the message box.
 - **Live region:** a polite `.sr-only` region announces "Alpha replied." when the lead stops running, and "Question from Bravo" or "Permission request from Bravo" when a new card appears in the open chat.
 - **Focus:** approval and device-request cards take focus when they appear, unless the person pressed a key in the last 1.5 s, has text in the field they are in, or is already on another card. Focus goes to the card, not to Allow, so a stray Enter answers nothing. The settings view focuses its first control and Escape closes it; the image viewer focuses itself and gives focus back to the thumbnail. `:focus-visible` draws a 2 px accent outline.
-- **Coarse pointers (touch):** `.btn` and many component controls get at least 44 px height; inputs, selects and textareas get 16 px text so iOS does not zoom. Stop buttons show their word on touch screens (there is no hover).
-- **Reduced motion:** animations and transitions are cut to 0.01 ms and smooth scrolling is turned off; the running dot does not pulse.
+- **Coarse pointers (touch):** `.btn` and many component controls get at least 44 px height; inputs, selects and textareas get 16 px text so iOS does not zoom. The helpers' Stop buttons always show the word "Stop" beside the square (0.2.1).
+- **Reduced motion:** animations and transitions are cut to 0.01 ms and smooth scrolling is turned off; the running dot does not pulse; the question "Waiting for your answer" shows is scrolled to without smoothing and its highlight does not fade (0.2.1).
 - **Contrast:** `--faint` is the lightest grey that the comment says still passes WCAG AA (4.6:1 on `--bg`); palette colours are each at least 4.5:1 on the background per their comment.
 - **Labels:** icon buttons have `aria-label`s; the transcript's live controls use `aria-expanded`; usage bars are `role="progressbar"`.
-- **Checked by:** the browser test runs axe-core's WCAG 2 A/AA rules on the first load, the settings view, a chat with the team panel and the phone layout, and fails on serious or critical problems ([Page tests](Source-Web-Tests.md#browser-test-testuie2emjs)).
+- **Checked by:** the browser test runs axe-core's WCAG 2 A/AA rules on the first load, the settings view, a chat with the team panel, "Waiting for your answer" (fake backend), an archived chat, the tidy card and the phone layout, and fails on serious or critical problems ([Page tests](Source-Web-Tests.md#browser-test-testuie2emjs)).
 
 The contrast figures come from code comments and were not measured here.
 

@@ -13,7 +13,7 @@
   let audit = $state<AuditEntry[] | null>(null);
   let portDraft = $state('');
   let box = $state<HTMLInputElement | null>(null);
-  const ROLES: RemoteRole[] = ['full', 'approve', 'read'];
+  const ROLES: RemoteRole[] = ['read', 'approve', 'full'];
 
   const offAudit = store.listen('remote_audit', (m) => (audit = ((m.entries as AuditEntry[]) ?? []).slice().reverse()));
   // A refused switch comes back as an error; the state carries the problem and command anyway.

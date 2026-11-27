@@ -112,7 +112,7 @@ Walkthrough: [Stopping an agent](Walkthrough-Stopping-an-Agent.md).
 
 ## Archived helpers and tidying the team
 
-A team compaction ("tidying the team") archives finished helpers the lead chose not to keep and compacts the memory of everyone who stays, the lead last. By default it starts by itself at the end of a lead turn once about 15 helpers have finished or the lead's memory is past 70 %, or at once when the person types `/compact`; with the setting "Tidy the team automatically" off, the person confirms on a card. Full flow: [Compact team](Compact-Team.md).
+A team compaction ("tidying the team") archives finished helpers the lead chose not to keep and compacts the memory of everyone who stays, the lead last. By default it starts by itself at the end of a lead turn once about 10 helpers have finished or the lead's memory is past 70 % or 200k tokens, or at once when the person types `/compact`; with the setting "Tidy the team automatically" off, the person confirms on a card. Full flow: [Compact team](Compact-Team.md).
 
 An archived helper is a finished helper that has left the team:
 
@@ -120,7 +120,7 @@ An archived helper is a finished helper that has left the team:
 - no agent can wake it: `send_message` returns 'Error: "X" is archived and cannot be woken. Read its chat with read_archive.'; `stop_agent` answers '"X" is archived (not running).'; `set_agent_effort` treats it as unknown;
 - the person cannot message it either ('"X" is archived. Restore it from the archived helpers to message it.'), but may restore it, after which the usual rules apply;
 - `list_agents` leaves it out and ends with a count: "N archived helpers: read their chats with read_archive.";
-- every agent can read archived chats with `read_archive` (a list, or one chat a page at a time, optionally only lines with a word);
+- every agent can read archived chats with `read_archive` (a list, or one chat a page at a time, optionally only lines with a word); with a name it also reads any other finished helper (done, stopped or failed), archived or not, but never the lead or a helper still working;
 - its name stays taken, so a new agent never gets it.
 
 ## Effort

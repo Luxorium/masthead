@@ -14,6 +14,9 @@ npm test                 # unit tests, no Claude account needed
 npm run build
 ```
 
+Tests run inside one temporary folder that is removed afterwards; set `MASTHEAD_KEEP_TMP=1` to keep it.
+Live and browser tests keep their work folder only when they fail.
+
 `npm run test:live` drives the real Claude Code and spends real usage. The browser test runs with
 `node scripts/ci-e2e.mjs` after `npm run build` (it needs `npx playwright-core install chromium` once):
 it starts its own server on the fake backend with fresh data folders and a free port, as CI does.

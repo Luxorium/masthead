@@ -294,8 +294,8 @@ test(`remote: pairing end to end, the device socket with its role, revoke (${kin
     assert.deepEqual(shown.remote.requests.map((r) => [r.code, r.nodeName]), [[asked.code, 'phone']]);
     const poll = (from: Identity, secret = asked.pollSecret) => call(target, port, `/api/remote/request/${asked.requestId}`, { method: 'POST', headers: headers(from), body: JSON.stringify({ pollSecret: secret }) }).then((r) => JSON.parse(r.body));
     assert.deepEqual(await poll(phone), { state: 'pending' });
-    // Approved from the local session, with the read role.
-    app.handle(localClient, { t: 'device_decision', requestId: asked.requestId, decision: 'allow', role: 'read' });
+    // Approved from the local session without naming a role: the most limited one, read (0.2.1).
+    app.handle(localClient, { t: 'device_decision', requestId: asked.requestId, decision: 'allow' });
     assert.deepEqual(await poll(laptop), { state: 'gone' }, 'another node cannot collect the token');
     const got = await poll(phone);
     assert.equal(got.state, 'allowed');

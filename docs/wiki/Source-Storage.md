@@ -31,15 +31,21 @@ flowchart LR
 - **`constructor(root = CONVERSATIONS_DIR)`**: creates `root` (mode `0700`) and its `BlobStore`, then writes the whole-store format marker. The marker is `<root>/../format` when `root` is named `conversations` (the normal data folder). Otherwise, as with a test store in a temporary folder, it is `<root>/.format`. The marker holds `2` and a newline. It is only ever raised: it is written (with `writeFileAtomic`) when it is missing, unreadable or below `FORMAT`, and a marker from a newer Masthead is left as it is. A read-only data folder still loads, because a failed write is ignored.
 - **`loadAll()`**: reads every folder whose name matches `SAFE_ID`. A conversation is skipped silently when its `conversation.json` does not parse, when its `meta.id` does not match the folder name, or when `agents` is not an array. Each file goes through `migrateConversation()`. A `null` result means a newer Masthead wrote the file, and it is left alone and not loaded. A file from an older format is remembered in `needsBackup`.
 - **`saveConversation(conv)`**: creates `<id>/items/`. For a conversation in `needsBackup`, it first copies the old file to `conversation.json.v1.bak`, unless that backup already exists. It then writes `{ ...conv, format: FORMAT }` as compact JSON with `writeFileAtomic`.
-- **`appendItem(convId, agentId, item)`**: appends `JSON.stringify(item)` and a newline to `items/<agent>.jsonl` (mode `0600`). The first append to a file in a run checks whether the file ends without a newline (a line torn by a crash, `endsWithoutNewline()`); if so it writes a newline first, so the new item does not join the torn line. If the append fails, it creates the folder and tries once more.
+- **`appendItem(convId, agentId, item)`**: drops the `input` of a finished tool (`withoutRepeatedInput()`, below; the tool's start line already has it), then appends `JSON.stringify(item)` and a newline to `items/<agent>.jsonl` (mode `0600`). The first append to a file in a run checks whether the file ends without a newline (a line torn by a crash, `endsWithoutNewline()`); if so it writes a newline first, so the new item does not join the torn line. If the append fails, it creates the folder and tries once more.
 - **`hasTornLine(convId)`**: whether any `items/*.jsonl` of the conversation has a non-empty line that does not parse.
-- **`loadItems(convId, agentId)`**: reads the whole transcript. The last line for an id wins, and the item keeps the position where its id first appeared (a `Map` keeps a key's place when it is set again). Lines that do not parse, such as a torn last line after a crash, are skipped. A missing file gives `[]`.
+- **`loadItems(convId, agentId)`**: reads the whole transcript. The last line for an id wins, and the item keeps the position where its id first appeared (a `Map` keeps a key's place when it is set again). A finished tool line without `input` gets the input of the earlier line (`mergeLines(had, item)`). Lines that do not parse, such as a torn last line after a crash, are skipped. A missing file gives `[]`.
 - **`readItems(convId, agentId, { before, limit })`**: one page, from `readPage()` (below).
 - **`referencedBlobs(convId)`**: the set of blob hashes that any item in any of the conversation's transcripts refers to (`blobsOf`).
 - **`collectBlobs(convId)`**: `blobs.collect(convId, referencedBlobs(convId))`, which removes images that no item refers to. When `hasTornLine(convId)` is true it removes nothing and returns 0, logging once per conversation, because a damaged line may have lost a reference. `App`'s constructor runs it for every conversation it loads.
 - **`deleteConversation(convId)`**: removes the conversation's whole folder (transcripts and images) with `rmSync(..., { recursive, force, maxRetries: 5, retryDelay: 100 })`. The retries cover Windows, where a file that is still open somewhere else blocks removal for a moment.
 
 ## transcript.ts
+
+Three helpers handle finished tools, which are stored without their input since 0.2.1:
+
+- `withoutRepeatedInput(item)`: a `tool` item with `done: true` and an `input` comes back without `input`; anything else unchanged.
+- `lacksInput(item)`: true for a `tool` line with `done: true` and no `input` key.
+- `mergeLines(older, newer)`: `newer`, plus `older.input` when `newer` lacks its input and `older` has one.
 
 `readPage<T extends { id: string }>(file, { before, limit })` returns `Page<T>`: `items` (oldest first within the page), `cursor` (a byte offset to pass as `before` for the next older page, or null) and `more`.
 
@@ -48,7 +54,8 @@ How it works:
 - It reads the file **backwards** in 64 KiB chunks (`CHUNK`), starting at `before` (or the end of the file). It never reads the whole file. A line that starts in an earlier chunk is carried over until that chunk has been read.
 - It walks complete lines from the back. Blank lines, lines that do not parse and lines without a string `id` are skipped.
 - It collects up to `limit` **distinct** ids. When an id is seen again (an older line for the same item), the version already held is kept. That is the newer one, because the scan runs backwards. The item's position moves to the older line, so the item keeps its place in transcript order.
-- When a new id would go past `limit`, it stops and returns `more: true`. The cursor is the end of that line, so the next page starts there.
+- An older line for an id already held is merged into it with `mergeLines()`, so a finished tool on the page gets its input back. Ids still lacking input are kept in `needInput`.
+- When a new id would go past `limit`, the cursor is set to the end of that line (`cutoff`), so the next page starts there, and `more` is true. If no item on the page still needs its input it returns at once; otherwise it scans on past the page's start only to merge inputs into items already on the page, and returns as soon as none is missing (or at the start of the file). The page and its cursor are not changed by that extra scan.
 - The page is sorted by position. A missing file gives an empty page.
 
 An item updated after an older page boundary may also show up in an older page, as an older version. The doc comment tells the reader to keep the copy it already holds.

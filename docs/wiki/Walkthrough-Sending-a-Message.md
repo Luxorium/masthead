@@ -53,7 +53,8 @@ sequenceDiagram
    - `target.addItem({kind:'user', …})` saves the person's item (with picture refs) and publishes it; this is what the page takes as "accepted".
    - If the target's tier is switched off, it adds an error notice and stops.
    - `apply(target, {type:'Woken', by:'person'})`: in the machine (`server/core/machine.ts`, `case 'Woken'`, line 406, row 26) this clears a stop mark the person set; an ended sub-agent goes back to `queued`. If the target was waiting for an answer, `AnswerArrived` ends the wait.
-   - For the lead, a one-time note about agents cut off by a restart is put in front of the text (`restartNote()`).
+   - If the target is still answering an earlier message from the person (busy, with a process, and in `personPending`), the text is prefixed with `SENT_WHILE_ANSWERING` ("[Sent while you were still answering the previous message. If your answer already covers it, do not repeat yourself.]"); a busy turn for a helper's report does not count.
+   - For the lead, a one-time note about agents cut off by a restart is put in front of the text (`restartNote()`), only when the restart came more than 6 hours after the last activity; otherwise the lead was already told in a turn of its own (see [Restarting the app](Walkthrough-Restarting-the-App.md#the-leads-turn-after-a-restart)).
    - If the target is paused at a usage limit, messages held for it are delivered first, in order.
    - `apply(target, {type:'Input', from:'person'})` (`case 'Input'`, line 252, rows 4–6): marks `personWoke` on a paused agent and returns a `send` effect, which `exec()` ignores because the caller delivers the content itself.
    - `target.deliver(Agent.imageContent(content, images))`, then `touch()` (new `updatedAt`, list broadcast, save scheduled).

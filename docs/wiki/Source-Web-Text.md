@@ -17,22 +17,23 @@ It exports one object, `T` (declared `as const`), and two functions. Entries are
 | `composer` | Message box placeholders, Stop, folder chip, picture errors |
 | `transcript` | Show earlier, inbound headings, thinking, tool labels |
 | `status` | Agent statuses (used by `words.ts`) |
-| `team` | Team panel: outline, Hide finished, the "N finished: …" row, expand and collapse labels, panel width, Stop, levels |
+| `team` | Team panel: "This chat uses the team …" (`usesTeam`), outline, Hide finished, the "N finished: …" row, expand and collapse labels, panel width, Stop (the tooltip `stopTitle(name)`, "Stop Bravo and its helpers", since 0.2.1), levels |
+| `progress` | 0.2.1: a helper's time on what it is doing ("under 1 min", "4 min", "1 h 5 min", "over …", the " · " separator), "Waiting for 2 helpers: Bravo, Charlie", show/hide what each helper is doing, "Open Bravo's chat", "Waiting for your answer" and its tooltip |
 | `preview` | The team outline's preview: "Report from", "Message from" and "Thinking…" |
 | `compact` | Tidying the team ([Compact team](Compact-Team.md)): the setting and per-chat switch, the card, progress lines and Cancel, the "Archived helpers (M)" row, the Archived note, Restore, the `/compact` hint |
-| `usage` | Usage meter and the names of usage windows |
+| `usage` | Usage meter (with "not reported yet", `notReported`, since 0.2.1) and the names of usage windows |
 | `settings` | Settings view: General, ask modes, thinking, Appearance, About |
 | `effort` | Thinking time names: Short, Medium, Long, Longest |
 | `images` | Viewer and thumbnails |
 | `card` | Approval cards |
 | `device` | Settings > This device, role lines |
-| `remote` | Remote sign-in, device requests, roles, Remote access section, audit events (`event()`), `when()` |
-| `teams` | Agent programs, teams, levels, problems, the team chip |
+| `remote` | Remote sign-in, device requests (since 0.2.1 one help line per role in `request.roleHelp`, an Allow button that names the role, `request.allow(role)`, and the warning only for Everything), roles (in the order "Read only", "Answer approvals and stop work", "Everything"), Remote access section, audit events (`event()`), `when()` |
+| `teams` | Agent programs, teams (with `moreInAdvanced`, the Simple pointer to "Show team controls"), levels, problems, the team chip |
 | `folder` | The folder picker |
 | `wants` | The "wants to …" phrase per tool on approval cards |
 | `errors` | `notConnected` |
 
-Three private helpers: `plural(n, one, many)`; `roleWord(role)`, a device role in the page's words ("everything", "answer approvals and stop work", "only read") for the audit lines; and `when(ts)`, a short local date and time (also exposed as `T.remote.when`).
+Three private helpers: `plural(n, one, many)`; `roleWord(role)`, a device role in the page's words ("everything", "answer approvals and stop work", "read only") for the audit lines; and `when(ts)`, a short local date and time (also exposed as `T.remote.when`).
 
 The plain words follow the plan's table (`docs/plans/0.2.0/web.md` 0.4): "main assistant" and "helper", not lead and sub-agent; levels named by their model; "Thinking time" with Short to Longest, not effort; "When to ask you"; "Allow for this session"; "Don't answer"; "Memory used"; "Waiting its turn". Model names stay where a choice is made.
 

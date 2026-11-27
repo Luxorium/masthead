@@ -27,7 +27,7 @@ test('codex team: families in capability order, the newest of each, then unknown
   assert.equal(p.id, 'codex');
   assert.deepEqual(p.tiers.map((t) => t.id), ['codex:0', 'codex:1', 'codex:2', 'codex:3']);
   assert.deepEqual(p.tiers.map((t) => t.backend), ['codex', 'codex', 'codex', 'codex']);
-  assert.equal(p.tiers[0]!.lean, false);
+  assert.deepEqual(p.tiers.map((t) => t.lean), [false, false, true, true], 'matches the Claude team: lead and second level not lean');
   assert.equal(p.tiers[0]!.max, 1);
   assert.equal(p.tiers[3]!.effort, 'medium');
   assert.match(p.description ?? '', /installed Codex/);

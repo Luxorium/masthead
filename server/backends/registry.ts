@@ -123,7 +123,7 @@ export class BackendRegistry {
 
 const TIER_SHAPE: Array<{ effort: Effort; max: number; lean: boolean }> = [
   { effort: 'xhigh', max: 1, lean: false },
-  { effort: 'xhigh', max: 3, lean: true },
+  { effort: 'xhigh', max: 3, lean: false },
   { effort: 'high', max: 4, lean: true },
   { effort: 'medium', max: 4, lean: true },
 ];

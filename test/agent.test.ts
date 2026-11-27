@@ -17,6 +17,7 @@ class FakeProcess {
   readonly received: SDKUserMessage[] = [];
   readonly flags: Array<Record<string, unknown>> = [];
   readonly models: Array<string | undefined> = [];
+  readonly modes: string[] = [];
   private out: unknown[] = [];
   private wake: (() => void) | null = null;
   private ended = false;
@@ -47,6 +48,10 @@ class FakeProcess {
       interrupt: async () => {},
       applyFlagSettings: async (f: Record<string, unknown>) => void self.flags.push(f),
       setModel: async (model?: string) => void self.models.push(model),
+      setPermissionMode: async (mode: string) => {
+        self.modes.push(mode);
+        return { mode };
+      },
       getContextUsage: async () => ({ totalTokens: 1234, maxTokens: 200_000 }),
     } as unknown as Query;
   }
@@ -385,6 +390,34 @@ test('agent: applySettings caps effort, sets fixed effort and switches the lead 
   assert.equal(idleAgent.info.effort, 'high');
 });
 
+test('agent: a permission-mode change reaches the running Claude Code; inherit and a late bypass relaunch', async () => {
+  let settings: Settings = { ...defaultSettings(), permissionMode: 'default' };
+  const sched = new Scheduler(() => 1);
+  const { host, processes } = fakeHost(sched, () => settings);
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  p.init('session-1');
+  await ticks();
+  settings = { ...settings, permissionMode: 'acceptEdits' };
+  a.applySettings(settings);
+  await ticks();
+  assert.deepEqual(p.modes, ['acceptEdits'], 'sent to the live process');
+  // bypass needs the launch flag, inherit has no mode to send: the process is relaunched before its next turn.
+  settings = { ...settings, permissionMode: 'bypassPermissions' };
+  a.applySettings(settings);
+  await ticks();
+  assert.deepEqual(p.modes, ['acceptEdits']);
+  p.result('done', p.uuids);
+  await ticks();
+  a.deliver('next');
+  await ticks(10);
+  assert.equal(processes.length, 2, 'relaunched');
+  assert.equal(processes[1]!.options.permissionMode, 'bypassPermissions');
+  assert.equal(processes[1]!.options.allowDangerouslySkipPermissions, true);
+});
+
 test('agent: a change to automatic effort relaunches the process before its next turn, not during one', async () => {
   let settings = defaultSettings();
   const sched = new Scheduler(() => 1);
@@ -685,6 +718,45 @@ function onFake(opts: ConstructorParameters<typeof FakeBackend>[0] = {}) {
   return { ...h, backend, sched, wait };
 }
 
+test('runtime on fake: a permission mode set in Settings applies to the running session (no ask under bypass)', async () => {
+  const { host, turns, wait, backend } = onFake();
+  let settings: Settings = { ...defaultSettings(), permissionMode: 'default' };
+  host.settings = () => settings;
+  const asked: string[] = [];
+  host.askPermission = async (_a, ask) => {
+    asked.push(ask.toolName);
+    return { decision: 'allow' };
+  };
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Run the shell command `ls`' });
+  a.start();
+  await wait(() => turns.length === 1);
+  assert.deepEqual(asked, ['Bash']);
+  settings = { ...settings, permissionMode: 'bypassPermissions' };
+  a.applySettings(settings);
+  a.deliver('Run the shell command `pwd`');
+  await wait(() => turns.length === 2);
+  assert.deepEqual(asked, ['Bash'], 'not asked again');
+  assert.match(turns[1]!.text, /Ran pwd/);
+  assert.equal(backend.sessions.length, 1, 'the same session, not a relaunch');
+});
+
+test('runtime on fake: an agent stopped mid-turn counts the turn and marks its cost incomplete', async () => {
+  const { host, turns, wait } = onFake({ slowMs: 200 });
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Reply with exactly the word ONE' });
+  a.start();
+  await wait(() => turns.length === 1);
+  assert.equal(a.info.usage.turns, 1);
+  assert.equal(a.info.usage.costPartial, undefined, 'a finished turn reported its cost');
+  a.deliver('Count slowly please');
+  await wait(() => a.status === 'running' && a.hasProcess);
+  await new Promise((r) => setTimeout(r, 20));
+  a.end('stopped');
+  await wait(() => !a.hasProcess);
+  assert.equal(a.info.usage.turns, 2, 'the cut-off turn counts');
+  assert.equal(a.info.usage.costPartial, true);
+  assert.equal(turns.length, 1);
+});
+
 test('runtime on fake: a turn ends with the reply, and the context size is read', async () => {
   const { host, turns, wait } = onFake();
   const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Reply with exactly the word KIWI' });
@@ -929,4 +1001,28 @@ test('runtime: compact() with no backend to start a session settles at once with
   assert.match(r.error ?? '', /No agent backend is available/);
   assert.ok(Date.now() - started < 1000, 'at once');
   assert.equal(h.lost.length, 0, 'no lost-process report for a finished agent');
+});
+
+test('agent: the effort is said again only when it changed since the agent was last told', async () => {
+  const sched = new Scheduler(() => 1);
+  const { host, processes } = fakeHost(sched);
+  const a = new Agent({ ...info('bravo'), effort: 'high' }, host, { owesReport: true, seed: 'task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  const text = (i: number) => JSON.stringify(p.received[i]!.message.content);
+  // The launch prompt states high; the task itself carries no header.
+  assert.match(String(p.options.systemPrompt && (p.options.systemPrompt as { append: string }).append), /You run at high thinking effort/);
+  assert.doesNotMatch(text(0), /thinking effort/);
+  p.init();
+  p.result('Done.', p.uuids);
+  await ticks();
+  // Masthead resets to low after the work; the next message says so, once.
+  a.setEffort('low');
+  a.deliver('next thing');
+  await ticks();
+  assert.match(text(1), /^"?\(Your thinking effort is now low\.\)\\nnext thing/);
+  a.deliver('and another');
+  await ticks();
+  assert.doesNotMatch(text(2), /thinking effort/);
 });

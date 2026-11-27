@@ -4,6 +4,7 @@ import BackendsSection from '../src/lib/settings/BackendsSection.svelte';
 import ProfileChip from '../src/lib/settings/ProfileChip.svelte';
 import ProfilesSection from '../src/lib/settings/ProfilesSection.svelte';
 import { store } from '../src/lib/store.svelte.ts';
+import { ui } from '../src/lib/ui.svelte.ts';
 import { backends, claude, codex, settings } from './settings-fixtures.ts';
 
 beforeEach(() => {
@@ -32,6 +33,17 @@ describe('BackendsSection', () => {
 });
 
 describe('ProfilesSection', () => {
+  // Changing a team's levels is in Advanced; Simple shows the teams and the choice for new chats.
+  beforeEach(() => ui.setAdvanced(true));
+  afterEach(() => ui.setAdvanced(false));
+
+  it('in Simple shows the teams without the editor buttons, and says where they are', () => {
+    ui.setAdvanced(false);
+    render(ProfilesSection);
+    expect(screen.queryByRole('button', { name: /^Edit / })).toBeNull();
+    expect(screen.getByText(/turn on “Show team controls” above/)).toBeTruthy();
+  });
+
   it('shows the Codex team as a proposal; using it sets the team for new chats', async () => {
     const update = vi.spyOn(store, 'updateSettings');
     render(ProfilesSection);

@@ -7,9 +7,13 @@
 | Claude Code | `npm run test:live` | `test/live.e2e.ts`: eight scenarios through a real `App` | Real Claude usage; every tier on `claude-haiku-5-5` |
 | Codex | `node --import tsx --test test/codex.live.ts` | The backend conformance suite on the real Codex CLI | Real, small Codex usage; `gpt-6-luna` at low effort |
 | Claude Code | `node --import tsx test/compact.live.ts` | `Agent.compact()` on a finished agent, through a minimal host | Two short Haiku turns plus one compaction |
+| Claude Code | `node --import tsx test/settings.live.ts` | A permission mode change reaching a running session, and the scratch folder as `$TMPDIR`, through a minimal host | Four short Haiku turns |
+| Claude Code | `node --import tsx test/restart.live.ts [1] [2] [3]` | Restart handling: a clean stop with a helper mid-command, an unanswered person message, a hard kill | A few short Haiku turns per case |
 | Codex | `node --import tsx test/codex-team.live.ts` | One conversation on the generated Codex team through a real `App` | Real, small Codex usage; every tier `gpt-6-luna` at low effort |
-| Codex (and Claude Code) | `node --import tsx test/codex-app.live.ts` | A permission prompt, an image, stop all, and a mixed Claude + Codex team, through a real `App` | Real, small Codex usage (`gpt-6-luna`, low effort) and a little Claude usage (`claude-haiku-5-5`, low effort) |
+| Codex (and Claude Code) | `node --import tsx test/codex-app.live.ts` | A permission prompt, an image, stop all, a mixed Claude + Codex team, and the sandbox put back after a bypass turn, through a real `App` | Real, small Codex usage (`gpt-6-luna`, low effort) and a little Claude usage (`claude-haiku-5-5`, low effort) |
 | Fake | (none needed) | The fake backend runs in `npm test` and in CI's browser test | Nothing: no account, no CLI. See [server/backends/fake/](Source-Backend-Fake.md) |
+
+Each live run's work folder is removed when everything passed and kept, with its path printed, when something failed (`finishWorkFolder()` in `test/workdir.ts`, see [Source-Tests](Source-Tests.md#work-folders-of-live-and-browser-runs-testworkdirts)).
 
 `AGENTS.md` asks for `npm run test:live` for any change that touches agents, messaging, limits or effort. Never point a live run at the installed app's data: each creates its own temp folder (and, except `compact.live.ts`, its own `App`), with no HTTP server and no port.
 
@@ -63,12 +67,27 @@ Afterwards it shuts the app down, disposes the registry and deletes every thread
 2. **Image:** a 16×16 red PNG, made in the script, is sent with the message; the answer must say "red".
 3. **Stop all** during a long turn (counting to 400): every agent leaves `queued`, `running` and `waiting` within 30 s.
 4. **Mixed team** (skipped with a `SKIP` line when Claude Code is not found): the Claude lead starts a Codex helper `leaf`, which reports PINEAPPLE; checks that the helper on tier `mixed:1` finished and that the word reached the lead's reply.
+5. **Sandbox after bypass:** a session in `default` runs a turn, switches to `bypassPermissions` and runs another; a plain `thread/resume` then shows the thread kept full access. A relaunch resuming it in `default` runs a turn, after which the thread reports `workspaceWrite` again. 10 checks in all.
 
 Afterwards it shuts the app down, disposes the registry, deletes every Codex thread it created with `codex delete --force` (`MASTHEAD_CODEX` names another binary), and prints how many it deleted and the work folder. Exit 1 on failure. No result of a run is recorded in the wiki or the plans.
 
 ## Claude Code: `test/compact.live.ts`
 
 `node --import tsx test/compact.live.ts`. `Agent.compact()` on the real Claude Code through a minimal host (no `App`): a Haiku agent remembers a word and finishes; `compact()` resumes its session quietly, Claude Code runs `/compact`, the process closes again. Checks: compaction ok, no turn counted, the status stayed done, the "summarized" notice appeared, the slot was given back, and the agent still knew the word afterwards. Temp folder; two short Haiku turns plus one compaction. Passed on 2026-11-27.
+
+## Claude Code: `test/settings.live.ts`
+
+`node --import tsx test/settings.live.ts`. One Haiku `Agent` on the real Claude Code through a minimal host (no `App`), started in permission mode `default` with a work folder and a scratch folder (both in a fresh temp folder) passed as the host's scratch folder. Checks: `$TMPDIR` in the agent's shell is the scratch folder; reading a file there asks nothing (it is in `SessionSpec.dirs`, Claude Code's `additionalDirectories`); a write in `default` mode asks; after `applySettings()` switches to `acceptEdits`, writes in the work folder and the scratch folder ask nothing and the files exist; and the session was opened once (the mode changed through `setPermissionMode()`, no relaunch). Exit 1 on failure; prints the temp folder. Four short Haiku turns. Not run for this page.
+
+## Claude Code: `test/restart.live.ts`
+
+`node --import tsx test/restart.live.ts [1] [2] [3]` (a plain script; no numbers runs all three). The 0.2.1 restart handling against the real Claude Code. Every tier is `claude-haiku-5-5` at low effort, permissions bypassed (the commands are timed waits in node), fresh temp folders with their own data and config, remote access off, never port 7717.
+
+1. **Clean stop while a helper runs a long command:** a new `App` on the same folders gives the lead a turn of its own with a page notice naming the helper ("bravo (sleeper, started by alpha)"); nobody typed anything; the lead resumes or restarts the helper with `send_message` or `spawn_agent`, and the helper's word reaches it. A second restart sends nothing.
+2. **An unanswered person message, then a clean stop:** the notice says it was sent to the lead again; it is answered once; no "cut off mid-turn" notice on top. A second restart sends nothing.
+3. **Hard kill:** the server runs as a child on port 7801 with its systemd variables removed (so it cannot read or delete the real service's last-stop marker); its whole process group gets SIGKILL while the lead is mid-turn. The stored lead says `running`; on the next start the page notice says the lead was asked to carry on, the person typed once, the answer comes once, and a further restart sends nothing.
+
+The work folder is removed when everything passed and kept otherwise (`finishWorkFolder()`). Exit 1 on failure. See [Restarting the app](Walkthrough-Restarting-the-App.md).
 
 ## When adding scenarios
 

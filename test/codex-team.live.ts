@@ -11,6 +11,7 @@ import { BackendRegistry } from '../server/backends/registry.ts';
 import type { SessionEvents, SessionSpec } from '../server/backends/types.ts';
 import { defaultSettings } from '../server/settings/settings.ts';
 import { Store } from '../server/storage/store.ts';
+import { finishWorkFolder } from './workdir.ts';
 
 const model = process.env.MASTHEAD_CODEX_MODEL ?? 'gpt-6-luna';
 const dir = mkdtempSync(join(tmpdir(), 'masthead-codex-team-'));
@@ -87,6 +88,7 @@ try {
       // ephemeral or already gone
     }
   }
-  log(`deleted ${created.size} test thread(s); ${failed ? 'WITH FAILURES' : 'all passed'} - work folder: ${dir}`);
+  log(`deleted ${created.size} test thread(s); ${failed ? 'WITH FAILURES' : 'all passed'}`);
+  finishWorkFolder(dir, failed, log);
   process.exit(failed ? 1 : 0);
 }

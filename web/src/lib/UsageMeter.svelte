@@ -8,7 +8,7 @@
   const ORDER = Object.keys(T.usage.names);
 
   const limits = $derived(
-    Object.values(store.usage).sort((a, b) => {
+    Object.values(store.usage ?? {}).filter((n): n is RateLimitNotice => !!n && typeof n === 'object').sort((a, b) => {
       const ia = ORDER.indexOf(a.type ?? ''), ib = ORDER.indexOf(b.type ?? '');
       return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
     }),
@@ -47,6 +47,8 @@
     <span class="label">{T.usage.title}</span>
     {#if top && top.p >= 0}
       <span class="value" class:hot={top.n.status !== 'allowed'}>{top.n.status === 'rejected' ? T.usage.reached : T.usage.used(top.p)}</span>
+    {:else if limits.length === 0}
+      <span class="value faint">{T.usage.notReported}</span>
     {/if}
     <span class="chev" aria-hidden="true">{open ? '▾' : '▸'}</span>
   </button>
@@ -99,6 +101,9 @@
   }
   .value.hot {
     color: var(--warn);
+  }
+  .value.faint {
+    color: var(--faint);
   }
   .chev {
     color: var(--faint);

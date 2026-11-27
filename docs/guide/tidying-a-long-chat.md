@@ -9,8 +9,9 @@ the team for you, so it stays quick and does not run out of memory.
 
 ## What happens
 
-1. When the main assistant finishes a reply and the team has about 15 finished helpers, or its
-   **Memory used** is past about 70 %, Masthead tidies the team.
+1. When the main assistant finishes a reply and the team has about 10 finished helpers, or its
+   **Memory used** is past about 70 % or about 200,000 tokens (whichever comes first), Masthead
+   tidies the team. Helpers that a restart cut off before they finished are always kept.
 2. The main assistant decides which helpers it still needs. Helpers that are still working, and the
    ones that started a helper that stays, always stay.
 3. The others are archived: they leave the team list but nothing is deleted.

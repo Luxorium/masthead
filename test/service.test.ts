@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import { checkValue, cleanPath, statusSummary } from '../server/service/common.ts';
 import { ServiceError, serviceFor, type Deps, type RunResult } from '../server/service/index.ts';
 import { LABEL, launchdEnvFrom, launchdPortFrom, plistContent } from '../server/service/launchd.ts';
-import { execQuote, unitContent, unitEnvFrom, unitPortFrom, unitQuote } from '../server/service/systemd.ts';
+import { readFileSync } from 'node:fs';
+import { OOM_POLICY, STOP_POST, execQuote, unitContent, unitEnvFrom, unitPortFrom, unitQuote } from '../server/service/systemd.ts';
 import { parseTaskQuery, taskAction, taskXml, utf16le, winQuote } from '../server/service/taskscheduler.ts';
 
 type Call = [string, ...string[]];
@@ -61,6 +62,8 @@ Environment="MASTHEAD_CLAUDE=/home/a b/.local/bin/claude"
 Environment="XDG_CONFIG_HOME=/c fg"
 Environment="XDG_DATA_HOME=/d%%"
 Environment="MASTHEAD_PORT=7720"
+${STOP_POST}
+OOMPolicy=continue
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=10
@@ -72,6 +75,31 @@ WantedBy=default.target
   const plain = unitContent({ ...base, port: 7717 }, '/h');
   assert.doesNotMatch(plain, /MASTHEAD_PORT|MASTHEAD_CLAUDE|XDG_/, 'the default port, no claude and no XDG add nothing');
   assert.match(plain, /^Environment="PATH=\/usr\/bin:\/x:\/h\/.local\/bin:\/usr\/local\/bin:\/bin"$/m);
+});
+
+test('systemd: install.sh writes the same OOM policy and stop marker lines as the unit', () => {
+  const sh = readFileSync(new URL('../scripts/install.sh', import.meta.url), 'utf8');
+  assert.ok(sh.includes(`stop_post='${STOP_POST}'`), 'install.sh stop_post matches STOP_POST');
+  assert.ok(sh.includes(`oom_policy='${OOM_POLICY}'`), 'install.sh oom_policy matches OOM_POLICY');
+  assert.match(sh, /^\$stop_post\n\$oom_policy\nRestart=on-failure$/m, 'both lines are in the heredoc, before Restart=');
+  assert.ok(!STOP_POST.includes("'"), 'STOP_POST fits in a single-quoted bash string');
+});
+
+/** How systemctl show prints the stop marker line of a current unit. */
+const MARKER = 'ExecStopPost={ path=/bin/sh ; argv[]=/bin/sh -c ... /run/user/1000/masthead-last-stop ; ignore_errors=yes }\nOOMPolicy=continue\n';
+
+test('systemd: a unit with the old OOM policy or without the stop marker is reported as outdated', async () => {
+  const base = 'LoadState=loaded\nActiveState=active\nEnvironment=PATH=/usr/bin\n';
+  let out = '';
+  const svc = serviceFor('linux', fake(() => ({ stdout: out })).deps)!;
+  out = `${base}OOMPolicy=stop\n`; // a 0.2.0 unit: systemctl prints no ExecStopPost line at all
+  const both = (await svc.status()).outdated ?? '';
+  assert.match(both, /OOMPolicy=stop/);
+  assert.match(both, /no stop marker/);
+  out = `${base}OOMPolicy=continue\nExecStopPost=\n`;
+  assert.match((await svc.status()).outdated ?? '', /^it was written by an older Masthead \(no stop marker/);
+  out = `${base}${MARKER}`;
+  assert.equal((await svc.status()).outdated, undefined);
 });
 
 const UNIT_FILE = '/home/a b/.config/systemd/user/masthead.service';
@@ -138,8 +166,8 @@ test('systemd: uninstall with nothing installed is a no-op', async () => {
 });
 
 test('systemd: status and serves read systemctl show', async () => {
-  const show = ['systemctl', '--user', 'show', '-p', 'LoadState', '-p', 'ActiveState', '-p', 'Environment', 'masthead.service'];
-  let out = 'LoadState=loaded\nActiveState=active\nEnvironment="PATH=/home/a b/bin" MASTHEAD_PORT=7731\n';
+  const show = ['systemctl', '--user', 'show', '-p', 'LoadState', '-p', 'ActiveState', '-p', 'Environment', '-p', 'OOMPolicy', '-p', 'ExecStopPost', 'masthead.service'];
+  let out = `LoadState=loaded\nActiveState=active\nEnvironment="PATH=/home/a b/bin" MASTHEAD_PORT=7731\n${MARKER}`;
   const f = fake(() => ({ stdout: out }));
   const svc = serviceFor('linux', f.deps)!;
   assert.deepEqual(await svc.status(), {

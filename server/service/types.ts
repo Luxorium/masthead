@@ -24,6 +24,8 @@ export interface ServiceStatus {
   /** The data folder the installed service uses, when it can be told (not on Windows). */
   dataDir?: string;
   detail: string;
+  /** Set when the installed service file is older than this Masthead would write: why, in words. Fixed by `masthead service install`. */
+  outdated?: string;
 }
 
 export interface ServiceManager {

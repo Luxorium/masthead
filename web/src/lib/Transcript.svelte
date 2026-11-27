@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import type { Item } from '../../../shared/protocol.ts';
   import { handleCopyClick } from './markdown.ts';
+  import { progress } from './progress.svelte.ts';
   import { store } from './store.svelte.ts';
   import DraftView from './transcript/DraftView.svelte';
   import InboundItem from './transcript/InboundItem.svelte';
@@ -96,6 +97,37 @@
   }
 
   const key = (item: Item) => item.id;
+
+  /** The item briefly highlighted after "Waiting for your answer" asked to show it. */
+  let highlighted = $state<string | null>(null);
+  let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const f = progress.focus;
+    if (!f) return;
+    untrack(() => {
+      progress.focus = null;
+      showItem(f.id);
+    });
+  });
+  /** Scrolls to an item (showing earlier ones if it is above the newest page) and highlights it a moment. */
+  function showItem(id: string) {
+    const i = items.findIndex((it) => it.id === id);
+    if (i < 0) return;
+    if (i < start) limit = items.length - i;
+    void tick().then(() => {
+      const el = scroller?.querySelector<HTMLElement>(`[data-item="${CSS.escape(id)}"]`);
+      if (!el) return;
+      pinned = false;
+      const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      el.scrollIntoView?.({ block: 'center', behavior: still ? 'auto' : 'smooth' });
+      // Focus goes to the question too, so a screen reader reads it next.
+      el.tabIndex = -1;
+      el.focus({ preventScroll: true });
+      highlighted = id;
+      if (highlightTimer) clearTimeout(highlightTimer);
+      highlightTimer = setTimeout(() => (highlighted = null), 2600);
+    });
+  }
 </script>
 
 <div class="scroll" bind:this={scroller} onscroll={onScroll}>
@@ -125,7 +157,7 @@
     {#each visible as item (key(item))}
       <!-- Off-screen items are skipped by layout and paint (content-visibility), except tool lines,
            whose negative margins need them to stay in normal flow. -->
-      <div class="item" class:cv={item.kind !== 'tool'}>
+      <div class="item" class:cv={item.kind !== 'tool'} class:highlight={highlighted === item.id} data-item={item.id}>
       {#if item.kind === 'user'}
         <UserItem {item} />
       {:else if item.kind === 'text'}
@@ -176,6 +208,29 @@
   .item.cv {
     content-visibility: auto;
     contain-intrinsic-size: auto 120px;
+  }
+  /* The question "Waiting for your answer" points at: a quiet wash that fades. */
+  .item.highlight {
+    border-radius: var(--radius);
+    animation: highlight 2.6s ease-out;
+  }
+  @keyframes highlight {
+    0%,
+    40% {
+      background: color-mix(in srgb, var(--text) 8%, transparent);
+      box-shadow: 0 0 0 6px color-mix(in srgb, var(--text) 8%, transparent);
+    }
+    100% {
+      background: transparent;
+      box-shadow: 0 0 0 6px transparent;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .item.highlight {
+      animation: none;
+      background: color-mix(in srgb, var(--text) 8%, transparent);
+      box-shadow: 0 0 0 6px color-mix(in srgb, var(--text) 8%, transparent);
+    }
   }
   .earlier {
     align-self: center;

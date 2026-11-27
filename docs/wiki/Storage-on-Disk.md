@@ -21,6 +21,7 @@ Masthead writes two kinds of files: the **settings** (in the config folder) and 
   format                        "2": whole-store format marker
   secret                        the local server's secret (mode 0600)
   remote/                       remote access: devices.json, audit.jsonl (see Remote access)
+  usage.json                    the latest usage-limit notice of each kind (0.2.1)
   conversations/
     <conversation id>/          one folder per conversation (id is a UUID)
       conversation.json         the conversation and all its agents, format 2
@@ -30,6 +31,18 @@ Masthead writes two kinds of files: the **settings** (in the config folder) and 
       blobs/
         <sha256>.<png|jpg|gif|webp>   images, named by the hash of their bytes
 ```
+
+### Usage notices and scratch folders (0.2.1)
+
+- **`<data>/usage.json`**: `{ "version": 1, "notices": [...] }`, the latest usage-limit notice per kind (`type`), so a newly opened tab shows them at once. Rewritten with `writeFileAtomic` (mode 0600, folder 0700) every time a backend reports one (`App.rateLimit()`, `server/app/app.ts:232-236`). On start `loadUsage()` keeps only notices whose `status` is `allowed`, `allowed_warning` or `rejected` and whose `resetsAt` is still in the future; a missing, unreadable or other-version file gives none (`server/app/app.ts:41-52`, `:101-102`). Not written when `App` is given its own store (tests).
+- **Scratch folders**: one private temporary folder per conversation, `<scratch root>/<conversation id>/`, given to its agents as `TMPDIR` (Claude Code; a Codex agent is told the folder and may write in it, without `TMPDIR`) ([server/service/scratch.ts](Source-Service.md#scratchts)). Not in the data folder: they live in the cache folder, which is not backed up or roaming (`scratchRoot()`, `server/service/scratch.ts:16-22`):
+
+  | Linux | macOS | Windows | `MASTHEAD_DATA_DIR` set |
+  |---|---|---|---|
+  | `$XDG_CACHE_HOME/masthead/scratch`, default `~/.cache/masthead/scratch` | `~/Library/Caches/Masthead/scratch` | `%LOCALAPPDATA%\Masthead\Cache\scratch` | `<data>/scratch` |
+
+  Each folder is made with mode 0700 when an agent of that conversation starts, removed when the conversation is deleted, and swept 10 seconds after start when its conversation is gone, or when the conversation was not active and nothing in the folder changed for 7 days (`newestChange()` looks at most 2000 entries, 4 levels deep; past that the folder is kept). Nothing in it is kept: it is not part of a conversation's saved state.
+- **Restart marker** (Linux service only): `$XDG_RUNTIME_DIR/masthead-last-stop`, written by the unit's `ExecStopPost=` line after each stop, read and removed by the next start (`server/service/laststop.ts:46-57`). `XDG_RUNTIME_DIR` is the per-user runtime folder (normally `/run/user/<uid>`), emptied at logout or reboot.
 
 A backend's own session files are not Masthead's. Claude Code and Codex keep the actual model history that a resume uses in their own folders. Masthead stores only the `sessionId` that points to it.
 
@@ -59,7 +72,7 @@ What [Compact team](Compact-Team.md) saves, all in `conversation.json` and all o
 |---|---|---|
 | `agents[].info.archived` | When the helper was archived. Removed (`undefined`) when the person restores it. | Archiving (`Conversation.archiveAndCompact()`), restoring (`restoreAgent()`). |
 | `meta.compact` | The `CompactState` of the flow under way or last ended: `phase`, `auto`, `reason`, `keep`, `archive`, `note`, `pending`, `failed`, `startedAt`, `askedAnswered`. A finished flow stays as `done` or `cancelled` until the next one replaces it. | Every phase change (`setCompact()`). |
-| `meta.compactMark` | `{finished, memoryArmed}`: the cool-down for automatic tidying. | When automatic tidying fires, when the person types `/compact`, and when memory drops back under 70 %. |
+| `meta.compactMark` | `{finished, memoryArmed}`: the cool-down for automatic tidying. | When automatic tidying fires, when the person types `/compact`, and when memory is no longer full (under 70 % and under 200k tokens). |
 | `meta.compactSuggested` | `true` once the lead has been told it may suggest `/compact` (automatic tidying off). | That one time. |
 | `meta.autoCompact` | `false` when the person switched automatic tidying off for this conversation; absent otherwise. | The `auto_compact` message. |
 
@@ -71,7 +84,7 @@ On start-up `Conversation.resumeCompact()` carries on from the saved phase: `ask
 
 ### `items/<agent>.jsonl`
 
-JSON Lines: one `Item` per line. The file is **append-only**. When an item changes (for example, a tool call gets its result), a new line with the **same id** is appended. On reading, the last line for each id wins, and the item keeps the position where its id first appeared. A line that does not parse, such as a half-written last line after a crash, is skipped.
+JSON Lines: one `Item` per line. The file is **append-only**. When an item changes (for example, a tool call gets its result), a new line with the **same id** is appended. On reading, the last line for each id wins, and the item keeps the position where its id first appeared. Since 0.2.1 a **finished tool** (`kind: 'tool'`, `done: true`) is stored **without its `input`**: the line written when the tool started already has it, and inputs can be large (`withoutRepeatedInput()` in `server/storage/transcript.ts`, called by `Store.appendItem()`). Every reader takes the input from the item's earlier line (`mergeLines()`), so a reader that only kept the last line would lose the input. Files written before 0.2.1, whose finish lines still carry the input, read the same. A line that does not parse, such as a half-written last line after a crash, is skipped.
 
 Images are **not** written into the jsonl. A `user` or `tool` item carries `images: BlobRef[]` (`{ blob, mediaType, w, h, bytes }`) that point to files in `blobs/`. In 0.1.x files a `user` item's `images` is just a count; it is read as it is.
 

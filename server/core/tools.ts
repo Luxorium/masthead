@@ -23,6 +23,8 @@ export interface TeamActions {
   compactTeam?(caller: Agent, keep: Array<{ name: string; why: string }>, note: string): string;
   /** read_archive: the archived helpers, or one archived helper's chat (paged, optionally searched). */
   readArchive?(viewer: Agent, name?: string, page?: number, search?: string): string;
+  /** Agents of this tier run without the person's connected services (TierSpec.lean). */
+  lean?(tier: Tier): boolean;
   /** The agent's backend capabilities; all on when the conversation does not say. */
   caps?(agent: Agent): Pick<BackendCaps, 'efforts'> | undefined;
 }
@@ -61,7 +63,7 @@ export function teamToolDefs(agent: Agent, team: TeamActions): ToolDef[] {
     const readArchive = team.readArchive.bind(team);
     add(
       'read_archive',
-      'Read archived helpers\' work: no name gives the list with their reports; a name gives that chat, a page at a time.',
+      'Read a finished or archived helper\'s chat by name, a page at a time. No name: the archived helpers and their reports.',
       object({ name: str(1, 80), page: { type: 'integer', minimum: 1 }, search: str(1, 100, 'Only lines with this word') }, []),
       (a) => readArchive(agent, typeof a.name === 'string' ? a.name : undefined, typeof a.page === 'number' ? a.page : 1, typeof a.search === 'string' ? a.search : undefined),
     );
@@ -74,7 +76,7 @@ export function teamToolDefs(agent: Agent, team: TeamActions): ToolDef[] {
       object(
         {
           // A bare name is accepted too: leads often send a plain list of names.
-          keep: { type: 'array', maxItems: 100, description: 'Each one {name, why}', items: { anyOf: [object({ name: str(1, 80), why: str(0, 200) }, ['name']), str(1, 80)] } },
+          keep: { type: 'array', maxItems: 100, description: 'Names, or {name, why}', items: { anyOf: [object({ name: str(1, 80), why: str(0, 200) }, ['name']), str(1, 80)] } },
           note: str(0, 500, 'One line for the person'),
         },
         ['keep'],
@@ -86,7 +88,7 @@ export function teamToolDefs(agent: Agent, team: TeamActions): ToolDef[] {
   if (child) {
     add(
       'spawn_agent',
-      `Start ${withArticle(team.label(child))} agent on a task. It knows only what you write in "task". It is given the next name from the phonetic alphabet (bravo, charlie, …); the reply tells you which. Returns at once; the agent's report arrives later as an <agent-report> message.`,
+      `Start ${withArticle(team.label(child))} agent on a task. It knows only what you write in "task". It is given the next name from the phonetic alphabet (bravo, charlie, …); the reply tells you which. Returns at once; the agent's report arrives later as an <agent-report> message.${team.lean?.(child) ? " It has no connected services (the person's MCP servers and connectors)." : ''}`,
       object(
         {
           title: str(1, 60, 'A few words on its job, shown to the person, e.g. "Review the API layer"'),

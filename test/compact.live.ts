@@ -11,6 +11,7 @@ import { findClaude } from '../server/backends/claude/env.ts';
 import { Scheduler } from '../server/core/scheduler.ts';
 import { defaultSettings } from '../server/settings/settings.ts';
 import type { Item } from '../shared/protocol.ts';
+import { finishWorkFolder } from './workdir.ts';
 
 const t0 = Date.now();
 const log = (...a: unknown[]) => console.log(((Date.now() - t0) / 1000).toFixed(1).padStart(6), ...a);
@@ -80,5 +81,8 @@ try {
   log('FAILED:', (e as Error).message);
   failed = true;
 }
-log(failed ? 'finished WITH FAILURES' : 'finished all passed', '- work folder:', cwd);
-setTimeout(() => process.exit(failed ? 1 : 0), 1500);
+log(failed ? 'finished WITH FAILURES' : 'finished all passed');
+setTimeout(() => {
+  finishWorkFolder(cwd, failed, log);
+  process.exit(failed ? 1 : 0);
+}, 1500);

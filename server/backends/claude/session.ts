@@ -74,6 +74,7 @@ export const CLAUDE_CAPS: BackendCaps = {
   contextUsage: true,
   lean: true,
   compact: true,
+  sessionEnv: true,
 };
 
 export function toolResultText(content: unknown): string {
@@ -207,6 +208,7 @@ export class ClaudeSession implements Session {
       spawnClaudeCodeProcess: (o) => this.spawnProcess(o),
     };
     if (s.resume) options.resume = s.resume;
+    if (s.dirs?.length) options.additionalDirectories = s.dirs;
     if (s.permissionMode !== 'inherit') {
       options.permissionMode = s.permissionMode as Options['permissionMode'];
       if (s.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
@@ -288,6 +290,14 @@ export class ClaudeSession implements Session {
     return this.q ? this.q.applyFlagSettings({ effortLevel: effort }) : Promise.resolve();
   }
 
+  /** Through the SDK's setPermissionMode. inherit has no mode to send, and bypass needs the launch flag: both relaunch. */
+  async setPermissionMode(mode: string): Promise<void> {
+    if (!this.q) throw new Error('no process');
+    if (mode === 'inherit' || (mode === 'bypassPermissions' && this.spec.permissionMode !== 'bypassPermissions')) throw new Error('needs a relaunch');
+    const r = await this.q.setPermissionMode(mode as NonNullable<Options['permissionMode']>);
+    if (r?.mode && r.mode !== mode) throw new Error(`the mode is ${String(r.mode)}`);
+  }
+
   setModel(model: string): Promise<void> {
     return this.q ? this.q.setModel(model) : Promise.reject(new Error('no process'));
   }
@@ -350,6 +360,12 @@ export class ClaudeSession implements Session {
         const sub = (m as { subtype?: string }).subtype;
         if (sub === 'init') {
           this.sawInit = true;
+          // A Claude Code that lists the interrupt receipt (uuids of queued messages) names the messages
+          // each turn consumes, so a result naming none consumed none: a turn it started by itself, such
+          // as the first one of a resumed session whose background command the restart killed. Known from
+          // the first init, before any result, so such a turn cannot count what was sent as answered.
+          const caps = (m as { capabilities?: unknown }).capabilities;
+          if (Array.isArray(caps) && caps.includes('interrupt_receipt_v1')) this.namesConsumed = true;
           // Every turn starts with init, also those Claude Code starts by itself; a compaction is no turn.
           if (!this.compacting) this.ev.turnStarted();
           this.ev.sessionStarted((m as { session_id: string }).session_id);

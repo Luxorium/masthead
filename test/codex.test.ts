@@ -139,6 +139,138 @@ test('codex send: turn/start carries model and effort; a later setEffort/setMode
   assert.deepEqual(r.turns.map((t) => t.consumed), [['m1'], ['m2']]);
 });
 
+test('codex: a permission-mode change keeps the thread\'s own sandbox (only the approvals change); the scratch folder is a writable root', async () => {
+  // inherit: the thread starts on the person's own sandbox (here with network on).
+  const { fake, r, s } = await session({ permissionMode: 'inherit', dirs: ['/scratch/c1'] });
+  s.send('m1', 'Reply with exactly the word ONE');
+  await done(r);
+  const own = { type: 'workspaceWrite', writableRoots: ['/own/root', '/scratch/c1'], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+  assert.deepEqual(fake.server.calls('turn/start')[0].sandboxPolicy, own, 'the thread\'s sandbox plus the scratch folder');
+  assert.equal(fake.server.calls('turn/start')[0].approvalPolicy, undefined, 'nothing changed yet');
+  s.setPermissionMode!('acceptEdits');
+  s.send('m2', 'Reply with exactly the word TWO');
+  await done(r, 2);
+  const t2 = fake.server.calls('turn/start')[1];
+  assert.equal(t2.approvalPolicy, 'on-request');
+  assert.deepEqual(t2.sandboxPolicy, own, 'network stays as the thread had it');
+  s.setPermissionMode!('bypassPermissions');
+  s.send('m3', 'Reply with exactly the word THREE');
+  await done(r, 3);
+  assert.deepEqual(fake.server.calls('turn/start')[2].sandboxPolicy, { type: 'dangerFullAccess' });
+  assert.equal(fake.server.calls('turn/start')[2].approvalPolicy, 'never');
+  assert.throws(() => s.setPermissionMode!('inherit'), /relaunch/);
+});
+
+test('codex: leaving bypass always puts the thread back on its own sandbox (no scratch, scratch already a root, read-only)', async () => {
+  const own = { type: 'workspaceWrite', writableRoots: ['/own/root'], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+  const readOnly = { type: 'readOnly', networkAccess: false };
+  const cases: Array<[string, Record<string, unknown>, FakeCodexOptions, unknown]> = [
+    ['no scratch folder', { permissionMode: 'inherit' }, {}, own],
+    ['scratch already a root', { permissionMode: 'inherit', dirs: ['/own/root'] }, {}, own],
+    ['a read-only thread', { permissionMode: 'inherit', dirs: ['/scratch/c1'] }, { sandbox: readOnly }, readOnly],
+  ];
+  for (const [name, over, opts, back] of cases) {
+    const { fake, r, s } = await session({ permissionMode: 'default', ...over }, undefined, opts);
+    s.send('m1', 'Reply with exactly the word ONE');
+    await done(r);
+    s.setPermissionMode!('bypassPermissions');
+    s.send('m2', 'Reply with exactly the word TWO');
+    await done(r, 2);
+    s.setPermissionMode!('acceptEdits');
+    s.send('m3', 'Reply with exactly the word THREE');
+    await done(r, 3);
+    s.send('m4', 'Reply with exactly the word FOUR');
+    await done(r, 4);
+    const policies = fake.server.calls('turn/start').map((t) => t.sandboxPolicy);
+    assert.deepEqual(policies[1], { type: 'dangerFullAccess' }, name);
+    assert.deepEqual(policies[2], back, `${name}: back on its own sandbox at once`);
+    assert.deepEqual(policies[3], back, `${name}: and it stays there`);
+  }
+});
+
+// ---- resume: the sandbox the mode wants, whatever the thread kept (codex 0.172 keeps a turn's override) ----
+
+const WW = { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+const FULL = { type: 'dangerFullAccess' };
+
+/** A thread run in `mode` (with `bypassTurn`, one turn after switching to bypass), closed, then resumed in `then`; two turns. */
+async function resumeCase(o: { mode: string; dirs?: string[]; bypassTurn?: boolean; then: string; thenDirs?: string[]; opts?: FakeCodexOptions }) {
+  const { fake, backend } = make(o.opts);
+  const r1 = new Recorder();
+  const s1 = backend.open(spec({ model: 'fake-luna', permissionMode: o.mode, ...(o.dirs ? { dirs: o.dirs } : {}) }), r1);
+  s1.send('a', 'Reply with exactly the word ONE');
+  await done(r1);
+  if (o.bypassTurn) {
+    s1.setPermissionMode!('bypassPermissions');
+    s1.send('b', 'Reply with exactly the word TWO');
+    await done(r1, 2);
+  }
+  s1.close('graceful');
+  await s1.ended;
+  const before = fake.server.calls('turn/start').length;
+  const r2 = new Recorder();
+  const s2 = backend.open(spec({ model: 'fake-luna', permissionMode: o.then, resume: r1.sessionId!, ...(o.thenDirs ? { dirs: o.thenDirs } : {}) }), r2);
+  s2.send('c', 'Reply with exactly the word THREE');
+  await done(r2);
+  if (r2.exitedWith) return { fake, r2, sent: [] as unknown[] };
+  s2.send('d', 'Reply with exactly the word FOUR');
+  await done(r2, 2);
+  return { fake, r2, sent: fake.server.calls('turn/start').slice(before).map((t) => t.sandboxPolicy) };
+}
+
+test('codex resume: bypass then a relaunch in default: workspace-write on every turn (scratch added)', async () => {
+  const { sent } = await resumeCase({ mode: 'default', bypassTurn: true, then: 'default', thenDirs: ['/scratch/c1'] });
+  const ww = { ...WW, writableRoots: ['/scratch/c1'] };
+  assert.deepEqual(sent, [ww, ww]);
+});
+
+test('codex resume: bypass then a relaunch as inherit: the person\'s own sandbox, learned once from an ephemeral probe', async () => {
+  const { sent, fake } = await resumeCase({ mode: 'default', bypassTurn: true, then: 'inherit' });
+  const own = { type: 'workspaceWrite', writableRoots: ['/own/root'], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+  assert.deepEqual(sent, [own, own]);
+  assert.equal(fake.server.ephemeral.length, 1);
+  assert.equal(fake.server.threads.has(fake.server.ephemeral[0]!), false, 'the probe is in no thread list');
+});
+
+test('codex resume: a plain restart of a thread left at full access in default mode goes back to workspace-write', async () => {
+  // The session ended while in bypass (the thread kept full access); Masthead restarts it in default.
+  const { sent } = await resumeCase({ mode: 'default', bypassTurn: true, then: 'default' });
+  assert.deepEqual(sent, [WW, WW]);
+});
+
+test('codex resume: started workspace-write (scratch override sent), resumed as inherit under a read-only config: read-only', async () => {
+  const readOnly = { type: 'readOnly', networkAccess: false };
+  const { sent } = await resumeCase({ mode: 'default', dirs: ['/scratch/c1'], then: 'inherit', opts: { sandbox: readOnly } });
+  assert.deepEqual(sent, [readOnly, readOnly], 'never wider than the mode says');
+});
+
+test('codex resume: bypass on a thread that kept a workspace-write override gets full access every turn', async () => {
+  const { sent } = await resumeCase({ mode: 'default', dirs: ['/scratch/c1'], then: 'bypassPermissions' });
+  assert.deepEqual(sent, [FULL, FULL]);
+});
+
+test('codex resume: nothing extra is sent when the thread already has what the mode wants', async () => {
+  const { sent, fake } = await resumeCase({ mode: 'default', then: 'default' });
+  assert.deepEqual(sent, [undefined, undefined]);
+  assert.equal(fake.server.ephemeral.length, 0, 'no probe outside inherit');
+});
+
+test('codex resume: inherit, the own sandbox unknown, a thread left at full access: fails closed', async () => {
+  const { r2 } = await resumeCase({ mode: 'default', bypassTurn: true, then: 'inherit', opts: { ephemeralFails: true } });
+  assert.match(r2.exitedWith?.failure ?? '', /may still have full access.*not resumed/);
+  // Unknown but not full access: it runs on what the thread has (no wider).
+  const ok = await resumeCase({ mode: 'default', then: 'inherit', opts: { ephemeralFails: true } });
+  assert.equal(ok.r2.exitedWith, null);
+  assert.deepEqual(ok.sent, [undefined, undefined]);
+});
+
+test('codex: a thread started with full access cannot step back from it without a relaunch', async () => {
+  const { r, s } = await session({ permissionMode: 'bypassPermissions' });
+  s.send('m1', 'Reply with exactly the word ONE');
+  await done(r);
+  assert.throws(() => s.setPermissionMode!('default'), /relaunch/);
+});
+
 test('codex send: messages sent before the thread exists open its first turn together', async () => {
   const { fake, r, s } = await session();
   s.send('a', 'Reply with exactly the word FIRST');

@@ -8,6 +8,7 @@
   import TeamEditor from './TeamEditor.svelte';
   import { ST } from './text.ts';
   import { readBackends } from './types.ts';
+  import { ui } from '../ui.svelte.ts';
 
   const CODEX = 'codex';
   const profiles = $derived(store.settings?.profiles ?? []);
@@ -88,7 +89,7 @@
       </ol>
       <div class="actions">
         <button type="button" class="btn primary" onclick={useProposal}>{ST.teams.useIt}</button>
-        <button type="button" class="btn" onclick={() => (editing = CODEX)}>{ST.teams.changeFirst}</button>
+        {#if ui.advanced}<button type="button" class="btn" onclick={() => (editing = CODEX)}>{ST.teams.changeFirst}</button>{/if}
       </div>
     </div>
   {/if}
@@ -103,6 +104,9 @@
       </select>
     </label>
   {/if}
+
+  <!-- Simple: the teams and the choice for new chats; changing a team's levels is in Advanced. -->
+  {#if !ui.advanced}<p class="muted small">{ST.teams.moreInAdvanced}</p>{/if}
 
   <ul class="list">
     {#each profiles as p (p.id)}
@@ -124,7 +128,7 @@
               <li class="pal-{t.colour}"><span class="dot" aria-hidden="true"></span>{ST.level.title(i + 1, t.label || t.model)}{#if t.unusable}<span class="warn tier-note"> — {t.unusable}</span>{/if}</li>
             {/each}
           </ol>
-          <div class="actions">
+          {#if ui.advanced}<div class="actions">
             <button type="button" class="btn" onclick={() => (editing = p.id)} aria-label={ST.teams.edit(p.label)}>{ST.teams.edit(p.label)}</button>
             <button type="button" class="btn ghost" onclick={() => duplicate(p)}>{ST.teams.duplicate}</button>
             {#if p.builtIn}
@@ -132,7 +136,7 @@
             {:else}
               <button type="button" class="btn ghost danger" onclick={() => remove(p)}>{ST.teams.remove}</button>
             {/if}
-          </div>
+          </div>{/if}
         {/if}
       </li>
     {/each}

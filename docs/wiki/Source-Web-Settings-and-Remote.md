@@ -50,18 +50,18 @@ Plain logic, no Svelte, tested on its own:
 
 ### `ProfilesSection.svelte`
 
-"Teams": each team with its levels as coloured dots and "Main assistant: <model>" / "Level N helper: <model>", a "Built in" tag, its description if it has one, a level's `unusable` note if the server set one, and a warning if its program is not ready. Actions per team: Edit (opens `TeamEditor` in place), "Make a copy" (adds the copy and opens it), and "Reset to the built-in team" for a built-in team (sends `reset_profile`) or "Remove team" for the person's own. Remove asks with a `confirm()` and sends `delete_profile`. The server refuses to delete a team that chats use and says how many (`inUse` on the error); the section listens for that error and asks a second `confirm()` naming the count. Yes sends `delete_profile` with `force: true` (those chats keep working with their stored levels); no shows "Kept “<team>”: N chats use it."
+"Teams": each team with its levels as coloured dots and "Main assistant: <model>" / "Level N helper: <model>", a "Built in" tag, its description if it has one, a level's `unusable` note if the server set one, and a warning if its program is not ready. The actions below are shown only in Advanced (`ui.advanced`, 0.2.1); in Simple the section shows the teams and "Team for new chats", with one line above the list: "To change, copy or remove a team, turn on “Show team controls” above." Actions per team: Edit (opens `TeamEditor` in place), "Make a copy" (adds the copy and opens it), and "Reset to the built-in team" for a built-in team (sends `reset_profile`) or "Remove team" for the person's own. Remove asks with a `confirm()` and sends `delete_profile`. The server refuses to delete a team that chats use and says how many (`inUse` on the error); the section listens for that error and asks a second `confirm()` naming the count. Yes sends `delete_profile` with `force: true` (those chats keep working with their stored levels); no shows "Kept “<team>”: N chats use it."
 
 "Team for new chats" (a select, when there is more than one team) sets `defaultProfile`; teams that cannot start are disabled in it.
 
-**The Codex proposal.** When the built-in `codex` team exists and can start, and it is not already the default, a box says a team for Codex is ready, with "Use it for new chats" and "Change it first". Using or saving it hides the box. That choice is component state, so the box shows again after the settings view is reopened, until Codex is the default.
+**The Codex proposal.** When the built-in `codex` team exists and can start, and it is not already the default, a box says a team for Codex is ready, with "Use it for new chats" and, in Advanced only, "Change it first". Using or saving it hides the box. That choice is component state, so the box shows again after the settings view is reopened, until Codex is the default.
 
 ### `TeamEditor.svelte`
 
 Edits one team on a copy; nothing is sent until Save. The form is `novalidate`, so an out-of-range helper count reaches `problems()` and is refused in plain words instead of by the browser. Props: `profile`, `all`, `backends`, `onsave`, `oncancel`.
 
 - Team name (at most 40 characters).
-- Per level: the program (first level only; the list holds programs that reported models or that the team already uses; changing it moves every level to that program, each to the model at its place in the list, since every level of a team uses the same program), the model (from the program's real list; a model no longer offered stays shown as the current value), thinking time (only those the model offers), "Name shown", helpers at a time (not for the first level, which is always one), colour (the eight palette slots), and "Keep light" with a hint that it leaves out the person's own MCP servers.
+- Per level: the program (first level only; the list holds programs that reported models or that the team already uses; changing it moves every level to that program, each to the model at its place in the list, since every level of a team uses the same program), the model (from the program's real list; a model no longer offered stays shown as the current value), thinking time (only those the model offers), "Name shown", helpers at a time (not for the first level, which is always one), colour (the eight palette slots), and "Keep light" with a hint that agents on that level cannot use the person's connected services and tools (MCP servers), so they start faster and use less.
 - A level's `unusable` note, when the server set one.
 - Move up and Move down (never above the first level), "Remove this level", and "Add a helper level" up to five levels (`MAX_TIERS`).
 - Save checks `problems()`. If any, they show as a list (`role="alert"`, only after the first Save) and nothing is saved. Cancel closes without sending.
@@ -90,12 +90,12 @@ The Remote access part of the settings, on the computer's own page only.
 - When on: the address to open on the other device, with Copy. If copying fails, the text is shown in the toast instead.
 - The server's `problem`, the command to run once in a terminal (with Copy), and any `warning`, as sent.
 - Port (locked while on), "Allow devices shared from other Tailscale networks", "Allow devices without a user (tagged devices)".
-- Allowed devices: name, system, user, address, last use and expiry, a role select (`device_role`) and Remove (`device_revoke`).
+- Allowed devices: name, system, user, address, last use and expiry, a role select (`device_role`; the roles listed Read only, "Answer approvals and stop work", Everything) and Remove (`device_revoke`).
 - "Show recent activity" asks for `remote_audit` and lists the newest 50 entries in plain words (`RT.event`).
 
 ### `DeviceRequestCard.svelte`
 
-A device asking to be let in, shown above the message box on the computer's own page. Prop `request`. It shows the device, its system, user and address, the code to compare, a warning, a role select (Everything, "Answer approvals and stop work", "Only read"), and Deny / Allow, which send `device_decision`. The role select starts at Everything. It takes focus by the same rule as an approval card ([PermissionCard](Source-Web-Components.md#permissioncardsvelte)).
+A device asking to be let in, shown above the message box on the computer's own page. Prop `request`. It shows the device, its system, user and address, the code to compare, and "What it may do" as a `<fieldset>` of radio buttons (0.2.1; before, a select that started at Everything): Read only, "Answer approvals and stop work" and Everything, each with one plain line under it (`RT.request.roleHelp`, tied by `aria-describedby`). Read only, the most limited, is chosen until the person picks more. The warning ("Everything lets this device do anything you can do here, including running commands. Choose it only for your own device.") shows only while Everything is chosen. Deny and Allow send `device_decision`; Allow names the role: "Allow, read only", "Allow approvals and stop" or "Allow everything". On touch screens each choice is 44 px tall. It takes focus by the same rule as an approval card ([PermissionCard](Source-Web-Components.md#permissioncardsvelte)).
 
 ### `RemoteSignIn.svelte`
 

@@ -1,6 +1,6 @@
 // Types shared by the server and the browser. Nothing in here may import Node or DOM APIs.
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1-beta.1';
 
 /** The four levels of the team. `lead` is the agent the person talks to. */
 export type Tier = 'lead' | 'opus' | 'sonnet' | 'haiku';
@@ -204,6 +204,11 @@ export interface AgentUsage {
   /** Output tokens produced so far. */
   output: number;
   costUsd: number;
+  /**
+   * costUsd is short: a session ended mid-turn (stopped, crashed, run-time limit), and the backend
+   * reports cost only when a turn finishes, so that turn's cost was never received. Absent = complete.
+   */
+  costPartial?: boolean;
   turns: number;
 }
 
@@ -230,6 +235,10 @@ export interface AgentInfo {
   waitingFor?: string;
   /** Paused at a usage limit until about this time (ms since 1970); it carries on by itself then. */
   pausedUntil?: number;
+  /** When its current state began (ms since 1970): set when status, activity, waitingFor or pausedUntil changes. */
+  activitySince?: number;
+  /** When it last produced output (an item, or streamed text), ms since 1970. */
+  lastOutputAt?: number;
   /**
    * Archived by a team compaction (ms since 1970): a finished helper that left the team. It cannot be
    * woken; its chat stays readable (read_archive, the Archived helpers row); the person may restore it.
@@ -290,9 +299,13 @@ export interface ConversationMeta {
   team?: TierSpec[];
   /** The lead has suggested compacting the team once; it does not suggest it again (autoCompact off). */
   compactSuggested?: boolean;
+  /** The person's message (item id) the lead was sent again after a restart cut it off; never sent twice. */
+  restartResent?: string;
+  /** The lead was cut off mid-turn by a stop or crash; the next start asks it to carry on, once. */
+  leadCut?: boolean;
   /** The person switched automatic tidying off for this conversation (autoCompact still applies elsewhere). */
   autoCompact?: false;
-  /** When automatic tidying last fired: helpers finished so far (it waits for 15 more), and whether memory must drop first. */
+  /** When automatic tidying last fired: helpers finished so far (it waits for 10 more), and whether memory must drop first. */
   compactMark?: { finished: number; memoryArmed: boolean };
   /** A team compaction in progress or just ended (saved, so a restart carries on). */
   compact?: CompactState;

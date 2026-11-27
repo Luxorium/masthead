@@ -5,7 +5,7 @@
     "Install globally with --os=none --cpu=none (npm ignores --omit=optional for a global install): the Agent SDK's optional platform packages hold a private Claude Code binary that Masthead never uses (it always runs the person's own claude)."
   ],
   "name": "@luxorium/masthead",
-  "version": "0.2.0",
+  "version": "0.2.1-beta.1",
   "description": "A local web app for running a tiered team of Claude agents through the Claude Code already installed on your machine.",
   "license": "MIT",
   "homepage": "https://github.com/Luxorium/masthead#readme",
@@ -50,11 +50,11 @@
     "build:web": "vite build",
     "dev:web": "vite",
     "check": "tsc -p tsconfig.server.json --noEmit && svelte-check --tsconfig ./tsconfig.web.json",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "start": "node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED dist/server/main.js serve",
     "test:live": "node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED --import tsx test/live.e2e.ts",
     "prepack": "npm run build",
-    "test:web": "vitest run --config web/vitest.config.ts",
+    "test:web": "node scripts/run-tests.mjs -- vitest run --config web/vitest.config.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {

@@ -5,7 +5,7 @@ import { CONVERSATIONS_DIR } from '../paths.js';
 import { writeFileAtomic } from './atomic.js';
 import { BlobStore, blobsOf } from './blobs.js';
 import { FORMAT, migrateConversation } from './migrate.js';
-import { readPage, type Page } from './transcript.js';
+import { mergeLines, readPage, withoutRepeatedInput, type Page } from './transcript.js';
 
 /** What is kept on disk for one agent besides its transcript. */
 export interface StoredAgent {
@@ -113,6 +113,7 @@ export class Store {
     const file = this.itemsFile(convId, agentId);
     // After a crash mid-line the file ends without a newline; without one, this item would join the
     // torn line and be lost with it. Checked once per file per run.
+    item = withoutRepeatedInput(item);
     let lead = '';
     if (!this.lineEnded.has(file)) {
       lead = endsWithoutNewline(file) ? '\n' : '';
@@ -156,7 +157,8 @@ export class Store {
       try {
         const item = JSON.parse(line) as Item;
         // Re-inserting keeps the position of the first appearance, which is transcript order.
-        byId.set(item.id, item);
+        const had = byId.get(item.id);
+        byId.set(item.id, had ? mergeLines(had, item) : item);
       } catch {
         // A torn last line from a crash is ignored.
       }

@@ -13,9 +13,10 @@
   import { spacedCode, type RemoteRequest, type RemoteRole } from './types.ts';
 
   let { request }: { request: RemoteRequest } = $props();
-  let role = $state<RemoteRole>('full');
+  // The most limited level is chosen until the person picks more.
+  let role = $state<RemoteRole>('read');
   let card = $state<HTMLDivElement | null>(null);
-  const ROLES: RemoteRole[] = ['full', 'approve', 'read'];
+  const ROLES: RemoteRole[] = ['read', 'approve', 'full'];
 
   // Takes focus when it appears, unless the person is typing (the PermissionCard rule).
   onMount(() => {
@@ -35,16 +36,19 @@
   <p class="muted small">{RT.request.from(request.os, request.user?.login, request.address)}</p>
   <p id="dr-{request.id}">{RT.request.codeLead}</p>
   <p class="code mono" aria-label={T.images.code(request.code)}>{spacedCode(request.code)}</p>
-  <p class="warn">{RT.request.warning}</p>
-  <label class="role">
-    <span>{RT.request.role}</span>
-    <select value={role} onchange={(e) => (role = e.currentTarget.value as RemoteRole)}>
-      {#each ROLES as r (r)}<option value={r}>{RT.role[r]}</option>{/each}
-    </select>
-  </label>
+  <fieldset class="roles">
+    <legend>{RT.request.role}</legend>
+    {#each ROLES as r (r)}
+      <label class="choice">
+        <input type="radio" name="dr-role-{request.id}" value={r} checked={role === r} onchange={() => (role = r)} aria-describedby="dr-{request.id}-{r}" />
+        <span><b>{RT.role[r]}</b><small id="dr-{request.id}-{r}">{RT.request.roleHelp[r]}</small></span>
+      </label>
+    {/each}
+  </fieldset>
+  {#if role === 'full'}<p class="warn">{RT.request.warning}</p>{/if}
   <div class="actions">
     <button class="btn danger" onclick={() => decide('deny')}>{RT.request.deny}</button>
-    <button class="btn primary" onclick={() => decide('allow')}>{RT.request.allow}</button>
+    <button class="btn primary" onclick={() => decide('allow')}>{RT.request.allow(role)}</button>
   </div>
 </div>
 
@@ -80,12 +84,33 @@
     color: var(--warn);
     font-size: 14px;
   }
-  .role {
+  .roles {
+    border: 0;
+    margin: 8px 0;
+    padding: 0;
+  }
+  legend {
+    padding: 0;
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .choice {
     display: flex;
     gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-    margin: 8px 0;
+    align-items: flex-start;
+    padding: 4px 0;
+    cursor: pointer;
+  }
+  .choice input {
+    margin-top: 3px;
+  }
+  .choice span {
+    display: flex;
+    flex-direction: column;
+  }
+  .choice small {
+    color: var(--muted);
+    font-size: 13px;
   }
   .actions {
     display: flex;
@@ -95,9 +120,13 @@
   }
   @media (pointer: coarse) {
     .btn,
-    select {
+    .choice {
       min-height: 44px;
       font-size: 16px;
+    }
+    .choice input {
+      width: 20px;
+      height: 20px;
     }
   }
 </style>

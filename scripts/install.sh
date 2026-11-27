@@ -141,6 +141,11 @@ unit_env="Environment=$(unit_quote "PATH=$unit_path")"
 [ -n "${XDG_CONFIG_HOME:-}" ] && unit_env="$unit_env"$'\n'"Environment=$(unit_quote "XDG_CONFIG_HOME=$XDG_CONFIG_HOME")"
 [ -n "${XDG_DATA_HOME:-}" ] && unit_env="$unit_env"$'\n'"Environment=$(unit_quote "XDG_DATA_HOME=$XDG_DATA_HOME")"
 
+# The same two lines as server/service/systemd.ts (STOP_POST, OOM_POLICY): the reason for each stop is kept
+# for the next start, and an out-of-memory kill of one process (an agent's browser) no longer stops the service.
+stop_post='ExecStopPost=-/bin/sh -c "echo \"$$SERVICE_RESULT $$EXIT_CODE $$EXIT_STATUS $$(sed -n s/^oom_kill.//p /sys/fs/cgroup$$(sed -n s/^0:://p /proc/self/cgroup)/memory.events 2>/dev/null)\" > \"$$0\"" %t/masthead-last-stop'
+oom_policy='OOMPolicy=continue'
+
 cat > "$unit_dir/masthead.service" <<UNIT
 [Unit]
 Description=Masthead: a local app for a tiered team of Claude agents
@@ -149,6 +154,8 @@ After=network-online.target
 [Service]
 ExecStart=$(exec_quote "$node_bin") --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED $(exec_quote "$lib/dist/server/main.js") serve
 $unit_env
+$stop_post
+$oom_policy
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=10

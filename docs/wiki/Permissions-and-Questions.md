@@ -11,7 +11,8 @@ backend's translation in `server/backends/claude/session.ts` (`canUseTool`) and
 ## Permission mode
 
 The settings field `permissionMode` (`PermissionChoice` in `shared/protocol.ts`) applies to every
-agent and is read when a session starts.
+agent. It is read when a session starts, and a change reaches running agents too (see
+[Changing the mode while agents run](#changing-the-mode-while-agents-run)).
 
 | Value | Claude Code (`session.ts`) | Codex (`permissions()` in `codex/index.ts`) |
 |---|---|---|
@@ -22,6 +23,23 @@ agent and is read when a session starts.
 
 The modes belong to the backends; Masthead only passes the choice on. With bypass, every agent can run
 any command and change any file without asking, and the settings say so.
+
+### Changing the mode while agents run
+
+When the settings change the mode, `App.updateSettings()` (`server/app/app.ts`) first tells every
+conversation (`settingsChanged()`), then calls `autoAllowPending(mode)`:
+
+- **Running sessions.** `Agent.settingsChanged()` (`server/runtime/agent.ts`, line 936) calls the
+  session's `setPermissionMode(mode)` at once, so a message delivered right after goes out under the
+  new mode. When the backend has no such method, or it throws or rejects, the session is marked stale
+  and relaunched (same session) before its next turn. Claude Code switches the live process
+  (`inherit`, and `bypassPermissions` for a process not launched with it, need the relaunch); Codex
+  sends the new policy with each later `turn/start` (`inherit` needs the relaunch). See
+  [Backend interface](Backend-Interface.md).
+- **Open approval cards** the new mode would not have asked for are allowed: with
+  `bypassPermissions` every open card except questions; with `acceptEdits` the open `file` cards.
+  Other modes allow nothing. Each allowed card is settled like an answer (`permission_resolved` goes
+  to every tab).
 
 ## The approval path
 

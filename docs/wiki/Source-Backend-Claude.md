@@ -43,6 +43,7 @@ The constructor calls `query({ prompt: channel, options })`. If that throws, `en
 | `systemPrompt` | The `claude_code` preset with `spec.instructions` appended. |
 | `canUseTool`, `stderr`, `spawnClaudeCodeProcess` | The session's own handlers (below). |
 | `resume` | When the spec has one. |
+| `additionalDirectories` | `spec.dirs` when it has any (the conversation's scratch folder), so the agent may use it without asking. |
 | `permissionMode` | Unless the spec says `'inherit'`; `bypassPermissions` also sets `allowDangerouslySkipPermissions`. |
 
 `DISALLOWED` (line 52): `Agent`, `Task`, `Workflow`, `SendMessage`, `ListAgents`, `EnterPlanMode`, `ExitPlanMode`, `EnterWorktree`, `ExitWorktree`, `ScheduleWakeup`, `CronCreate`, `CronDelete`, `CronList`, `RemoteTrigger`, `SendToProject`, `SendToProjectContext`, `PushNotification`: tools that would bypass Masthead's team or start work later or elsewhere, or that it has no screen for.
@@ -67,6 +68,7 @@ Through `spawnClaudeCodeProcess` Masthead starts Claude Code itself with `spawnT
 | `interrupt()` | `q.interrupt()`; marks the turn interrupted (unmarked if the call fails). |
 | `setEffort(e)` | `q.applyFlagSettings({ effortLevel: e })`; resolves doing nothing when there is no process. |
 | `setModel(m)` | `q.setModel(m)`; rejects with "no process" when there is none. |
+| `setPermissionMode(mode)` | `q.setPermissionMode(mode)` (line 293). Rejects with "no process" when there is none, with "needs a relaunch" for `inherit` (no mode to send) and for `bypassPermissions` when the session was not launched with it (that needs the launch flag), and with "the mode is X" when the SDK answers another mode. A rejection makes the runtime relaunch the session before its next turn. |
 | `close('graceful')` | Closes the input channel. |
 | `close('now')` | `q.close()`. Both set `closeRequested`, so no `exited` follows. |
 | `contextUsage()` | `q.getContextUsage()` → `{ used: totalTokens, max: maxTokens }`; throws "no process" when there is none. |
@@ -76,7 +78,7 @@ Through `spawnClaudeCodeProcess` Masthead starts Claude Code itself with `spawnT
 
 | SDK message | Neutral events |
 |---|---|
-| `system` / `init` | `turnStarted()` (not while a `compact()` is running), then `sessionStarted(session_id)`. Every turn starts with `init`, also turns Claude Code starts by itself. Marks `sawInit`. |
+| `system` / `init` | Marks `sawInit`. If its `capabilities` list includes `interrupt_receipt_v1`, sets `namesConsumed` (line 367): such a Claude Code names the messages each turn consumes, so a result naming none consumed none. Known from the first `init`, before any result, so the first turn of a resumed session that Claude Code starts by itself (e.g. for a background command the restart killed) cannot count what was sent as answered. Then `turnStarted()` (not while a `compact()` is running) and `sessionStarted(session_id)`. Every turn starts with `init`, also turns Claude Code starts by itself. |
 | `system` / `status` with `compacting` | `activity('Compacting its context')`. |
 | `system` / `background_tasks_changed` | `background(ids of the tasks that are not ambient)`. |
 | `system` / `compact_boundary` | `compacted()`. |
@@ -86,9 +88,9 @@ Through `spawnClaudeCodeProcess` Masthead starts Claude Code itself with `spawnT
 | `rate_limit_event` | See below. |
 | `result` | `turnEnded()` (see below), after `usage({ costUsd: total_cost_usd })`. |
 
-#### End of a turn (`result`, line 471)
+#### End of a turn (`result`, line 486)
 
-- **Consumed ids:** `user_message_uuids`, else the single `user_message_uuid`. When neither is present: `[]` if this process has already shown it names consumed messages (`namesConsumed`, set by a named result or by an `assistant` message with `user_message_uuid`), else `null`.
+- **Consumed ids:** `user_message_uuids`, else the single `user_message_uuid`. When neither is present: `[]` if this process has already shown it names consumed messages (`namesConsumed`, set by an `init` listing the `interrupt_receipt_v1` capability, a named result, or an `assistant` message with `user_message_uuid`), else `null` (line 507).
 - **Error:** for a non-success subtype (and not interrupted): the `errors` strings without those starting `[ede_diagnostic]`, joined with `; `, else the assistant error text, else the subtype with `_` as spaces. For `is_error` on a success (not interrupted, and no assistant error already held): the result text, else "The turn ended with an error.".
 - **A compaction's result** (one with `local_command: 'compact'` or naming the `/compact` message's id while `compact()` runs) settles `compact()` instead and ends no turn; see below.
 - **Text:** the result string, else the last text block.
@@ -151,7 +153,7 @@ These checks were made before or alongside the move into `server/backends/claude
 - `turnStarted()` is sent on every stream event and every assistant message, not once per turn.
 - A turn's `text` events can repeat what `turnEnded.text` carries; `turnEnded.text` prefers the result string.
 - `exited` carries the `apiError` of the last assistant error only if no `result` cleared it first.
-- `namesConsumed` is per process: a new process starts with `null` for unnamed results until it names one.
+- `namesConsumed` is per process: a new process starts with `null` for unnamed results until its `init` lists `interrupt_receipt_v1` or it names one.
 - `unifiedWindows` is outside the SDK's types and could change with any Claude Code release.
 
 ## Tests

@@ -5,9 +5,9 @@
 import type { RemoteRole } from './remote/types.ts';
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-/** A date and time for lists (remote devices, activity). */
 /** A device role in the page's words (the audit log stores the id). */
-const roleWord = (role: string) => ({ full: 'everything', approve: 'answer approvals and stop work', read: 'only read' })[role] ?? role;
+const roleWord =(role: string) => ({ full: 'everything', approve: 'answer approvals and stop work', read: 'read only' })[role] ?? role;
+/** A date and time for lists (remote devices, activity). */
 const when = (ts: number) => new Date(ts).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 
 export const T = {
@@ -139,6 +139,7 @@ export const T = {
   },
 
   team: {
+    usesTeam: (name: string) => `This chat uses the team “${name}”.`,
     title: 'Team',
     close: 'Close the team',
     hideFinished: 'Hide finished',
@@ -151,7 +152,7 @@ export const T = {
     memoryDetail: (used: string, max: string, out: string) => `${used} of ${max} tokens. All agents have written ${out}.`,
     folder: 'Folder',
     stop: (name: string) => `Stop ${name}`,
-    stopTitle: 'Stop this helper and everything under it',
+    stopTitle: (name: string) => `Stop ${name} and its helpers`,
     stopWord: 'Stop',
     levels: 'Levels',
     levelsHelp: 'Each level can start helpers on the level below it.',
@@ -175,6 +176,8 @@ export const T = {
   usage: {
     title: 'Usage',
     none: 'No usage reported yet; it appears once an agent has run.',
+    /** The closed line when nothing has been reported. */
+    notReported: 'not reported yet',
     used: (pct: number) => `${pct}% used`,
     reached: 'limit reached',
     resets: (when: string) => `Resets ${when}`,
@@ -273,14 +276,14 @@ export const T = {
     staysSignedIn: 'This browser stays signed in to Masthead until you forget it here, or the computer removes it.',
     forget: 'Forget this device',
     forgetHelp: 'Signs this browser out and removes it from the computer’s list. Use it on a phone or computer that is not yours.',
-    roleRead: 'This device can only read. It cannot send messages, answer requests or stop work.',
+    roleRead: 'This device is read only: it cannot send messages, answer requests or stop work.',
     roleApprove: 'This device can answer requests and stop work. It cannot send messages, add pictures or change settings.',
     /** Under the role line: how to get more. */
     askMore: 'To do more, change what this device may do on the computer, in Settings → Remote access.',
     /** On a request card a read-only device sees. */
-    cannotAnswer: 'This device can only read, so it cannot answer. Answer on the computer.',
+    cannotAnswer: 'This device is read only, so it cannot answer. Answer on the computer.',
     /** On the tidy-up card a read-only device sees. */
-    cannotTidy: 'This device can only read, so it cannot choose. Choose on the computer.',
+    cannotTidy: 'This device is read only, so it cannot choose. Choose on the computer.',
     /** The reply stop control for a device that may stop but not send. */
     stopReply: 'Stop reply',
   },
@@ -306,15 +309,21 @@ export const T = {
     heading: (device: string) => `${device} wants to use Masthead`,
     from: (os: string, user: string | undefined, address: string) => [os, user, address].filter(Boolean).join(' · '),
     codeLead: 'Allow it only if this code shows on that device:',
-    warning: 'Allowing this device lets it do everything you can do here, including running commands.',
+    warning: 'Everything lets this device do anything you can do here, including running commands. Choose it only for your own device.',
     role: 'What it may do',
-    allow: 'Allow',
+    /** One plain line under each choice. */
+    roleHelp: {
+      read: 'See conversations. It cannot send, answer or stop anything.',
+      approve: 'See conversations, answer approval requests and stop work. It cannot send messages.',
+      full: 'Do anything you can do here, including running commands.',
+    } satisfies Record<RemoteRole, string>,
+    allow: (role: RemoteRole) => ({ read: 'Allow, read only', approve: 'Allow approvals and stop', full: 'Allow everything' })[role],
     deny: 'Deny',
   },
   role: {
-    full: 'Everything',
+    read: 'Read only',
     approve: 'Answer approvals and stop work',
-    read: 'Only read',
+    full: 'Everything',
   } satisfies Record<RemoteRole, string>,
   section: {
     title: 'Remote access',
@@ -397,6 +406,7 @@ export const T = {
     heading: 'Teams',
     intro: 'A team is the main assistant and the helpers it may bring in, one level each.',
     forNewChats: 'Team for new chats',
+    moreInAdvanced: 'To change, copy or remove a team, turn on “Show team controls” above.',
     edit: (name: string) => `Edit ${name}`,
     close: 'Done',
     duplicate: 'Make a copy',
@@ -427,7 +437,7 @@ export const T = {
     helpers: 'Helpers at a time',
     helpersNone: 'The main assistant is always one.',
     light: 'Keep light',
-    lightHint: 'Leaves out your own extra tools (MCP servers), so it starts faster and uses less.',
+    lightHint: 'Agents on this level run light: they cannot use your connected services and tools, so they start faster and use less.',
     colour: 'Colour',
     add: 'Add a helper level',
     removeLevel: 'Remove this level',
@@ -476,6 +486,24 @@ export const T = {
     WebSearch: 'wants to search the web',
     other: (tool: string) => `wants to use ${tool}`,
   } as { [tool: string]: string | ((tool: string) => string); other: (tool: string) => string },
+
+  /** How long a helper has been on what it is doing (team outline, the chat's "waiting for" line); the lead's open question. */
+  progress: {
+    underMinute: 'under 1 min',
+    minutes: (m: number) => `${m} min`,
+    hours: (h: number, m: number) => (m > 0 ? `${h} h ${m} min` : `${h} h`),
+    /** Only a lower bound is known (the page opened while it was already at it). */
+    over: (span: string) => `over ${span}`,
+    /** Appended to what an agent is doing. */
+    sep: ' · ',
+    quietFor: (span: string) => `Nothing new for ${span}`,
+    waitingNames: (count: string, names: string) => `${count}: ${names}`,
+    showHelpers: 'Show what each helper is doing',
+    hideHelpers: 'Hide what each helper is doing',
+    openChat: (name: string) => `Open ${name}'s chat`,
+    awaitingAnswer: 'Waiting for your answer',
+    awaitingTitle: (name: string) => `${name} asked you a question. Show it`,
+  },
 
   /** The team outline's preview of an agent's latest lines. */
   preview: {

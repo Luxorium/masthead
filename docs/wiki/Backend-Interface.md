@@ -12,7 +12,7 @@ Backends in 0.2.0:
 
 ## `server/backends/types.ts`
 
-### `Backend` (line 187)
+### `Backend` (line 203)
 
 | Member | Meaning |
 |---|---|
@@ -68,10 +68,11 @@ What detection found. Never holds credentials.
 | `contextUsage` | `Session.contextUsage()` works. |
 | `lean` | Can skip the person's own MCP servers. |
 | `compact` | `Session.compact()` is available (all three backends: yes). |
+| `sessionEnv` | `SessionSpec.env` reaches only this session's process. `false` (Codex): one process serves every session, so the runtime passes no per-agent environment (no scratch `TMPDIR`) and the prompt does not promise one. |
 
 ### Capabilities per backend
 
-Read from `CLAUDE_CAPS` (`server/backends/claude/session.ts` line 60), `CODEX_CAPS` (`server/backends/codex/index.ts` line 62) and `FAKE_CAPS` (`server/backends/fake/index.ts` line 21).
+Read from `CLAUDE_CAPS` (`server/backends/claude/session.ts` line 61), `CODEX_CAPS` (`server/backends/codex/index.ts` line 63) and `FAKE_CAPS` (`server/backends/fake/index.ts` line 21).
 
 | Flag | claude-code | codex | fake |
 |---|---|---|---|
@@ -90,10 +91,11 @@ Read from `CLAUDE_CAPS` (`server/backends/claude/session.ts` line 60), `CODEX_CA
 | `contextUsage` | yes | yes | yes |
 | `lean` | yes | yes | yes |
 | `compact` | yes | yes | yes |
+| `sessionEnv` | yes | **no** | yes |
 
 The fake's flags can be overridden per instance (`new FakeBackend({ caps })`), which is how tests exercise the `consumedIds: false` and `midTurnDelivery: false` paths.
 
-### `SessionSpec` (line 79)
+### `SessionSpec` (line 83)
 
 | Field | Meaning |
 |---|---|
@@ -104,17 +106,18 @@ The fake's flags can be overridden per instance (`new FakeBackend({ caps })`), w
 | `canAskPerson` | `false` for every non-lead. |
 | `permissionMode` | The backend's mode name. |
 | `lean` | Skip the person's own MCP servers. |
-| `env` | Extra environment variables. The adapter builds the process environment and adds or removes no credentials. |
+| `dirs?` | Folders outside `cwd` the agent may use without asking: the conversation's scratch folder. Claude Code passes them as `additionalDirectories`; Codex adds them to the thread's `writableRoots` on each `turn/start` while its sandbox is `workspaceWrite`; the fake ignores them. |
+| `env` | Extra environment variables (the scratch folder as `TMPDIR`, only when `caps.sessionEnv`). The adapter builds the process environment and adds or removes no credentials. |
 
-### `ToolDef` (line 72)
+### `ToolDef` (line 76)
 
 One team tool, bound to the agent whose session it is given to: `run(input)` closes over that agent and returns the result text. `input` is a JSON Schema object (`JSONSchema = Record<string, unknown>`).
 
-### `Content`, `TextPart`, `ImagePart` (lines 95-106)
+### `Content`, `TextPart`, `ImagePart` (lines 99-110)
 
 `Content` is a string or an array of `TextPart` (`{ type: 'text', text }`) and `ImagePart` (`{ type: 'image', mediaType, data }`, with `data` base64 **without** the `data:` prefix). Images only if `caps.images`.
 
-### `Session` (line 108)
+### `Session` (line 114)
 
 | Member | Meaning |
 |---|---|
@@ -122,12 +125,13 @@ One team tool, bound to the agent whose session it is given to: `run(input)` clo
 | `interrupt()` | Interrupts the running turn. |
 | `setEffort(effort)` | May return a promise; a rejection means the change did not reach the session. |
 | `setModel?(model)` | Present when `caps.liveModel`. |
+| `setPermissionMode?(mode)` | A new permission mode (`SessionSpec.permissionMode`) for a running session, from now on or from the next turn. May return a promise; a throw or rejection means it did not take, and the runtime relaunches the session before its next turn (as it does when the method is absent). Claude Code: the SDK's `setPermissionMode` (`inherit`, and `bypassPermissions` for a session not launched with it, throw "needs a relaunch"); Codex: sent with every later `turn/start` (`inherit` throws); fake: stored. |
 | `close(how)` | `'graceful'`: end the input and let the backend finish. `'now'`: end the process at once. |
 | `contextUsage?()` | `{ used, max }`. |
 | `compact?()` | Only if `caps.compact`: compacts the session's memory between turns; resolves when done, rejects on failure. Not a turn: no `turnStarted`, `turnEnded` or text. Claude Code: the `/compact` command sent as input; Codex: `thread/compact/start`; fake: a short pause and `compacted()`. See [Compact team](Compact-Team.md). |
 | `ended` | Settles once the backend process behind the session has fully stopped (after close or exit). |
 
-### `SessionEvents` (line 141)
+### `SessionEvents` (line 157)
 
 | Event | Semantics |
 |---|---|
@@ -146,7 +150,7 @@ One team tool, bound to the agent whose session it is given to: `run(input)` clo
 | `compacted?()` | Optional: earlier context was summarized (also after `Session.compact()`). |
 | `activity?(text)` | Optional: a backend-specific state worth showing (for example compacting); `undefined` clears it. |
 
-`TurnResult` (line 129): `consumed` is the ids of the runtime's messages this turn consumed. **`null`** means the backend cannot tell (the runtime then counts everything sent as answered); **`[]`** means none, a turn the backend started by itself. `text` is the turn's final text, `error?` a failure, `apiError?` how the backend classed an API error (for example `'rate_limit'`; the runtime decides what a usage limit is), `interrupted` whether it was interrupted.
+`TurnResult` (line 145): `consumed` is the ids of the runtime's messages this turn consumed. **`null`** means the backend cannot tell (the runtime then counts everything sent as answered); **`[]`** means none, a turn the backend started by itself. `text` is the turn's final text, `error?` a failure, `apiError?` how the backend classed an API error (for example `'rate_limit'`; the runtime decides what a usage limit is), `interrupted` whether it was interrupted.
 
 ### `PermissionAsk` and `PermissionAnswer` (lines 170, 181)
 
@@ -158,18 +162,18 @@ One team tool, bound to the agent whose session it is given to: `run(input)` clo
 
 `BackendStatus` (line 16) is `BackendInfo & { models: ModelInfo[] }`: what the page learns about one backend.
 
-### `class BackendRegistry` (line 28)
+### `class BackendRegistry` (line 30)
 
 | Member | Behaviour |
 |---|---|
-| constructor (line 34) | With `MASTHEAD_BACKEND=fake` but no `MASTHEAD_ALLOW_FAKE=1` it **throws** ("for tests only"). With both, it holds only a `FakeBackend` (step time from `MASTHEAD_FAKE_STEP_MS`, default 20 ms here) and returns. Otherwise it holds `ClaudeBackend` (from the `ClaudeInfo` found at start-up) and, unless `codex: false`, `CodexBackend`. Before detection, Claude Code's status is as found at start-up (`signedIn: null`, no models) and Codex has no status at all. |
+| constructor (line 36) | With `MASTHEAD_BACKEND=fake` but no `MASTHEAD_ALLOW_FAKE=1` it **throws** ("for tests only"). With both, it holds only a `FakeBackend` (step time from `MASTHEAD_FAKE_STEP_MS`, default 20 ms here) and returns. Otherwise it holds `ClaudeBackend` (from the `ClaudeInfo` found at start-up) and, unless `codex: false`, `CodexBackend`. Before detection, Claude Code's status is as found at start-up (`signedIn: null`, no models) and Codex has no status at all. |
 | `fake` | The `FakeBackend` when selected, else `null`. |
-| `detectAll()` (line 62) | Runs every backend's `detect()` in parallel, then `models()` for the available ones. Never throws: a failing `detect()` becomes `available: false` with its message as `error`; a failing `models()` keeps it available with a `warning` ("Its models could not be read: …"). Returns `status()`. |
-| `status()` (line 85) | Copies of every status, models included. |
-| `get(id)` (line 90) | The fake for **any** id when it is selected. Otherwise `undefined` when the status says `available: false`, else the backend (also for a backend not yet detected). |
-| `unavailableReason(id)` (line 97) | "There is no agent backend called …" for an unknown id; else the status's `error`, or "<label> cannot be used right now." |
-| `generatedProfiles()` (line 104) | `[codexProfile(models)]` when Codex is detected and available; `[]` with the fake or without Codex. |
-| `dispose()` (line 111) | Calls every backend's `dispose?()`, ignoring failures. `App.shutdown()` calls it. |
+| `detectAll()` (line 64) | Runs every backend's `detect()` in parallel, then `models()` for the available ones. Never throws: a failing `detect()` becomes `available: false` with its message as `error`; a failing `models()` keeps it available with a `warning` ("Its models could not be read: …"). Returns `status()`. |
+| `status()` (line 87) | Copies of every status, models included. |
+| `get(id)` (line 92) | The fake for **any** id when it is selected. Otherwise `undefined` when the status says `available: false`, else the backend (also for a backend not yet detected). |
+| `unavailableReason(id)` (line 99) | "There is no agent backend called …" for an unknown id; else the status's `error`, or "<label> cannot be used right now." |
+| `generatedProfiles()` (line 112) | `[codexProfile(models)]` when Codex is detected and available; `[]` with the fake or without Codex. |
+| `dispose()` (line 119) | Calls every backend's `dispose?()`, ignoring failures. `App.shutdown()` calls it. |
 
 ### When detection runs
 
@@ -184,19 +188,19 @@ A version 2 page gets `backends: BackendStatus[]` in its `state` (`server/app/ap
 
 ### `codexProfile(models)` and `server/backends/codex/families.ts`
 
-`codexProfile` (registry line 135) builds the built-in **Codex** team profile from the installed Codex's model list. `codexTeamModels()` (families line 32) orders the models:
+`codexProfile` (registry line 143) builds the built-in **Codex** team profile from the installed Codex's model list. `codexTeamModels()` (families line 32) orders the models:
 
 1. `parseCodexModel(id)` (families line 12) reads ids shaped `<word>-<version>-<family>`, e.g. `gpt-6.2-astra` → family `astra`, version `[6, 2]`. An id of another shape counts as its own family.
 2. For each family only the **newest version** is kept (versions compared number by number).
 3. Known families come first, in `CODEX_FAMILY_ORDER` (families line 9): **astra > sol > terra > luna**. This table is data: Codex's own catalogue has no capability rank.
 4. Unknown families follow in catalogue order (`order`, else list position).
 
-The profile takes the first **four** at most (one tier if only one model). Tier ids are `codex:0`, `codex:1`, …, `backend: 'codex'`, label = model label, colour from `PALETTE` in turn. Per tier (`TIER_SHAPE`, registry line 116):
+The profile takes the first **four** at most (one tier if only one model). Tier ids are `codex:0`, `codex:1`, …, `backend: 'codex'`, label = model label, colour from `PALETTE` in turn. Per tier (`TIER_SHAPE`, registry line 124):
 
 | Tier | Wanted effort | max | lean |
 |---|---|---|---|
 | `codex:0` (lead) | xhigh | 1 | no |
-| `codex:1` | xhigh | 3 | yes |
+| `codex:1` | xhigh | 3 | no |
 | `codex:2` | high | 4 | yes |
 | `codex:3` | medium | 4 | yes |
 

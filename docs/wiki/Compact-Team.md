@@ -6,14 +6,14 @@ Everything here was read from the code. It is covered by `test/compact-app.test.
 
 ## What starts it
 
-Two numbers in `conversation.ts` set the threshold: `COMPACT_SUGGEST_HELPERS = 15` finished helpers and `COMPACT_SUGGEST_MEMORY = 0.7` (70 % of the lead's `usage.contextMax`). A "finished helper" here is one that is not the lead, not live and not archived (`archivable()`).
+Three numbers in `conversation.ts` set the threshold: `COMPACT_SUGGEST_HELPERS = 10` finished helpers, and the lead's memory counts as full (`memoryFull()`) at `COMPACT_SUGGEST_MEMORY = 0.7` (70 % of its `usage.contextMax`) or at `COMPACT_SUGGEST_TOKENS = 200_000` tokens of `usage.context`, whichever comes first (a 1M window reaches 70 % only at 700k). A "finished helper" here is one that is not the lead, not live and not archived (`archivable()`).
 
 - **`/compact`.** Text sent to the lead of an existing conversation that is exactly `/compact`, optionally followed by words, with no images, is not chat: `App` calls `Conversation.startCompact(words)` (see [Browser/server protocol](Browser-Server-Protocol.md)). The words go to the lead as the flow's `note`. Sent to a helper, or with images, it is an ordinary message.
 - **Automatically.** When the lead's turn ends without being interrupted or failing, `leadTurnEndedForCompact()` starts a tidy with `startCompact('', { auto: true, reason })` if automatic tidying is on, no tidy is running, the person has no approval open for the lead, and either:
-  - there are 15 or more finished helpers **and** at least 15 more helpers have finished (archived ones counted) since the last tidy (`meta.compactMark.finished`); or
-  - the lead's memory is 70 % full or more **and** memory is "armed".
-  The reason is "the team has N finished helpers" or "the lead's memory is N% full".
-- **The cool-down** is `meta.compactMark = {finished, memoryArmed}`. An automatic tidy records the helpers finished so far and disarms memory if memory set it off. A `/compact` records the helpers finished so far and disarms memory. Memory re-arms at a lead turn end where it is back under 70 %; that turn end starts nothing.
+  - there are 10 or more finished helpers **and** at least 10 more helpers have finished (archived ones counted) since the last tidy (`meta.compactMark.finished`); or
+  - the lead's memory is full (70 % or 200k tokens) **and** memory is "armed".
+  The reason is "the team has N finished helpers", "the lead's memory is N% full" or "the lead's memory is at Nk tokens".
+- **The cool-down** is `meta.compactMark = {finished, memoryArmed}`. An automatic tidy records the helpers finished so far and disarms memory if memory set it off. A `/compact` records the helpers finished so far and disarms memory. Memory re-arms at a lead turn end where it is no longer full (under 70 % and under 200k tokens); that turn end starts nothing.
 
 ### Automatic tidying on or off
 
@@ -22,7 +22,7 @@ Two numbers in `conversation.ts` set the threshold: `COMPACT_SUGGEST_HELPERS = 1
 With automatic tidying off:
 
 - Nothing starts by itself.
-- Once per conversation, when the team has 15 finished helpers or the lead's memory is 70 % full, the person's next message to the lead is prefixed with a line from `compactHint()`: "Masthead: … You may suggest once, in your reply, that the person type /compact to tidy the team." `meta.compactSuggested` is then set, so it is not said again.
+- Once per conversation, when the team has 10 finished helpers or the lead's memory is full (70 % or 200k tokens), the person's next message to the lead is prefixed with a line from `compactHint()`: "Masthead: … You may suggest once, in your reply, that the person type /compact to tidy the team." `meta.compactSuggested` is then set, so it is not said again.
 - `/compact` still works, and the lead's choice goes to the person on a card (below).
 
 The `auto` flag is taken when a flow starts, so changing the setting does not change a flow already under way.
@@ -36,7 +36,7 @@ The flow's state is `meta.compact`, a `CompactState` from `shared/protocol.ts`, 
 | `asked` | The lead has been asked to choose who to keep. | `proposed` (automatic off) or `archiving` (automatic on) when the lead calls `compact_team`; `cancelled` if it does not. |
 | `proposed` | The person sees the card. | `archiving` on Tidy up; `cancelled` on Not now. |
 | `archiving` | The chosen helpers are being archived. | `compacting` straight away. |
-| `compacting` | Each agent that stays compacts its memory in turn; `pending` lists who is left. | `done`. |
+| `compacting` | Each agent that stays compacts its memory, helpers 3 at a time, then the lead; `pending` lists who is left. | `done`. |
 | `done` | Finished; the summary notice has been added. | A later tidy replaces it. |
 | `cancelled` | Stopped by the person, declined on the card, or left unanswered by the lead. | A later tidy replaces it. |
 
@@ -83,11 +83,11 @@ In the [state machine](State-Machine.md) an archived agent has `archived: true` 
 - **Nothing is deleted.** The helper stays in `conversation.json` with `info.archived` set, and its transcript in `items/` is untouched ([Storage on disk](Storage-on-Disk.md)).
 - **It leaves the team list.** `list_agents` leaves it out and adds a line "N archived helpers: read their chats with read_archive."; the page moves it to the "Archived helpers (M)" row under the team tree ([TeamOutline](Source-Web-Components.md#teamoutlinesvelte)).
 - **It cannot be given work.** `send_message` to it returns "Error: … is archived and cannot be woken. Read its chat with read_archive."; the person's message to it is stored with the notice "… is archived. Restore it from the archived helpers to message it." `set_agent_effort` treats it as not in the team.
-- **Its chat stays readable.** Agents use `read_archive`: with no name, a list of archived helpers with tier, job, when archived and the first lines of their last reply; with a name, that chat as plain text, 12,000 characters a page (`ARCHIVE_PAGE_CHARS`), optionally only lines with a `search` word and one line around each. The page uses `archive_items {convId, agentId, before?, limit?}`, which works like `items` but only for an archived agent ("That agent is not archived here." otherwise); `read` devices may send it. The chat opens read-only, with an Archived note and Restore in place of the composer.
+- **Its chat stays readable.** Agents use `read_archive`: with no name, a list of archived helpers with tier, job, when archived and the first lines of their last reply; with a name, the chat of any finished helper (done, stopped or failed, archived or not; never the lead or a helper still working) as plain text, 12,000 characters a page (`ARCHIVE_PAGE_CHARS`), optionally only lines with a `search` word and one line around each. The page uses `archive_items {convId, agentId, before?, limit?}`, which works like `items` but only for an archived agent ("That agent is not archived here." otherwise); `read` devices may send it. The chat opens read-only, with an Archived note and Restore in place of the composer.
 
 ## Compacting memory
 
-`compactOrder()` lists who compacts: every helper that is not archived and has a session or is live, then the lead, last. `runCompact()` goes through `pending` one at a time:
+`compactOrder()` lists who compacts: every helper that is not archived and has a session or is live, then the lead, last. `runCompact()` runs `COMPACT_PARALLEL = 3` workers over the helpers in `pending`, so up to three helpers compact at once; each name leaves `pending` as its compaction finishes. The lead goes last, after every helper is done (`compactOne()` decides for each):
 
 - A missing or archived agent is skipped silently.
 - A helper that is running, queued or busy is skipped and recorded in `failed` as "still working".

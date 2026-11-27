@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EFFORTS, type Effort, type Question, type RateLimitNotice } from '../../../shared/protocol.js';
+import { EFFORTS, VERSION, type Effort, type Question, type RateLimitNotice } from '../../../shared/protocol.js';
 import type { Backend, BackendCaps, BackendInfo, Content, ImagePart, ModelInfo, PermissionAnswer, PermissionAsk, Session, SessionEvents, SessionSpec } from '../types.js';
 import {
   catalogArgs,
@@ -45,6 +45,7 @@ import type { ThreadStartParams } from './protocol/v2/ThreadStartParams.js';
 import type { ThreadResumeParams } from './protocol/v2/ThreadResumeParams.js';
 import type { ThreadStartResponse } from './protocol/v2/ThreadStartResponse.js';
 import type { TurnStartParams } from './protocol/v2/TurnStartParams.js';
+import type { SandboxPolicy } from './protocol/v2/SandboxPolicy.js';
 import type { TurnStartResponse } from './protocol/v2/TurnStartResponse.js';
 import type { TurnSteerParams } from './protocol/v2/TurnSteerParams.js';
 import type { UserInput } from './protocol/v2/UserInput.js';
@@ -75,6 +76,8 @@ export const CODEX_CAPS: BackendCaps = {
   contextUsage: true,
   lean: true,
   compact: true,
+  // One app-server serves every session: an agent's env (its scratch TMPDIR) cannot be its own.
+  sessionEnv: false,
 };
 
 /** Codex levels Masthead never sends: `max` (no max in Masthead) and `ultra` ("automatic task delegation"). */
@@ -99,6 +102,8 @@ interface Server {
   catalogFile: string;
   /** Models already checked with debug prompt-input: model -> native agent tools found ([] = clean). */
   checked: Map<string, Promise<string[]>>;
+  /** The person's own config sandbox per cwd (for inherit), learned once per process with an ephemeral probe thread. */
+  ownSandbox: Map<string, Promise<SandboxPolicy | null>>;
 }
 
 export class CodexBackend implements Backend {
@@ -207,7 +212,7 @@ export class CodexBackend implements Backend {
     const prepared = await prepareCatalog(this.run, path, env, this.dataDir);
     const proc = this.spawnServer(path, ['app-server', ...catalogArgs(prepared.file)], env);
     const peer = new RpcPeer(proc.stdin, proc.stdout);
-    const server: Server = { peer, kill: () => proc.kill(), catalog: prepared.models, catalogFile: prepared.file, checked: new Map() };
+    const server: Server = { peer, kill: () => proc.kill(), catalog: prepared.models, catalogFile: prepared.file, checked: new Map(), ownSandbox: new Map() };
     this.current = server;
     let alive = true;
     proc.onExit((detail) => {
@@ -222,7 +227,7 @@ export class CodexBackend implements Backend {
     peer.onNotification = (method, params) => this.notification(method, params);
     peer.onRequest = (method, params, id) => this.request(method, params, id);
     const init: InitializeParams = {
-      clientInfo: { name: 'masthead', title: 'Masthead', version: '0.2.0' },
+      clientInfo: { name: 'masthead', title: 'Masthead', version: VERSION },
       capabilities: { experimentalApi: true, requestAttestation: false },
     };
     await peer.request('initialize', init);
@@ -315,6 +320,7 @@ export class CodexSession implements Session {
   private endedResolve!: () => void;
   readonly ended: Promise<void> = new Promise((r) => (this.endedResolve = r));
 
+
   constructor(
     private backend: CodexBackend,
     private spec: SessionSpec,
@@ -341,13 +347,33 @@ export class CodexSession implements Session {
       let thread: ThreadStartResponse['thread'];
       if (this.spec.resume) {
         const params: ThreadResumeParams = { threadId: this.spec.resume, ...common, excludeTurns: true };
-        thread = (await server.peer.request('thread/resume', params)).thread;
+        const r = await server.peer.request('thread/resume', params);
+        thread = r.thread;
+        if (this.closed) return;
+        // A thread keeps the sandbox it last had (a turn's override included), and resume cannot change
+        // it (codex 0.172). So the sandbox this mode gives a new thread is learned and, where it differs,
+        // sent with every turn: a chat never runs wider than its mode says.
+        const reported: SandboxPolicy | null = r.sandbox ?? null;
+        const wanted = await this.wantedSandbox(server, common);
+        if (this.closed) return;
+        if (!wanted) {
+          if (reported?.type === 'dangerFullAccess' || !reported) {
+            void server.peer.request('thread/unsubscribe', { threadId: thread.id }).catch(() => {});
+            return this.fail('This chat\'s Codex thread may still have full access, and Masthead cannot tell which sandbox the permission mode "inherit" should give it, so it was not resumed. Pick another permission mode in Settings, or start a new chat.');
+          }
+          this.threadSandbox = reported;
+        } else {
+          this.threadSandbox = wanted;
+          if (!sameSandbox(wanted, reported)) this.sandboxOverridden = true;
+        }
       } else {
         const params: ThreadStartParams = {
           ...common,
           dynamicTools: this.spec.tools.map((t) => ({ type: 'function' as const, name: t.name, description: t.description, inputSchema: t.input as any })),
         };
-        thread = ((await server.peer.request('thread/start', params)) as ThreadStartResponse).thread;
+        const r = (await server.peer.request('thread/start', params)) as ThreadStartResponse;
+        thread = r.thread;
+        this.threadSandbox = r.sandbox ?? null;
       }
       if (this.closed) return;
       this.threadId = thread.id;
@@ -385,8 +411,8 @@ export class CodexSession implements Session {
    * Approvals always reach Masthead (approvalsReviewer "user"), except with bypass, where nothing asks.
    * inherit keeps the person's own policy and sandbox.
    */
-  private permissions(): Partial<ThreadStartParams> {
-    switch (this.spec.permissionMode) {
+  private permissions(mode = this.spec.permissionMode): Partial<ThreadStartParams> {
+    switch (mode) {
       case 'bypassPermissions':
         return { approvalPolicy: 'never', sandbox: 'danger-full-access' };
       case 'default':
@@ -460,6 +486,80 @@ export class CodexSession implements Session {
   setModel(model: string): void {
     this.model = model; // sent with the next turn/start
   }
+
+  /**
+   * Sent with the next turn/start (it overrides the thread's policy from then on): the approval policy
+   * changes; the sandbox stays the session's own (what the thread started with, or after a resume what
+   * its mode wants), except that bypass opens it fully. inherit relaunches, and so does leaving bypass
+   * when there is no narrower sandbox of the session's own to go back to (unknown, or full access).
+   */
+  setPermissionMode(mode: string): void {
+    if (mode === 'inherit') throw new Error('needs a relaunch');
+    const p = this.permissions(mode);
+    // Back from full access needs the thread's own sandbox: unknown, or full access itself, means relaunch.
+    if (p.sandbox !== 'danger-full-access' && (this.threadSandbox?.type === 'dangerFullAccess' || (this.sandboxOverridden && !this.threadSandbox))) throw new Error('needs a relaunch');
+    this.spec = { ...this.spec, permissionMode: mode };
+    this.approvals = { approvalPolicy: p.approvalPolicy, approvalsReviewer: p.approvalsReviewer ?? null };
+  }
+
+  /**
+   * The sandbox a brand-new thread gets in this mode. Bypass: full access; default/acceptEdits/auto: the
+   * workspace-write one their sandbox param gives (seen on codex 0.172: no roots, network off). inherit:
+   * the person's own config, from an ephemeral probe thread (no turn, no usage, in no thread list; it
+   * stays loaded in the app-server until it ends, so it is done once per process and cwd). null: unknown.
+   */
+  private wantedSandbox(server: Server, common: Partial<ThreadStartParams>): Promise<SandboxPolicy | null> {
+    const sandbox = this.permissions().sandbox;
+    if (sandbox === 'danger-full-access') return Promise.resolve({ type: 'dangerFullAccess' });
+    if (sandbox === 'workspace-write') return Promise.resolve({ type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false });
+    const cwd = this.spec.cwd;
+    let own = server.ownSandbox.get(cwd);
+    if (!own) {
+      own = (async () => {
+        try {
+          const probe = (await server.peer.request('thread/start', { cwd, config: common.config, ephemeral: true } satisfies ThreadStartParams)) as ThreadStartResponse;
+          void server.peer.request('thread/unsubscribe', { threadId: probe.thread.id }).catch(() => {});
+          return probe.sandbox ?? null;
+        } catch {
+          return null; // an older Codex without ephemeral threads
+        }
+      })();
+      server.ownSandbox.set(cwd, own);
+    }
+    return own;
+  }
+
+  /** The thread's sandbox: as reported at start, or after a resume the one its mode wants. For turn/start overrides. */
+  private threadSandbox: SandboxPolicy | null = null;
+  /** An approval policy changed since launch (setPermissionMode). */
+  private approvals: Pick<TurnStartParams, 'approvalPolicy' | 'approvalsReviewer'> | null = null;
+
+  /**
+   * What turn/start overrides: a changed approval policy, and the sandbox when it must differ from the
+   * thread's: fully open under bypass, or a workspace-write sandbox that also lets the agent write in
+   * its folders outside cwd (SessionSpec.dirs, its scratch folder). Nothing when nothing changed.
+   * A read-only thread (the person's own setting) is never widened, so it cannot write in its scratch
+   * folder, though its prompt (built before the sandbox is known) still names it.
+   */
+  private turnOverrides(): Partial<TurnStartParams> {
+    // sandboxOverridden: a sandbox has been (or must be) sent; it sticks, so it is sent on every turn.
+    const out: Partial<TurnStartParams> = { ...(this.approvals ?? {}) };
+    const sb = this.threadSandbox;
+    if (this.approvals && this.spec.permissionMode === 'bypassPermissions') {
+      out.sandboxPolicy = { type: 'dangerFullAccess' };
+      this.sandboxOverridden = true;
+    } else if (sb?.type === 'workspaceWrite') {
+      const extra = (this.spec.dirs ?? []).filter((d) => !sb.writableRoots.includes(d));
+      if (extra.length || this.sandboxOverridden) out.sandboxPolicy = { ...sb, writableRoots: [...sb.writableRoots, ...extra] };
+    } else if (sb && this.sandboxOverridden) {
+      // An override sticks on the thread: put back (or keep putting) the sandbox it should have.
+      out.sandboxPolicy = sb;
+    }
+    return out;
+  }
+
+  /** A sandbox override has been sent (full access under bypass): every later turn sends the sandbox again. */
+  private sandboxOverridden = false;
 
   close(how: 'graceful' | 'now'): void {
     if (this.closed) return;
@@ -636,6 +736,7 @@ export class CodexSession implements Session {
       input: msgs.flatMap((m) => m.input),
       model: this.model,
       effort: this.effort,
+      ...this.turnOverrides(),
       ...(msgs[0]?.id ? { clientUserMessageId: msgs[0].id } : {}),
     };
     this.request<TurnStartResponse>('turn/start', params).then(
@@ -886,4 +987,11 @@ function mcpContent(items: unknown): { text: string; images: ImagePart[] } {
     } else texts.push(`[${String(c?.type)}]`);
   }
   return { text: texts.join('\n'), images };
+}
+
+/** Whether two sandbox policies are the same (writable roots in any order). */
+export function sameSandbox(a: SandboxPolicy | null, b: SandboxPolicy | null): boolean {
+  if (!a || !b) return a === b;
+  const norm = (p: SandboxPolicy) => JSON.stringify(p.type === 'workspaceWrite' ? { ...p, writableRoots: [...p.writableRoots].sort() } : p, Object.keys(p).sort());
+  return a.type === b.type && norm(a) === norm(b);
 }

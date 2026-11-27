@@ -9,11 +9,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const shots = resolve(process.argv[2] ?? join(tmpdir(), 'masthead-e2e-shots'));
-mkdirSync(shots, { recursive: true });
-
-// A fresh data folder every run: the test checks the empty first load.
+// A fresh data folder every run: the test checks the empty first load. Removed when the test passed,
+// kept (path printed) when it failed; screenshots go in it unless a folder is given.
 const tmp = mkdtempSync(join(tmpdir(), 'masthead-e2e-'));
+const shots = resolve(process.argv[2] ?? join(tmp, 'shots'));
+mkdirSync(shots, { recursive: true });
 const data = join(tmp, 'data');
 const config = join(tmp, 'config');
 const work = join(tmp, 'work');
@@ -114,11 +114,13 @@ try {
       res();
     });
   });
-  try {
-    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  } catch {
-    // a file still held open (Windows); the system's temp clean-up gets it later
-  }
+  if (code === 0) {
+    try {
+      rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      // a file still held open (Windows); the system's temp clean-up gets it later
+    }
+  } else console.log(`test folder kept for a look: ${tmp}`);
 }
 console.log(code === 0 ? 'browser test passed' : `browser test failed (${code}); screenshots in ${shots}`);
 process.exitCode = code;

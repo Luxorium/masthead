@@ -49,7 +49,7 @@ test('remote: a pending request gets a six-digit code; a second asker for the sa
   assert.deepEqual(b, { refused: 'A request from this device is already waiting for approval.' });
   assert.ok(!JSON.stringify(b).includes(a.request.code), 'the code is not revealed');
   assert.equal(registry.collect(a.request.id, a.pollSecret, phone.nodeId).state, 'pending', "the first asker's secret still works");
-  registry.allow(a.request.id);
+  assert.equal(registry.allow(a.request.id)?.role, 'read', 'without a role, the most limited one');
   assert.equal(registry.collect(a.request.id, a.pollSecret, phone.nodeId).state, 'allowed');
   assert.equal(registry.requests().length, 0);
 });

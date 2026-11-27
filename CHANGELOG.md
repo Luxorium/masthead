@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.2.1-beta.1
+
+A pre-release. Its fixes come from analysing real chats on two machines, including a day when a
+virtual machine ran out of memory in the middle of a team's work.
+
+After updating, if Masthead starts at login: run `masthead service install` (or `scripts/install.sh`
+again) once. `masthead doctor` and `masthead service status` call the service out of date until then
+(when it lacks `OOMPolicy=continue` or the line that records why it stopped).
+
+Restarts and crashes
+- On Linux, one program running out of memory no longer stops Masthead and every agent with it
+  (the service now has `OOMPolicy=continue`), and the service records why it last stopped. When that
+  reason is known (for example out of memory), every chat used in the last 6 hours says so once, even
+  if nothing was cut off there.
+- After a restart the main assistant gets a turn of its own listing each helper that was stopped
+  (its task and who started it), unless the chat had been idle for 6 hours or more. A main assistant
+  cut off mid-turn is asked once to carry on. Your last message, if it was never answered, is sent
+  again once.
+- A restart stops every agent's tools and browsers too.
+- `list_agents` says "stopped by a restart before it finished"; tidying keeps such helpers.
+- Fixed: a helper woken after a restart could be marked done with an empty report while it kept
+  working.
+- A report is the helper's last full answer plus any short lines after it, and is never replaced by
+  text from a turn the agent started by itself. While a helper waits only on a background command,
+  the one that started it gets a notice.
+- A message that starts no turn within 60 seconds counts as answered, with a notice. Messages that
+  arrive while the main assistant is still answering you are marked so for it.
+- An interrupted agent's turn is counted, and its cost is marked incomplete instead of showing $0.
+
+Settings and agents
+- Changing when agents ask before acting reaches running agents at once (Claude Code at once; Codex
+  from its next turn). On Codex only the approval rule changes; never asking also gives full access,
+  and going back to the agent program's own setting, or leaving never asking, restarts the agent's
+  session before its next turn. Switching to
+  never asking approves the requests already open.
+- Fixed (found on real Codex 0.172): once a Codex chat had full access for a turn ("never ask"), Codex
+  kept full access on that thread even after the mode was changed back or Masthead restarted. Now,
+  each time Masthead reopens a Codex session, it works out what a new chat in the current mode would
+  get and, if the thread reports something else, enforces that on every turn. For "follow my Codex
+  settings" it learns your own setting from a throwaway thread that is never saved (no turn, no
+  usage; once per working folder; it may briefly start your connected services). If that cannot be
+  learned and the thread has full access, the agent does not start and you are asked to pick a mode
+  or start a new chat.
+- Tidying starts at about 10 finished helpers, or when the main assistant's memory is 70 % full or at
+  200,000 tokens, whichever comes first; it compacts 3 helpers at a time. `read_archive` reads any
+  finished helper, not only archived ones.
+- The built-in Opus level and the second level of a Codex team are no longer "Keep light" by
+  default, so they can use your connected services. Saved teams keep their setting: in the team
+  editor, untick **Keep light** on that level.
+- Usage survives a restart (`usage.json` in the data folder).
+- Each chat has a private scratch folder, given to its agents as their temporary folder (`TMPDIR`):
+  `~/.cache/masthead/scratch/<chat>` on Linux (`~/Library/Caches/Masthead/scratch` on macOS,
+  `%LOCALAPPDATA%\Masthead\Cache\scratch` on Windows; inside the data folder when
+  `MASTHEAD_DATA_DIR` is set). Codex agents share one Codex process, so they get no `TMPDIR` of
+  their own: the folder is named in their instructions and made writable for them, unless your own
+  Codex setting is read-only. The folder is deleted with the chat. At start, folders of deleted chats
+  are removed, and so are those of chats where neither the chat nor anything in the folder changed
+  for 7 days.
+- Finished tool calls are stored without repeating their input. Going back to 0.2.0 shows those
+  tools without their input.
+- The main assistant reports milestones and decisions rather than every helper report, knows that
+  pictures it reads are shown to you, and knows which levels cannot use your connected services.
+  Agents are told when their thinking time changed.
+- A device approved without a level chosen is read only, everywhere.
+
+`masthead doctor`
+- Flags a service written by an older Masthead (no `OOMPolicy=continue`, or no record of why it
+  stopped); `masthead service install` once fixes it.
+- Linux: shows the service's memory and its number of child processes (agents' tools and browsers),
+  and warns past half the computer's memory; warns when `/tmp` is a small or nearly full tmpfs.
+
+Page
+- Helper rows show what each helper is doing and for how long. "Waiting for N helpers" names them
+  and opens to the detail. A **Waiting for your answer** button jumps to the main assistant's
+  question.
+- Approving a device offers three plain choices and starts on **Read only**.
+- The stop button always says **Stop**. Usage says "not reported yet" until there is something to show.
+- In the simple view, editing teams is behind **Show team controls**. The Team panel names the chat's
+  team when you have several. The **Keep light** hint says what it really does.
+
+For contributors
+- `npm test` and `npm run test:web` run inside one temporary folder that is removed at the end
+  (`scripts/run-tests.mjs`; `MASTHEAD_KEEP_TMP=1` keeps it). Live and browser tests remove their work
+  folder when they pass and keep it on failure; the picture test no longer writes 35 MB.
+
+Known limits
+- The restart handling was checked on real Claude Code (`test/restart.live.ts`): after a clean stop
+  with a helper mid-command the main assistant is told and sets the helper going again; an
+  unanswered message is answered once; after a hard kill mid-turn the main assistant carries on; a
+  second restart sends nothing. A real out-of-memory kill has not been tried.
+- The update from 0.2.0 itself does not resume a main assistant that was mid-task, because 0.2.0
+  does the stopping and does not record it. Send any message to carry on.
+- Codex permission changes: going from "never ask" back to asking is checked on real Codex
+  (`test/codex-app.live.ts`, 10 steps). "Follow my Codex settings", the refusal to start, and
+  read-only threads are covered only by tests against a fake Codex.
+- A read-only Codex chat cannot write to its scratch folder, although its instructions name it.
+- Whether browsers started by agents keep their profiles in the scratch folder (through `TMPDIR`) is
+  not verified.
+
 ## 0.2.0
 
 Masthead for anybody: simple by default, on Linux, macOS and Windows, able to run a team on Claude

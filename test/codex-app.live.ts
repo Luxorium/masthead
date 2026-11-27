@@ -15,6 +15,9 @@ import { BackendRegistry } from '../server/backends/registry.ts';
 import type { SessionEvents, SessionSpec } from '../server/backends/types.ts';
 import { defaultSettings } from '../server/settings/settings.ts';
 import { Store } from '../server/storage/store.ts';
+import { Recorder, spec } from './backend-conformance.ts';
+import type { CodexBackend } from '../server/backends/codex/index.ts';
+import { finishWorkFolder } from './workdir.ts';
 
 const model = process.env.MASTHEAD_CODEX_MODEL ?? 'gpt-6-luna';
 const dir = mkdtempSync(join(tmpdir(), 'masthead-codex-app-'));
@@ -178,6 +181,42 @@ try {
     check('the Codex helper of a Claude lead ran and finished', [...agents.values()].some((a) => a.tier === 'mixed:1' && a.status === 'done'));
     check('its report reached the Claude lead', items(conv, 'text').some((i) => /PINEAPPLE/i.test(i.text)));
   }
+
+  {
+    log('--- a turn in bypass sticks to the thread; a relaunch in default puts it back on workspace-write');
+    const codexBackend = backend as CodexBackend;
+    const say = async (s: ReturnType<typeof backend.open>, r: Recorder, id: string, n: number) => {
+      s.send(id, 'Reply with the single word OK. Do not use tools.');
+      await r.until(`turn ${n}`, () => r.turns.length >= n || r.exitedWith !== null, 180_000);
+    };
+    // What a plain resume reports: the sandbox the thread keeps (golf's probe: a turn override sticks).
+    const kept = async (threadId: string) => {
+      const server = await codexBackend.ensureServer({});
+      const r: any = await server.peer.request('thread/resume', { threadId, cwd: dir, excludeTurns: true });
+      await server.peer.request('thread/unsubscribe', { threadId }).catch(() => {});
+      return r.sandbox?.type as string | undefined;
+    };
+    const base = { model, effort: 'low' as const, cwd: dir, env: {}, permissionMode: 'default' };
+    const r1 = new Recorder();
+    const s1 = backend.open(spec(base), r1);
+    await say(s1, r1, 'a', 1);
+    s1.setPermissionMode!('bypassPermissions');
+    await say(s1, r1, 'b', 2);
+    s1.close('graceful');
+    await s1.ended;
+    const threadId = r1.sessionId!;
+    const before = await kept(threadId);
+    log('after the bypass turn the thread keeps:', before);
+    check('the bypass turn left the thread at full access (the hole this guards)', before === 'dangerFullAccess');
+    const r2 = new Recorder();
+    const s2 = backend.open(spec({ ...base, resume: threadId }), r2);
+    await say(s2, r2, 'c', 1);
+    s2.close('graceful');
+    await s2.ended;
+    const after = await kept(threadId);
+    log('after a turn of the default-mode relaunch it keeps:', after);
+    check('the relaunched default-mode turn ran on workspace-write', !r2.exitedWith && after === 'workspaceWrite');
+  }
 } catch (e) {
   log('FAILED:', (e as Error).message);
   failed = true;
@@ -191,6 +230,7 @@ try {
       // ephemeral or already gone
     }
   }
-  log(`deleted ${created.size} test thread(s); ${failed ? 'WITH FAILURES' : 'all passed'} - work folder: ${dir}`);
+  log(`deleted ${created.size} test thread(s); ${failed ? 'WITH FAILURES' : 'all passed'}`);
+  finishWorkFolder(dir, failed, log);
   process.exit(failed ? 1 : 0);
 }

@@ -479,21 +479,26 @@ test('wait: the envelope tells the recipient the sender is waiting', () => {
   assert.match(systemAppend({ tier: 'sonnet', name: 'c', parentName: 'b', settings }), /ask "b" with send_message and wait: true/);
 });
 
-test('restart: the lead is told which agents were cut off, once, with the person\'s next message', async () => {
+test('restart: in a chat idle for hours, the lead is told which agents were cut off, once, with the person\'s next message', async () => {
   const { conv, host, block } = setup();
   block('opus');
   conv.spawn(conv.lead, 'Audit', 'task', undefined);
   conv.lead.setStatus('waiting');
   const stored = JSON.parse(JSON.stringify(conv.toStored()));
+  // Last active long ago (an upgrade over an old chat): no turn of its own (see test/restart.test.ts for a recent one).
+  stored.meta.updatedAt = Date.now() - 7 * 60 * 60_000;
   const items: Array<{ agent: string; item: Item }> = [];
   const host2: ConversationHost = { ...host, itemChanged: (_c, a, item) => void items.push({ agent: a.name, item }) };
   const again = Conversation.restore(host2, stored);
   await tick();
-  const note = 'Masthead was restarted; these agents were stopped while working: bravo (Audit). Message one to resume it.';
-  assert.deepEqual(notices(items, 'alpha', /restarted/).map((x) => (x.item as { text: string }).text), [note]);
+  assert.deepEqual(notices(items, 'alpha', /restarted/).map((x) => (x.item as { text: string }).text), [
+    'Masthead was restarted while a helper was working, so it was stopped: bravo (Audit, started by alpha). The lead is told with your next message.',
+  ]);
+  const note =
+    'Masthead was restarted, which stopped this helper before it finished: bravo (Audit, started by alpha). Its work so far is kept in its session. Resume it with send_message (it carries on where it stopped), or tell its parent; it is not finished work.';
 
   // Saved again before the person speaks: the note survives.
-  const twice = Conversation.restore(host2, JSON.parse(JSON.stringify(again.toStored())));
+  const twice = Conversation.restore(host2, { ...JSON.parse(JSON.stringify(again.toStored())), meta: { ...again.toStored().meta, updatedAt: stored.meta.updatedAt } });
   await tick();
   assert.equal(notices(items, 'alpha', /restarted/).length, 2);
 
@@ -1134,7 +1139,10 @@ test('archived helpers leave the team: not listed (only counted), not woken by a
   assert.match(index, /- charlie: Opus 5\.5, B, archived \d{4}-\d\d-\d\d \d\d:\d\d\n  Report: Final report from charlie\. Second line about the API\./);
   assert.match(conv.readArchive(byName('bravo'), 'charlie'), /^charlie's chat, page 1 of 1:\n\[task from alpha\] Task for charlie\n\[tool Read\] \{"file_path":"\/x"\} -> contents\ncharlie: Final report from charlie\./);
   assert.match(conv.readArchive(byName('bravo'), 'charlie', 1, 'API'), /lines with "API"[\s\S]*Second line about the API/);
-  assert.match(conv.readArchive(byName('bravo'), 'bravo'), /no archived helper named "bravo"/);
+  // Any finished helper, archived or not, is readable; a working one or the lead is not.
+  assert.match(conv.readArchive(byName('bravo'), 'bravo'), /^bravo's chat, page 1 of 1:\n\[task from alpha\] Task for bravo/);
+  assert.match(conv.readArchive(byName('bravo'), 'echo'), /no finished or archived helper named "echo"/);
+  assert.match(conv.readArchive(byName('bravo'), 'alpha'), /no finished or archived helper named "alpha"/);
   // The person restores one.
   conv.restoreAgent(byName('charlie').id);
   assert.equal(byName('charlie').info.archived, undefined);
@@ -1218,7 +1226,10 @@ async function autoTeam(helpers: number) {
   return { ...t, told, finish };
 }
 
-test('auto: past 15 finished helpers, the lead\'s turn end starts tidying; compact_team archives at once; the person is told', async () => {
+test('auto: past 10 finished helpers, the lead\'s turn end starts tidying; compact_team archives at once; the person is told', async () => {
+  const nine = await autoTeam(9);
+  endTurn(nine.conv, nine.conv.lead);
+  assert.equal(nine.conv.meta.compact, undefined, '9 is not enough');
   const { conv, told, items, byName } = await autoTeam(15);
   endTurn(conv, conv.lead);
   const c = conv.meta.compact!;
@@ -1236,7 +1247,7 @@ test('auto: past 15 finished helpers, the lead\'s turn end starts tidying; compa
   ]);
 });
 
-test('auto: cool-down — not again until 15 more helpers have finished', async () => {
+test('auto: cool-down — not again until 10 more helpers have finished', async () => {
   const { conv, finish } = await autoTeam(15);
   endTurn(conv, conv.lead);
   conv.compactTeam(conv.lead, [], '');
@@ -1245,9 +1256,9 @@ test('auto: cool-down — not again until 15 more helpers have finished', async 
   const first = conv.meta.compact!.id;
   endTurn(conv, conv.lead);
   assert.equal(conv.meta.compact!.id, first, 'nothing new right after');
-  await finish(14);
+  await finish(9);
   endTurn(conv, conv.lead);
-  assert.equal(conv.meta.compact!.id, first, '14 more is not enough');
+  assert.equal(conv.meta.compact!.id, first, '9 more is not enough');
   await finish(1);
   endTurn(conv, conv.lead);
   assert.notEqual(conv.meta.compact!.id, first);
@@ -1265,12 +1276,23 @@ test('auto: memory past 70 % starts it once; it fires again only after memory dr
   const first = conv.meta.compact!.id;
   endTurn(conv, conv.lead); // still 75 % (the figure drops only after a turn)
   assert.equal(conv.meta.compact!.id, first);
-  conv.lead.info.usage.context = 300_000;
-  endTurn(conv, conv.lead); // dropped: re-armed
+  conv.lead.info.usage.context = 150_000;
+  endTurn(conv, conv.lead); // dropped below 70 % and 200k: re-armed
   assert.equal(conv.meta.compact!.id, first);
   conv.lead.info.usage.context = 720_000;
   endTurn(conv, conv.lead);
   assert.notEqual(conv.meta.compact!.id, first);
+});
+
+test('auto: a lead past 200k tokens starts it even far below 70 % of a 1M window', async () => {
+  const { conv } = await autoTeam(1);
+  conv.lead.info.usage.contextMax = 1_000_000;
+  conv.lead.info.usage.context = 199_000;
+  endTurn(conv, conv.lead);
+  assert.equal(conv.meta.compact, undefined);
+  conv.lead.info.usage.context = 405_000;
+  endTurn(conv, conv.lead);
+  assert.match(conv.meta.compact!.reason ?? '', /lead's memory is at 405k tokens/);
 });
 
 test('auto: never while the person has an approval or question open for the lead; not where switched off; not when the setting is off', async () => {
@@ -1311,6 +1333,43 @@ test('auto: /compact with tidying on skips the card; a lead that ignores the req
   assert.equal(notices(t.items, 'alpha', /did not choose who to keep/).length, 1);
   assert.equal([...t.conv.agents.values()].some((a) => a.info.archived !== undefined), false);
   void items;
+});
+
+test('compact: helpers compact three at a time, the lead last; progress counts each as it finishes', async () => {
+  const { conv } = await autoTeam(5);
+  const helpers = [...conv.agents.values()].filter((a) => a !== conv.lead);
+  let running = 0;
+  let most = 0;
+  const order: string[] = [];
+  const release: Array<() => void> = [];
+  for (const a of [...helpers, conv.lead]) {
+    (a as unknown as { sessionId: string }).sessionId = `s-${a.name}`;
+    (a as unknown as { compact: () => Promise<{ ok: boolean }> }).compact = () => {
+      running++;
+      most = Math.max(most, running);
+      order.push(a.name);
+      return new Promise((r) => release.push(() => (running--, r({ ok: true }))));
+    };
+  }
+  conv.startCompact('');
+  conv.compactTeam(conv.lead, helpers.map((h) => ({ name: h.name, why: 'needed' })), '');
+  await tick();
+  assert.equal(running, 3, 'three at once');
+  assert.equal(conv.meta.compact!.pending.length, 6);
+  release.shift()!();
+  await tick();
+  await tick();
+  assert.equal(conv.meta.compact!.pending.length, 5, 'one done');
+  assert.equal(running, 3, 'the next one started');
+  while (release.length) {
+    release.shift()!();
+    await tick();
+    await tick();
+  }
+  assert.equal(most, 3);
+  assert.equal(order.at(-1), conv.lead.name, 'the lead last');
+  assert.equal(order.length, 6);
+  assert.equal(conv.meta.compact!.phase, 'done');
 });
 
 test('compact: the lead, inside the turn that called compact_team, compacts when that turn ends', async () => {

@@ -33,6 +33,21 @@ function legacyUnitPath(deps: Pick<Deps, 'home' | 'env'>): string | null {
   return p && p !== unitPath(deps.home) ? p : null;
 }
 
+/**
+ * Kept as the kernel's OOM killer picks a process (often one of an agent's browser processes): the
+ * default policy (stop) would stop the whole service, every agent with it, and restart it.
+ */
+export const OOM_POLICY = 'OOMPolicy=continue';
+
+/**
+ * After every stop, systemd's result for the run (success, oom-kill, signal, ...), exit code, exit status and the
+ * cgroup's count of out-of-memory kills (memory.events oom_kill) go to $XDG_RUNTIME_DIR/masthead-last-stop (%t),
+ * so the next start can say why it was restarted (see laststop.ts).
+ * systemd resets the unit's Result when it starts again, so `systemctl show -p Result` cannot tell afterwards.
+ * Written word for word by scripts/install.sh too; the leading - ignores a failure.
+ */
+export const STOP_POST = String.raw`ExecStopPost=-/bin/sh -c "echo \"$$SERVICE_RESULT $$EXIT_CODE $$EXIT_STATUS $$(sed -n s/^oom_kill.//p /sys/fs/cgroup$$(sed -n s/^0:://p /proc/self/cgroup)/memory.events 2>/dev/null)\" > \"$$0\"" %t/masthead-last-stop`;
+
 export function unitContent(o: InstallOptions, home: string): string {
   checkValue('node path', o.node);
   checkValue('main.js path', o.mainJs);
@@ -46,6 +61,8 @@ After=network-online.target
 [Service]
 ExecStart=${execQuote(o.node)} ${NODE_FLAGS.join(' ')} ${execQuote(o.mainJs)} serve
 ${env}
+${STOP_POST}
+${OOM_POLICY}
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=10
@@ -76,7 +93,7 @@ export function unitEnvFrom(show: string): Record<string, string> {
 
 export function systemdService(deps: Deps): ServiceManager {
   const sc = (...args: string[]) => ['--user', ...args];
-  const show = () => deps.run('systemctl', sc('show', '-p', 'LoadState', '-p', 'ActiveState', '-p', 'Environment', UNIT));
+  const show = () => deps.run('systemctl', sc('show', '-p', 'LoadState', '-p', 'ActiveState', '-p', 'Environment', '-p', 'OOMPolicy', '-p', 'ExecStopPost', UNIT));
   return {
     kind: 'systemd',
     async install(o) {
@@ -124,7 +141,22 @@ export function systemdService(deps: Deps): ServiceManager {
       const active = /^ActiveState=(.*)$/m.exec(r.stdout)?.[1]?.trim() ?? 'unknown';
       if (port === null) return { installed: false, running: false, port: null, detail: 'Not installed.' };
       const { dataDir, note } = dataDirNote('linux', unitEnvFrom(r.stdout), deps.env, deps.home);
-      return { installed: true, running: active === 'active' || active === 'reloading', port, dataDir, detail: `${UNIT} ${active}, port ${port}, ${note}` };
+      // A unit written before 0.2.1 keeps the default OOM policy (stop) and has no stop marker until it is written again.
+      const oom = /^OOMPolicy=(.*)$/m.exec(r.stdout)?.[1]?.trim();
+      const stopPost = /^ExecStopPost=(.*)$/m.exec(r.stdout);
+      const why: string[] = [];
+      if (oom !== undefined && oom !== 'continue') why.push(`OOMPolicy=${oom}: running out of memory stops every agent`);
+      // systemctl prints no ExecStopPost line at all for a unit without one.
+      if (!stopPost?.[1]?.includes('masthead-last-stop')) why.push('no stop marker: a restart for lack of memory cannot be reported');
+      const outdated = why.length > 0;
+      return {
+        installed: true,
+        running: active === 'active' || active === 'reloading',
+        port,
+        dataDir,
+        detail: `${UNIT} ${active}, port ${port}, ${note}`,
+        ...(outdated ? { outdated: `it was written by an older Masthead (${why.join('; ')})` } : {}),
+      };
     },
     serves(port) {
       const r = show();

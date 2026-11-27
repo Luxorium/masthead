@@ -238,8 +238,8 @@ export class DeviceRegistry {
   }
 
   /**
-   * A device asks to be allowed. One open request per node; asking again returns the same code (with
-   * a new poll secret). Returns the poll secret, which only this caller gets.
+   * A device asks to be allowed. One waiting request per node (a few on a loopback listener); asking
+   * again while one waits is refused. Returns the poll secret, which only this caller gets.
    */
   request(id: Identity, address: string): { request: PendingRequest; pollSecret: string } | { refused: string } {
     this.sweep();
@@ -278,7 +278,7 @@ export class DeviceRegistry {
   }
 
   /** The person allows a request. The token waits for the device to collect it. */
-  allow(requestId: string, role: Role = 'full'): Device | null {
+  allow(requestId: string, role: Role = 'read'): Device | null {
     const p = this.pending.get(requestId);
     if (!p || p.denied || p.token || !ROLES.includes(role)) return null;
     const token = randomBytes(32).toString('hex');

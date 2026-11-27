@@ -2,7 +2,7 @@
 // tier labels from the profile, no backend or model name baked in, tool names as the backend shows them.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { systemAppend } from '../server/core/prompts.ts';
+import { effortHeader, systemAppend } from '../server/core/prompts.ts';
 import { teamToolDefs, type TeamActions } from '../server/core/tools.ts';
 import { defaultSettings } from '../server/settings/settings.ts';
 
@@ -47,10 +47,39 @@ test('prompts: tool names appear as the backend shows them', () => {
   assert.doesNotMatch(p, /(^|[^.])\bspawn_agent\b/m);
 });
 
-test('prompts: the appended text is no longer than in 0.1.4', () => {
-  // 0.1.4 measured 1576 (lead) and 1823 (sub) characters with the default profile.
-  assert.ok(lead().length <= 1576, String(lead().length));
-  assert.ok(sub().length <= 1823, String(sub().length));
+test('prompts: the appended text stays within its budget', () => {
+  // 0.1.4 measured 1576 (lead) and 1823 (sub) characters with the default profile. 0.2.1 added the
+  // lead's reporting rule, pictures, light levels and effort changes: 2144 and 2264.
+  assert.ok(lead().length <= 2150, String(lead().length));
+  assert.ok(sub().length <= 2270, String(sub().length));
+});
+
+test('prompts: the lead batches updates; pictures are explained to lead and helpers', () => {
+  assert.match(lead(), /do not write to the person about each report/);
+  assert.match(lead(), /answer only what is new/);
+  assert.match(lead(), /picture a tool returns .* is shown to the person in your chat/);
+  assert.match(sub(), /picture a tool returns shows in your chat, which the person sees only if they open it; give "bravo" the path/);
+  assert.doesNotMatch(sub(), /about each report/);
+});
+
+test('prompts: light (lean) levels are named from the team profile', () => {
+  // Default profile: Sonnet and Haiku run light; Opus (since 0.2.1) and the lead do not.
+  assert.doesNotMatch(lead(), /Opus 5\.5 agents run light/);
+  assert.match(sub(), /Haiku 5\.5 agents run light: no connected services/);
+  assert.doesNotMatch(lead(), /You run light/, 'the lead is never light');
+  assert.match(sub(), /You run light: .*tell "bravo"/);
+  assert.match(sub(), /Haiku 5\.5 agents run light/);
+  const heavy = structuredClone(settings);
+  for (const tier of heavy.profiles[0]!.tiers) tier.lean = false;
+  const p = systemAppend({ tier: 'lead', name: 'alpha', parentName: null, settings: heavy });
+  assert.doesNotMatch(p, /run light/);
+  assert.doesNotMatch(systemAppend({ tier: 'sonnet', name: 'c', parentName: 'b', settings: heavy }), /run light/);
+});
+
+test('prompts: the effort line says it is reset and announced, and not to ask for the same level', () => {
+  assert.match(sub(), /You run at medium thinking effort; Masthead resets you to low .* tells you at the top of a message when it changes/);
+  assert.match(sub(), /never ask for the level you have/);
+  assert.equal(effortHeader('low'), '(Your thinking effort is now low.)\n');
 });
 
 function team(efforts?: string[]): TeamActions {
@@ -97,4 +126,19 @@ test('tools: compact_team accepts plain names as well as {name, why}', async () 
   const tool = teamToolDefs(leadAgent, t).find((d) => d.name === 'compact_team')!;
   assert.equal(await tool.run({ keep: ['bravo', { name: 'echo', why: 'knows it' }, { name: 'golf' }] }), 'ok');
   assert.deepEqual(seen[0], [{ name: 'bravo', why: '' }, { name: 'echo', why: 'knows it' }, { name: 'golf', why: '' }]);
+});
+
+test('tools: spawn_agent warns when the level below runs light; read_archive reads any finished helper', () => {
+  const desc = (lean?: boolean) => teamToolDefs(leadAgent, { ...team(), ...(lean === undefined ? {} : { lean: () => lean }) }).find((d) => d.name === 'spawn_agent')!.description;
+  assert.match(desc(true), /It has no connected services/);
+  assert.doesNotMatch(desc(false), /connected services/);
+  assert.doesNotMatch(desc(), /connected services/);
+  const archive = teamToolDefs(leadAgent, { ...team(), readArchive: () => '' }).find((d) => d.name === 'read_archive')!;
+  assert.match(archive.description, /finished or archived helper/);
+});
+
+test('prompts: the scratch folder line appears only when the folder is given', () => {
+  assert.doesNotMatch(lead(), /temporary folder/);
+  assert.match(lead({}, { tmpDir: '/data/tmp/c1' }), /Your temporary folder is \/data\/tmp\/c1 \(\$TMPDIR\)/);
+  assert.match(lead({}, { tmpDir: '/data/tmp/c1', tmpIsEnv: false }), /Your temporary folder is \/data\/tmp\/c1, private/, 'a shared process (Codex): no $TMPDIR claim');
 });

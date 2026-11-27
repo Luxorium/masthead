@@ -46,7 +46,7 @@ Reads a transcript (`items/<agent>.jsonl`, one item per line, the last line for 
 - It walks complete lines from the back of each chunk. The first line of a chunk may be cut, so it is carried over and joined to the next (earlier) chunk.
 - Empty lines, lines that do not parse (a torn line from a crash) and items without a string `id` are skipped.
 - An item seen more than once keeps the **newest** version (the first one met going backwards) at the position of its **oldest** line seen, which is its place in the transcript.
-- When `limit` distinct items have been found and a new id comes up, it stops. The **cursor** is the byte offset just after that line, so passing it as `before` starts the next older page with that item.
+- When `limit` distinct items have been found and a new id comes up, the **cursor** is the byte offset just after that line, so passing it as `before` starts the next older page with that item. It stops there unless an item on the page is a finished tool still without its input (stored that way since 0.2.1, see [Storage code](Source-Storage.md#transcriptts)): then it reads on past the page only to take those inputs from their earlier lines (`mergeLines()`), without changing the page or the cursor.
 - Returns `{items, cursor, more}`: items oldest first within the page; `cursor` is `null` and `more` is `false` once the start of the file is reached. A missing file gives `{items: [], cursor: null, more: false}`.
 
 An item written both inside and before a page boundary can appear again on an older page in an older version. The comment on `readPage` says the reader keeps the item it already holds, which is the newer one.

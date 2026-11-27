@@ -334,7 +334,7 @@ export class RemoteAccess {
   }
 
   /** The person's decisions, from a local session. */
-  decide(requestId: string, decision: 'allow' | 'deny', role: unknown = 'full'): void {
+  decide(requestId: string, decision: 'allow' | 'deny', role: unknown = 'read'): void {
     if (decision === 'allow') {
       if (!ROLES.includes(role as Role)) throw new Error('Unknown role.');
       if (!this.registry.allow(requestId, role as Role)) throw new Error('That request is no longer waiting.');

@@ -34,7 +34,7 @@ Public `$state` fields:
 | `dirs` | The last folder listing. |
 | `error` | The toast text; cleared after 8 s by `fail()`. |
 | `creating` | Between sending the first message of a new chat and the server's `created`. |
-| `usage` | The latest `RateLimitNotice` per usage window type. |
+| `usage` | The latest `RateLimitNotice` per usage window type. A `rate_limit` message without a `notice` is ignored (0.2.1). |
 | `signedOut` | Why the page cannot connect: `'nokey'`, `'refused'`, `'device'` (a remote device without an approved token) or `'withdrawn'` (the computer withdrew it). `null` when signed in. |
 | `composer` | Unsent `ComposerDraft` per `composerKey`. |
 | `approvals` | Version 2: approval summaries for every conversation (`{id, convId, agentName, kind}`), for the badges in the chat list. |
@@ -139,7 +139,7 @@ Full requests come with the subscribed chat: in the `conversation` snapshot (`pe
 
 For messages the store itself does not use:
 
-- `listen(t, fn)` calls `fn` for every server message of type `t`, after the store has handled it. It returns the function that stops listening. Used for `backends` (end of "Checking…"), `remote_audit` and `error` in the settings pieces.
+- `listen(t, fn)` calls `fn` for every server message of type `t`, after the store has handled it. It returns the function that stops listening. Used for `backends` (end of "Checking…"), `remote_audit` and `error` in the settings pieces, and by `progress.svelte.ts` for `conversation`, `agent`, `item`, `draft` and `items` ([below](#progress-without-asking-progressts-progresssveltets)).
 - `request(msg)` sends any message; when offline it shows `T.errors.notConnected` and returns false. Used for `check_backends`, `reset_profile`, `delete_profile`, `remote_settings`, `device_decision`, `device_role`, `device_revoke`, `remote_audit`, `forget_me`, and the store's own `compact_answer`, `compact_cancel`, `restore_agent` and `archive_items`.
 
 ## Receiving (`receive()`)
@@ -153,7 +153,7 @@ For messages the store itself does not use:
 - `deleted`: drops its requests and summaries; if it was open, goes to the new-chat screen.
 - `items`, `item`, `draft`, `agent`: transcript and agent updates for the open chat. An `item` for an agent whose items are not loaded is ignored; they are fetched when the agent is opened. A `user` item accepts the sent message with the same chat and text.
 - `permission_request`, `permission_resolved`: add and remove requests.
-- `settings`, `rate_limit` (into `usage`), `dirs`.
+- `settings`, `rate_limit` (into `usage`, only when it carries a `notice`), `dirs`.
 - `compact` (into `compact`, for the open chat), `archived` (the agents a tidy-up archived or restored, merged into `agents`) and `archive_items` (an archived helper's transcript page).
 - `error`: with a `ref`, gives that message back to its composer and ends `creating` if it was the new chat. Without one it still ends `creating`, so the composer is not stuck on "Starting…". Then shows the message with `fail()`.
 
@@ -176,6 +176,23 @@ Kept apart so they can be tested without Svelte ([Page tests](Source-Web-Tests.m
 - `settingsPatch(before, next)`: the fields of `next` that differ from `before`. Objects such as the profile list are compared by their JSON, because a deep copy is never the same object. Legacy `tiers` fields are compared one by one.
 - `limitKey(notice)`: `type|status|resetsAt`. A change in any of these brings a dismissed banner back.
 - `worstLimit(usage)`: any `rejected` notice, else any `allowed_warning`, else `null`.
+
+## Progress without asking (`progress.ts`, `progress.svelte.ts`)
+
+Added in 0.2.1, beside the store rather than in it: how long each helper has been on what it is doing, and whether the main assistant's last question still waits for the person. The server sends no start time for an activity, so the page keeps its own marks from the messages it receives.
+
+**`web/src/lib/progress.ts`**, pure, tested in `web/test/progress.test.ts`:
+
+- `Mark`: `{ key, since, exact, output? }`. `exact` is false when the page only knows a lower bound (the agent was already at it when the chat was opened or the page reconnected).
+- `activityKey(a)`: status, `activity`, `waitingFor` and `pausedUntil`; a change in any restarts the clock. `noteAgent(prev, a, now, exact)` keeps the mark while the key is the same.
+- `noteOutput(prev, at, now)`: the last time anything came from the agent, clamped to `now` (the server's clock may be ahead), never moved back.
+- `quietSpan(mark, now)`: time since the later of the start and the last output; exact once output came after the start.
+- `fmtSpan(ms, exact)` and `spanWords(mark, now)`: "under 1 min", "4 min", "1 h 5 min", "2 h"; a lower bound reads "over 4 min" and is empty under a minute.
+- `showsTime(a)`: a helper (`parentId`), not paused at a usage limit, running, waiting or queued.
+- `endsWithQuestion(text)`: ends with "?" (after closing Markdown or quotes), or ends with a list of options right after a line ending with "?".
+- `openQuestion(items)`: walking back from the newest item, `null` at the person's own message; the first text item that asks something counts only if anything came after it. Returns its id.
+
+**`web/src/lib/progress.svelte.ts`**: one instance, `progress`, with `$state` fields `now` (set every 15 s while any span is shown), `marks` (per agent id) and `focus` (`{id, n}`, the item `Transcript` should show). `useClock()` starts the 15 s timer for its first user and stops it after the last; `span(agentId)` gives the words; `showItem(id)` sets `focus`. At module load it listens to the store: a `conversation` snapshot starts afresh for a new chat and keeps the marks on a reconnect to the same chat, with lower-bound marks; an `agent` update of the open chat makes an exact mark; `item` and a `draft` with text count as output now (a cleared draft, `draft: null`, does not); a loaded `items` page counts its newest item's `ts`.
 
 ## Helpers exported with it
 

@@ -27,7 +27,7 @@ These are also used by the conformance suite, so real backends get the same prom
 | "Reply with exactly the word X" | `word` | Replies X and stores it as the session's last word. |
 | "What word did you reply with before?" | `recall` | Replies the stored word (survives a resume), else "I do not remember any word." |
 | "Call the tool NAME with input {json}" | `tool` | Calls that team tool and replies "Tool result: …". Invalid JSON becomes `{ raw }`; an unknown tool gives an error `toolFinished` and "The tool NAME does not exist."; a throwing tool gives "The tool failed: …". |
-| "Run the shell command \`cmd\`" | `command` | Asks permission (kind `command`, tool `Bash`, title "Run cmd", `canAlways` = `caps.approvalsAlways`), then "Ran cmd." (with " (always allowed)" for an always), or "Permission denied." |
+| "Run the shell command \`cmd\`" | `command` | Asks permission (kind `command`, tool `Bash`, title "Run cmd", `canAlways` = `caps.approvalsAlways`), then "Ran cmd." (with " (always allowed)" for an always), or "Permission denied." Under `bypassPermissions` (the spec's mode, or one set with `setPermissionMode()`) it runs without asking: the tool finishes with "ran: cmd" and the reply is "Ran cmd." |
 | "Count slowly …" | `slow` | Waits `slowMs` (default 150 ms), then replies `1` to `5` and `DONE` on separate lines, so messages can arrive during the turn. |
 | "Also reply with the word X" | `reply` | Adds X as a reply. Not listed in the file's header comment. |
 | "Call compact_team with the finished helpers" | `compact` | The core's tidy message; see [below](#compaction-and-the-tidy-message). |
@@ -72,7 +72,7 @@ Order of steps for one message: markers in the order written, then compact, tool
 | `close('graceful')` (line 180) | Drops messages not yet started, lets the running turn finish with its `turnEnded`, then settles `ended`. Idle: settles at once. |
 | `close('now')` | Stops at once, withdraws open approvals; the running turn sends no `turnEnded`. |
 | After `close()` | No `exited`, ever. |
-| `setEffort`, `setModel` | Only record the value (`effort`, `model`). |
+| `setEffort`, `setModel`, `setPermissionMode` | Only record the value (`effort`, `model`, `permissionMode`, which starts as the spec's). |
 | `contextUsage()` | `{ used: 1000 + turns × 500, max }` with `max` from `FAKE_MODELS` (200,000 otherwise). |
 
 ## Compaction and the tidy message

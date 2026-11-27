@@ -17,7 +17,9 @@ Open a terminal and run `masthead doctor`. It checks your set-up and prints one 
 | **Config folder**, **Data folder** | "does not exist yet (made on first start)" is fine. Not a folder: "Move … out of the way." Not writable: "Make … writable by your user." |
 | **Secret** | "does not exist yet (made on first start)" is fine. A folder: "Remove …; a new secret is made on the next start." Readable by others (macOS, Linux): "Restart Masthead: a secret others could read is replaced with a new one (sign in again with masthead)." Windows, reachable by others: "Delete … and restart Masthead; a new private secret is made." |
 | **Port 7717** (or the port your service uses) | "in use by another program": "Stop that program, or use another port: masthead --port <n>." "served by this Masthead" is fine. |
-| **Service** | "not installed" is fine if you start Masthead yourself; to start it at login: `masthead service install`. Installed but not running: `masthead service install`. |
+| **Service** | "not installed" is fine if you start Masthead yourself; to start it at login: `masthead service install`. Installed but not running: `masthead service install`. "written by an older Masthead" (it lacks the out-of-memory setting or the record of why it stopped): run `masthead service install` (or `scripts/install.sh` again) once. |
+| **Service memory** | Linux, while the service runs: how much memory Masthead and the programs its agents started use, and how many there are. A `[WARN]` past half the computer's memory: close browsers or tools the agents left open, or restart Masthead when nothing is working. |
+| **Temporary folder** | A `[WARN]` when `/tmp` is a small or nearly full memory disk (tmpfs). Agents now keep their scratch files in Masthead's own folder, but other programs may still fill `/tmp`. |
 | **SDK private binary** | A `[WARN]`, not a failure: an unused private copy of Claude Code was installed with Masthead. Harmless, but you can reinstall without it: run the install command from [Installing Masthead](installing.md) again (it includes `--os=none --cpu=none`). |
 | **Keep awake** | The tool that keeps the computer awake was not found, so it may sleep while agents work. On Linux: "Install systemd (systemd-inhibit), or keep the computer awake yourself". See [Keeping the computer awake](keeping-awake.md). |
 
@@ -65,6 +67,15 @@ Another program, or another copy of Masthead, uses the port.
 3. If the service runs on another port and you also started a second Masthead by hand on 7717,
    plain `masthead status` and `masthead stop` look only at the service's port. Add `--port 7717`
    to reach the other one.
+
+### "Masthead was restarted"
+
+A restart (an update, a crash, or the computer running out of memory) stops every agent, together
+with the tools and browsers they had open. Afterwards the main assistant gets a turn of its own,
+with the list of helpers the restart stopped, and carries on; a message of yours that was never
+answered is sent again once. If the system recorded why (for example it ran out of memory), the
+chat says so. If it was memory, close what the agents left open and run `masthead doctor` (see
+**Service memory** above).
 
 ### "Masthead needs Claude Code to work"
 

@@ -8,6 +8,9 @@
   // failed ones keep the bad colour. A tree for the keyboard: ↑ ↓ move, → opens or goes in, ← closes or
   // goes up, Enter opens the chat. Hovering or focusing a row shows its latest lines below it.
   import { displayName, modelLabel, type AgentInfo, type Item } from '../../../../shared/protocol.ts';
+  import AgentSpan from '../AgentSpan.svelte';
+  import { showsTime } from '../progress.ts';
+  import { progress } from '../progress.svelte.ts';
   import StopControl from '../StopControl.svelte';
   import { statusWords, store } from '../store.svelte.ts';
   import { T } from '../text.ts';
@@ -198,7 +201,7 @@
       aria-level={node.depth}
       aria-expanded={node.hasChildren ? node.expanded : undefined}
       aria-selected={store.viewAgent?.id === a.id}
-      aria-label={`${displayName(a.name)}, ${modelLabel(a.model)}${a.title ? `, ${a.title}` : ''}: ${statusWords(a)}`}
+      aria-label={`${displayName(a.name)}, ${modelLabel(a.model)}${a.title ? `, ${a.title}` : ''}: ${statusWords(a)}${showsTime(a) && progress.span(a.id) ? `${T.progress.sep}${progress.span(a.id)}` : ''}`}
       tabindex={focusKey === a.id ? 0 : -1}
       data-key={a.id}
       onfocus={(e) => {
@@ -244,7 +247,7 @@
             </span>
           {/if}
         </div>
-        <div class="doing">{statusWords(a)}</div>
+        <div class="doing"><span class="act">{statusWords(a)}</span>{#if showsTime(a)}<AgentSpan agentId={a.id} />{/if}</div>
         {#if previewId === a.id}
           {@const lines = previewLines(a)}
           {@const draft = store.drafts[a.id]}
@@ -467,14 +470,20 @@
   .preview {
     margin-left: calc(var(--tw) + 6px);
   }
+  /* What it is doing, cut short if need be, then how long (never cut). */
   .doing {
+    display: flex;
+    min-width: 0;
     margin-top: 1px;
-    overflow: hidden;
     white-space: nowrap;
-    text-overflow: ellipsis;
     font-size: 12.5px;
     line-height: 18px;
     color: var(--muted);
+  }
+  .doing .act {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .folded {
     min-width: 0;

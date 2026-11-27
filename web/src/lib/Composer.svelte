@@ -1,6 +1,7 @@
 <script lang="ts">
   import { displayName, modelLabel, type ImageAttachment } from '../../../shared/protocol.ts';
   import FolderPicker from './FolderPicker.svelte';
+  import AnswerMarker from './transcript/AnswerMarker.svelte';
   import { profileById, tierClass } from './tiers.ts';
   import ProfileChip from './settings/ProfileChip.svelte';
   import { usableProfiles } from './settings/logic.ts';
@@ -194,6 +195,8 @@
 </script>
 
 <svelte:window ondragover={stray} ondrop={stray} />
+
+{#if !isNew}<AnswerMarker />{/if}
 
 {#if direct && agent?.status === 'waiting' && agent.waitingFor}
   <p class="hint">{T.composer.waiting(displayName(agent.name), displayName(agent.waitingFor))}</p>

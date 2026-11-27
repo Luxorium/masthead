@@ -40,21 +40,24 @@ For Claude Code, `open()` starts the Agent SDK's `query()` in streaming-input mo
 
 ## 4. Turns
 
-- **Turn start.** The backend's `turnStarted` (Claude Code: `system/init`, any stream event, any assistant message) sets `inTurn` and cancels the background grace timer. If the agent is `idle` or `waiting` and not paused at the usage limit (`info.pausedUntil`), it becomes `running`: backends also start turns by themselves, for instance when a background command finishes.
+- **Turn start.** The backend's `turnStarted` (Claude Code: `system/init`, any stream event, any assistant message) sets `inTurn` and cancels the background grace timer and the stall timer (below). It is ignored while the process is being closed. If the agent is `idle` or `waiting` and not paused at the usage limit (`info.pausedUntil`), it becomes `running`: backends also start turns by themselves, for instance when a background command finishes.
 - **During the turn.** Text, thinking and tool events become transcript items; the live draft is sent at most every 70 ms (a new block is sent at once and clears the activity line); a tool call sets the activity line and its result is clipped to 12,000 characters, with images stored through `host.storeImage`.
 - **Messages during a turn** go straight into the running process, each with a new id in `unanswered`.
-- **Turn end.** The backend names the ids the turn consumed. They leave `unanswered`; a turn the backend started by itself names none (`[]`) and removes none; a backend that cannot tell (`null`, e.g. an older Claude Code that never names them) clears everything, so an agent can never stay busy for ever. The turn's final text is added to the run. Then:
-  - if anything is still unanswered, another turn follows; an error is shown as a notice and the agent stays `running`;
+- **Turn end.** The backend names the ids the turn consumed. They leave `unanswered`; a turn the backend started by itself names none (`[]`) and removes none; a backend that cannot tell (`null`, e.g. an older Claude Code that never names them) clears everything, so an agent can never stay busy for ever. A result from a process being closed (an ended agent whose running turn was let finish) stops here: it is no part of any run. Otherwise the turn's final text is added to the run, marked as answering unless the turn consumed nothing (`[]`). Then:
+  - if anything is still unanswered, another turn follows; an error is shown as a notice and the agent stays `running`. If no turn has started after `Agent.unansweredGraceMs` (60 s), the rest counts as answered, the notice "A message to this agent got no turn of its own; Masthead counts it as answered." is added and `turnEnded` is called, so the agent never shows working for ever (`stallCheck()`);
   - otherwise the run text is emptied (unless background work runs), the real context size is read while the process is still up, and `host.turnEnded(agent, { text, error, interrupted })` hands the decision to the machine (finish, wait, or go idle).
 
-The outcome text is every turn's final text since the agent took up work, because a message that lands as a turn ends makes the backend run one more turn whose reply is often only "Noted". At most the newest 8 texts and about 60,000 characters are kept; the text then starts with "(earlier text not shown)".
+The outcome text is every turn's final text since the agent took up work, because a message that lands as a turn ends makes the backend run one more turn whose reply is often only "Noted". It starts, though, at the last **full answer**: a text of 400 characters or more (`FULL_ANSWER_CHARS`) from a turn that answered a message it was sent. A later full answer replaces an earlier one (an agent asked again rewrites its report); short texts after it stay with it; and a turn the backend started by itself (a finished background command) never replaces it. At most the newest 8 texts and about 60,000 characters are kept; when older ones were dropped and no full answer cut the start, the text starts with "(earlier text not shown)".
+
+A process that ends mid-turn still counts the turn in `usage.turns` and sets `usage.costPartial`, because the backend reports cost only when a turn finishes.
 
 ## 5. Background work
 
 A backend that reports background commands (`caps.background`; Claude Code does) sends the full set of running ones each time it changes. The set belongs to one process.
 
 - A turn that ends while background work runs still calls `turnEnded`; the machine keeps the agent `waiting` (the background hold). The run text is kept.
-- When the work ends, the backend starts a turn by itself; its result names no message and its outcome carries the earlier turn's text too.
+- While a helper that owes a report is held only by background commands, its parent's transcript says so once (""x" has finished its turn but is waiting on a background command; its report comes when that ends (at most 10 minutes)."; `Conversation.tellReportWaits()`); it is said again after the helper is woken or sent more work.
+- When the work ends, the backend starts a turn by itself; its result names no message and its outcome carries the earlier turn's text too (its own text never replaces an earlier full answer).
 - If the set empties and no turn starts within 3 s (`BACKGROUND_GRACE_MS`), the runtime calls `host.backgroundIdle(agent)` (only if the same process is still open, not closing, not in a turn and not busy), and the machine releases the hold.
 - `end('done')` while background commands run closes the process at once instead of letting it finish, so it never waits for them.
 - If the process exits instead, the process-lost path runs (section 8).

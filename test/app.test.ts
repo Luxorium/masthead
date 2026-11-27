@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { App, DRIVES, expandHome, windowsDrives, type Client } from '../server/app/app.ts';
+import { App, DRIVES, expandHome, loadUsage, windowsDrives, type Client } from '../server/app/app.ts';
 
 /** File modes mean nothing on NTFS (Windows keeps the secret private with an ACL instead). */
 const POSIX = process.platform !== 'win32';
@@ -235,6 +235,20 @@ test('app: approvals are listed in state, answered once, and "always" is passed 
   assert.ok(after?.t === 'state' && after.state.pending.length === 0);
 });
 
+test('app: a new permission mode allows the open approvals it would not have asked for', async () => {
+  const { app, send } = setup({ settings: { ...defaultSettings(), permissionMode: 'default' } });
+  const command = askFor(app);
+  const question = askFor(app, { toolName: 'AskUserQuestion', input: { questions: [{ question: 'Which?', options: [] }] } });
+  send({ t: 'settings', settings: { permissionMode: 'acceptEdits' } });
+  send({ t: 'settings', settings: { permissionMode: 'bypassPermissions' } });
+  assert.deepEqual(await command.result, { decision: 'allow' });
+  const state = send({ t: 'hello' }).at(-1);
+  assert.ok(state?.t === 'state');
+  assert.deepEqual(state.state.pending.map((r) => r.kind), ['question'], 'a question still waits for the person');
+  question.ctrl.abort();
+  await question.result;
+});
+
 test('app: deny, questions and cancelled requests', async () => {
   const { app, send, got } = setup();
   got.length = 0;
@@ -254,6 +268,29 @@ test('app: deny, questions and cancelled requests', async () => {
   cancelled.ctrl.abort();
   assert.equal((await cancelled.result).decision, 'deny');
   // Masthead's own tools never reach the app: the backend adapter allows them (test/agent.test.ts).
+});
+
+test('app: usage notices survive a restart (a new tab has them at once); reset windows and bad files are dropped', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'masthead-usage-'));
+  const usageFile = join(dir, 'usage.json');
+  const make = () => new App({ store: new Store(join(dir, 'c')), settingsFile: join(dir, 's.json'), settings: defaultSettings(), claude: { path: null, version: null }, usageFile });
+  const first = make();
+  const soon = Math.floor(Date.now() / 1000) + 3600;
+  first.rateLimit({ status: 'allowed_warning', type: 'five_hour', utilization: 0.9, resetsAt: soon });
+  first.rateLimit({ status: 'allowed', type: 'seven_day', resetsAt: Math.floor(Date.now() / 1000) - 10 });
+  first.shutdown();
+  const got: ServerMsg[] = [];
+  const second = make();
+  second.handle({ send: (m) => void got.push(m) }, { t: 'hello' });
+  const state = got.at(-1);
+  assert.ok(state?.t === 'state');
+  assert.deepEqual(state.state.usage, [{ status: 'allowed_warning', type: 'five_hour', utilization: 0.9, resetsAt: soon }], 'the window that already reset is gone');
+  second.shutdown();
+  writeFileSync(usageFile, '{"version":1,"notices":"x"}');
+  assert.deepEqual(loadUsage(usageFile), []);
+  writeFileSync(usageFile, 'not json');
+  assert.deepEqual(loadUsage(usageFile), []);
+  assert.deepEqual(loadUsage(join(dir, 'missing.json')), []);
 });
 
 test('app: the latest usage notice of each kind is kept in state', () => {

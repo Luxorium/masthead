@@ -16,17 +16,26 @@ afterEach(() => {
 
 describe('DeviceRequestCard', () => {
   const req = { id: 'r1', nodeName: 'phone', os: 'iOS', user: { login: 'me@example.com', name: 'Me' }, address: '100.64.0.2', code: '482913', createdAt: 0 };
-  it('shows the device and the code, warns plainly, and sends the decision with the role', async () => {
+  it('shows the device and the code, starts at read only, warns for everything, and sends the decision with the role', async () => {
     const sent = vi.spyOn(store, 'request').mockReturnValue(true);
     render(DeviceRequestCard, { request: req });
     const card = screen.getByRole('alertdialog', { name: 'phone asks to use Masthead' });
     expect((card).textContent).toContain('iOS · me@example.com · 100.64.0.2');
     expect((screen.getByLabelText('Code 4 8 2 9 1 3')).textContent).toContain('482 913');
-    expect((card).textContent).toContain('lets it do everything you can do here, including running commands');
-    const select = screen.getByLabelText('What it may do') as HTMLSelectElement;
-    await fireEvent.change(select, { target: { value: 'read' } });
-    await fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
+    // Read only is first and already chosen, and the button says what it allows.
+    const group = screen.getByRole('group', { name: 'What it may do' });
+    const radios = Array.from(group.querySelectorAll('input[type="radio"]')) as HTMLInputElement[];
+    expect(radios.map((r) => r.value)).toEqual(['read', 'approve', 'full']);
+    expect((screen.getByRole('radio', { name: /Read only/ }) as HTMLInputElement).checked).toBe(true);
+    expect(card.textContent).toContain('It cannot send, answer or stop anything.');
+    expect(card.textContent).not.toContain('including running commands. Choose it only');
+    await fireEvent.click(screen.getByRole('button', { name: 'Allow, read only' }));
     expect(sent).toHaveBeenCalledWith({ t: 'device_decision', requestId: 'r1', decision: 'allow', role: 'read' });
+    // Choosing Everything warns plainly and the button changes with it.
+    await fireEvent.click(screen.getByRole('radio', { name: /Everything/ }));
+    expect(card.textContent).toContain('Everything lets this device do anything you can do here, including running commands');
+    await fireEvent.click(screen.getByRole('button', { name: 'Allow everything' }));
+    expect(sent).toHaveBeenLastCalledWith({ t: 'device_decision', requestId: 'r1', decision: 'allow', role: 'full' });
     await fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
     expect(sent).toHaveBeenLastCalledWith({ t: 'device_decision', requestId: 'r1', decision: 'deny' });
     await Promise.resolve();

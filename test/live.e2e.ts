@@ -10,6 +10,7 @@ import { App, type Client } from '../server/app/app.ts';
 import { defaultSettings } from '../server/settings/settings.ts';
 import { findClaude } from '../server/backends/claude/env.ts';
 import { Store } from '../server/storage/store.ts';
+import { finishWorkFolder } from './workdir.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'masthead-live-'));
 const settings = defaultSettings();
@@ -235,6 +236,7 @@ try {
 } finally {
   app.shutdown();
   await new Promise((r) => setTimeout(r, 1500));
-  log('finished', process.exitCode ? 'WITH FAILURES' : 'all passed', '- work folder:', dir);
+  log('finished', process.exitCode ? 'WITH FAILURES' : 'all passed');
+  finishWorkFolder(dir, !!process.exitCode, log);
   process.exit(process.exitCode ?? 0);
 }

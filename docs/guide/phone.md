@@ -38,8 +38,8 @@ Tailscale network. Nothing is opened to the internet, and a device gets in only 
 4. On this computer a card appears: "*phone* wants to use Masthead", with the phone's name, system,
    Tailscale user and address, and the same code.
 5. **Check that the two codes are the same.** If they are not, choose **Deny**.
-6. Choose what the phone may do (**Everything**, **Answer approvals and stop work**, or **Only read**),
-   then **Allow**.
+6. Choose what the phone may do: **Allow, read only** (the safe choice, and what a device gets if no
+   level is chosen), **Allow approvals and stop**, or **Allow everything**.
 7. The phone opens Masthead. You can now use it as on this computer, within what you chose.
 
 The phone stays allowed for 30 days after its last use. After that it asks again.

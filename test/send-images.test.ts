@@ -1,7 +1,7 @@
 // Pictures in an existing conversation: refs from POST /blob are checked against that conversation,
 // go on the person's item, and reach the backend as image content (with the fake backend).
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, truncateSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -34,11 +34,21 @@ async function setup() {
     await tick(100);
     return (got.filter((m) => m.t === 'created').at(-1) as { convId: string }).convId;
   };
-  return { dir, app, store, client, got, registry, newConv };
+  /**
+   * A stored picture whose file is `size` bytes: a small PNG, then the file lengthened in place. The
+   * new length is a hole (sparse file) where the file system allows, so the 30 MB cap is tested
+   * without writing 30 MB (the cap reads the file's size).
+   */
+  const bigBlob = (convId: string, w: number, size: number) => {
+    const ref = store.blobs.put(convId, png(w, 10));
+    truncateSync(store.blobs.find(convId, ref.blob)!.file, Math.floor(size));
+    return ref;
+  };
+  return { dir, app, store, client, got, registry, newConv, bigBlob };
 }
 
 test('send: an uploaded picture in an existing chat reaches the item and the backend', async () => {
-  const { app, store, client, got, registry, newConv } = await setup();
+  const { app, store, client, got, registry, newConv, bigBlob } = await setup();
   const convId = await newConv();
   const other = await newConv().catch(() => '');
   const ref = store.blobs.put(convId, png(4, 3));
@@ -66,7 +76,7 @@ test('send: an uploaded picture in an existing chat reaches the item and the bac
   assert.match(errorFor(got, 'r3'), /not part of this conversation/);
   app.handle(client, { t: 'send', convId, text: 'x', blobs: Array(9).fill(ref), ref: 'r4' });
   assert.match(errorFor(got, 'r4'), /At most 8 images/);
-  const bigs = Array.from({ length: 7 }, (_, i) => store.blobs.put(convId, png(10 + i, 10, 4.9 * 1024 * 1024)));
+  const bigs = Array.from({ length: 7 }, (_, i) => bigBlob(convId, 10 + i, 4.9 * 1024 * 1024));
   app.handle(client, { t: 'send', convId, text: 'x', blobs: bigs, ref: 'r5' });
   assert.match(errorFor(got, 'r5'), /larger than 30 MB/);
   // A first message's inline pictures are kept on its item too (no longer collected at the next start).
@@ -86,10 +96,10 @@ test('send: a first message keeps its inline pictures as refs on the item', asyn
 });
 
 test('send: uploaded and inline pictures share one 30 MB cap', async () => {
-  const { app, store, client, got, newConv } = await setup();
+  const { app, client, got, newConv, bigBlob } = await setup();
   const convId = await newConv();
-  const big = store.blobs.put(convId, png(20, 20, 4.9 * 1024 * 1024));
-  const big2 = store.blobs.put(convId, png(21, 20, 4.9 * 1024 * 1024));
+  const big = bigBlob(convId, 20, 4.9 * 1024 * 1024);
+  const big2 = bigBlob(convId, 21, 4.9 * 1024 * 1024);
   const inline = Array.from({ length: 5 }, (_, i) => ({ mediaType: 'image/png', data: png(30 + i, 30, 4.5 * 1024 * 1024).toString('base64') }));
   got.length = 0;
   app.handle(client, { t: 'send', convId, text: 'x', blobs: [big, big2], images: inline, ref: 'r9' });

@@ -26,15 +26,15 @@ What a Codex agent cannot do that a Claude Code agent can, all from `index.ts` (
 
 ## How Codex is driven
 
-- **One app-server process per `CodexBackend`**, that is per Masthead server, shared by every agent of every conversation; each agent is one thread on it. It starts lazily on the first `open()` or `models()` (`ensureServer()`), and if it dies every open session gets `exited` and the next `open()` starts a new one. Its environment is the `spec.env` of the session that started it, or the backend's own `env` when `models()` started it (threads cannot have their own).
-- `startServer()` (`index.ts:204`) first rebuilds the model catalogue (below), then runs `codex app-server -c model_catalog_json="<file>"`.
-- **Handshake:** request `initialize` with `clientInfo {name:'masthead', title:'Masthead', version:'0.2.0'}` and `capabilities {experimentalApi: true, requestAttestation: false}`, then the notification `initialized`. `experimentalApi` is what allows `dynamicTools`.
+- **One app-server process per `CodexBackend`**, that is per Masthead server, shared by every agent of every conversation; each agent is one thread on it. It starts lazily on the first `open()` or `models()` (`ensureServer()`), and if it dies every open session gets `exited` and the next `open()` starts a new one. Its environment is the `spec.env` of the session that started it, or the backend's own `env` when `models()` started it (threads cannot have their own). So `CODEX_CAPS.sessionEnv` is false, and the runtime gives Codex sessions no scratch `TMPDIR` (their `spec.env` is `{}`); the scratch folder reaches a Codex agent as a writable root instead (see Permission mode below).
+- `startServer()` (`index.ts:207`) first rebuilds the model catalogue (below), then runs `codex app-server -c model_catalog_json="<file>"`.
+- **Handshake:** request `initialize` with `clientInfo {name:'masthead', title:'Masthead', version: VERSION}` (Masthead's version from `shared/protocol.ts`) and `capabilities {experimentalApi: true, requestAttestation: false}`, then the notification `initialized`. `experimentalApi` is what allows `dynamicTools`.
 - **`rpc.ts`:** `RpcPeer` numbers its own requests, matches responses by id, passes notifications (no id) to `onNotification` and server requests (method and id) to `onRequest`, whose return value or thrown `RpcError` is written back. Lines that are not JSON are skipped. `close(reason)` fails every waiting request with code -32000; later requests fail at once with "Codex app-server is not running.". Write errors on a dead process are swallowed.
 - Notifications are routed to a session by `params.threadId` (or `params.thread.id`); server requests by `params.threadId`. A server request with no matching session gets -32601, except `mcpServer/elicitation/request`, which is declined.
 
 ## Detection: `detect()`
 
-`index.ts:131`, in order (the `BackendInfo` always carries `minVersion: '0.172.0'`):
+`index.ts:134`, in order (the `BackendInfo` always carries `minVersion: '0.172.0'`):
 
 1. **Find the binary** (`findCodex`, `cli.ts:81`; or `CodexOptions.path`): `MASTHEAD_CODEX`, then each `PATH` folder (`codex`, or `codex.exe` / `codex.cmd` on Windows), then `~/.local/bin/codex`, `/usr/local/bin/codex`, `/usr/bin/codex`, `/opt/homebrew/bin/codex`. None: "Codex was not found. Install it and sign in with `codex login`, then restart Masthead."
 2. **`codex --version`**, first `x.y.z` in the output (a non-zero exit or no version: "Could not run <path> --version."). Below `MIN_VERSION = '0.172.0'` (`cli.ts:19`): not available, "Codex X is too old; Masthead needs 0.172.0 or later.".
@@ -52,13 +52,13 @@ Codex gives current models a `multi_agent_version`, and that field, not a featur
 - **`nativeToolsFor()`** (`cli.ts:189`) runs `codex debug prompt-input -c model_catalog_json=… -c model="<model>" hi`, which renders what the model would see **without calling it**. `promptTools()` reads the names from the `additional_tools` item (namespaced, e.g. `collaboration.spawn_agent`); `nativeAgentTools()` keeps any `collaboration.*` or any name ending in `spawn_agent`, `wait_agent`, `followup_task` or `interrupt_agent`. If the rendering shows no tools at all it throws "codex debug prompt-input showed no tools; the check cannot be trusted.".
 - **Where the check refuses:**
   - in `detect()`: "Codex's own sub-agent tools could not be switched off (<names>), so a Codex team could break the team rules." (backend unavailable);
-  - in every session start, once per model per process (`checkModel`, `index.ts:235`, cached; a failed check is forgotten so it is retried): "Codex's own sub-agent tools are still offered to <model> (<names>); a Codex team cannot run." The session fails with that as its `exited` failure.
+  - in every session start, once per model per process (`checkModel`, `index.ts:238`, cached; a failed check is forgotten so it is retried): "Codex's own sub-agent tools are still offered to <model> (<names>); a Codex team cannot run." The session fails with that as its `exited` failure.
 - **Second lock:** every thread's config also sets `features.multi_agent` and `features.multi_agent_v2` to false.
-- **Fallback (`police()`, `index.ts:792`):** should an `item/started` of type `collabAgentToolCall` or `subAgentActivity` (kind `started`) arrive anyway, the session remembers the child thread ids, reports the activity "Stopped one of Codex's own sub-agents", queues a note for the next turn ("(Masthead: Codex's own sub-agent tools are not available in this team. Use spawn_agent and send_message instead.)") and interrupts the turn. This happens once per turn. A child thread's next `turn/started` is interrupted too (`foreignThread`).
+- **Fallback (`police()`, `index.ts:835`):** should an `item/started` of type `collabAgentToolCall` or `subAgentActivity` (kind `started`) arrive anyway, the session remembers the child thread ids, reports the activity "Stopped one of Codex's own sub-agents", queues a note for the next turn ("(Masthead: Codex's own sub-agent tools are not available in this team. Use spawn_agent and send_message instead.)") and interrupts the turn. This happens once per turn. A child thread's next `turn/started` is interrupted too (`foreignThread`).
 
 ## `models()`
 
-`index.ts:153`. Pages through `model/list {includeHidden: false, cursor}` on the shared process.
+`index.ts:156`. Pages through `model/list {includeHidden: false, cursor}` on the shared process.
 
 - Models with `hidden` are left out (even if returned).
 - `efforts`: Masthead's levels (low, medium, high, xhigh) that the model lists in `supportedReasoningEfforts`. `max` and `ultra` (`NEVER`, `index.ts:81`; ultra is Codex's "automatic task delegation") are never offered; `nativeEffort` maps each level to the same name.
@@ -78,13 +78,13 @@ Codex gives current models a `multi_agent_version`, and that field, not a featur
 2. `thread/start` with `model`, `cwd`, `developerInstructions` (the agent's instructions; Codex's own are kept), `config`, the permission fields and `dynamicTools`; or, when `spec.resume` is set, `thread/resume {threadId, …same, excludeTurns: true}` (no `dynamicTools`: the thread keeps those it was started with).
 3. The thread id is bound to the session and reported with `sessionStarted(threadId)`. Messages sent before this point open the first turn together.
 
-**Missing thread:** a resume that fails with a message matching `no rollout found|not found|no such thread|unknown thread` (`index.ts:358`, in `boot()` at line 329) ends the session with `exited({failure, sessionMissing: true})`, before any `sessionStarted`, so the core starts fresh. Real Codex answers a missing thread with `{"code": -32600, "message": "no rollout found for thread id …"}`; the code matches the message, not the code.
+**Missing thread:** a resume that fails with a message matching `no rollout found|not found|no such thread|unknown thread` (`index.ts:367`, in `boot()` at line 329) ends the session with `exited({failure, sessionMissing: true})`, before any `sessionStarted`, so the core starts fresh. Real Codex answers a missing thread with `{"code": -32600, "message": "no rollout found for thread id …"}`; the code matches the message, not the code.
 
-**Per-thread config** (`config()`, `index.ts:370`), as dotted keys in `thread/start.config`:
+**Per-thread config** (`config()`, `index.ts:378`), as dotted keys in `thread/start.config`:
 - always: `features.goals`, `features.image_generation`, `features.multi_agent`, `features.multi_agent_v2` = false;
 - lean tiers also: `features.apps` = false, and `mcp_servers.<name>.enabled` = false for every server listed by `config/read {cwd}`. If `config/read` fails the person's servers stay on.
 
-**Permissions** (`permissions()`, `index.ts:388`):
+**Permissions** (`permissions()`, `index.ts:396`):
 
 | Masthead mode | Sent to Codex |
 |---|---|
@@ -97,7 +97,7 @@ Codex gives current models a `multi_agent_version`, and that field, not a featur
 
 ## Sending: `send(id, content)`
 
-`index.ts:440`.
+`index.ts:448`.
 
 | State | What happens |
 |---|---|
@@ -110,17 +110,22 @@ Codex gives current models a `multi_agent_version`, and that field, not a featur
 - **Consumed ids:** the ids of the messages that opened a turn, plus every successfully steered id, are returned in that turn's `turnEnded({consumed})`. A steered id is counted before the request, so a turn that ends meanwhile cannot drop it; if `turn/steer` fails (the turn ended, or Codex refuses to steer it) the id is removed again and the message opens or waits for the next turn.
 - **`turn/start` failing** ends the turn at once with `turnEnded({consumed, text: '', error})` and starts any queued messages.
 - **Effort and model** are sent on every `turn/start`; `setEffort()` / `setModel()` only store the value, so a change applies from the next turn (`liveEffort: false`).
+- **Sandbox and permission mode:** a thread keeps the sandbox it last had, a `turn/start` override included, and `thread/resume`'s `sandbox` cannot change it afterwards (seen on Codex 0.172). So the adapter tracks `threadSandbox`:
+  - **New thread:** the sandbox `thread/start` reports.
+  - **After every resume:** the sandbox a new thread would get in the current mode (`wantedSandbox()`): bypass, full access; `default`/`acceptEdits`/`auto`, a built `workspaceWrite` with no roots and network off; `inherit`, the person's own config, learned once per app-server and folder (`Server.ownSandbox`, cached) from a throwaway `thread/start {ephemeral: true}` with no turn, then unsubscribed. That probe thread stays loaded in the shared app-server until it ends, and its `thread/started` belongs to no session. If the resumed thread reports a different sandbox, `sandboxOverridden` is set and every turn carries the wanted one. Under `inherit`, if the probe fails (an older Codex) and the thread reports full access or nothing, the session fails closed with "This chat's Codex thread may still have full access … so it was not resumed." and is unsubscribed; otherwise the reported sandbox is kept.
+  - **Each `turn/start`** carries `turnOverrides()`: the approval policy once changed, and a `sandboxPolicy`: full access under bypass (which sets `sandboxOverridden`); for a `workspaceWrite` thread, its sandbox with `SessionSpec.dirs` (the scratch folder) added to `writableRoots`, whenever a folder is missing or an override was ever sent; for any other sandbox, the thread's own again once an override was sent. A read-only thread is never widened, so it cannot write in its scratch folder, though its prompt still names it.
+  - **`setPermissionMode(mode)`** (line 495) changes only the approval policy and reviewer, mapped like `permissions()`. `inherit`, or leaving full access when the thread's sandbox is full access or unknown after an override, throws "needs a relaunch", so the runtime relaunches the session.
 - Messages queued behind a turn (and the adapter's own notes, which have no id) start the next turn when the current one completes.
 
 ## Team tools: `dynamicTools`
 
 - Every `ToolDef` in `spec.tools` goes into `thread/start.dynamicTools` as `{type: 'function', name, description, inputSchema}`, with the **bare tool name** (no namespace).
 - Codex calls one with the server request `item/tool/call {threadId, tool, namespace, arguments}`. The request is routed by `threadId` to the session that owns the thread, so the caller is the agent whose `ToolDef` runs; nothing in the arguments identifies it.
-- `toolCall()` (`index.ts:803`) runs `tool.run(arguments)` and answers `{contentItems: [{type: 'inputText', text}], success}`; `success` is false when the text starts with `Error:`, when the tool throws (text `Error: <message>`), or when no tool has that name (text `Error: no tool named <name>`). No approval is asked for team tools.
+- `toolCall()` (`index.ts:846`) runs `tool.run(arguments)` and answers `{contentItems: [{type: 'inputText', text}], success}`; `success` is false when the text starts with `Error:`, when the tool throws (text `Error: <message>`), or when no tool has that name (text `Error: no tool named <name>`). No approval is asked for team tools.
 
 ## Approvals and questions
 
-Each server request becomes one `askPermission()` call with an `AbortController` keyed by the JSON-RPC request id (`serverRequest()`, `index.ts:584`).
+Each server request becomes one `askPermission()` call with an `AbortController` keyed by the JSON-RPC request id (`serverRequest()`, `index.ts:626`).
 
 | Codex server request | `PermissionAsk` | allow | always | deny |
 |---|---|---|---|---|
@@ -161,7 +166,7 @@ Tool results longer than 12 000 characters are cut, with a note of how many were
 
 ## Usage limits
 
-`account/rateLimits/updated` carries one snapshot for the whole account, so it goes to **every** open session (`rateLimits()`, `index.ts:505`). For each of the `primary` and `secondary` windows present:
+`account/rateLimits/updated` carries one snapshot for the whole account, so it goes to **every** open session (`rateLimits()`, `index.ts:547`). For each of the `primary` and `secondary` windows present:
 
 - `type` = `<limitId or 'codex'>:<windowDurationMins>m`, or `<limitId or 'codex'>:primary` / `:secondary` when the window has no duration;
 - `utilization` = `usedPercent / 100`;
@@ -190,7 +195,7 @@ The app-server runs shell commands for the model, so it is started as the root o
 
 ## `CODEX_CAPS`
 
-`index.ts:62`. The backend uses a copy.
+`index.ts:63`. The backend uses a copy.
 
 | Cap | Value | Meaning |
 |---|---|---|
@@ -209,6 +214,7 @@ The app-server runs shell commands for the model, so it is started as the root o
 | `contextUsage` | true | `thread/tokenUsage/updated` |
 | `lean` | true | per-thread MCP servers and apps off |
 | `compact` | true | `thread/compact/start` |
+| `sessionEnv` | false | one app-server serves every session, so no agent has an environment of its own (no scratch `TMPDIR`) |
 
 ## What is experimental
 

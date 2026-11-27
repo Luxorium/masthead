@@ -29,6 +29,10 @@ import type { AppServerProcess, CliResult, RunCli, SpawnAppServer } from '../cli
 export const FAKE_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
 
 export interface FakeCodexOptions {
+  /** The person's own config sandbox: what a thread started without a sandbox param (inherit) gets. Default: workspace-write with /own/root and network. */
+  sandbox?: unknown;
+  /** An ephemeral thread/start fails (an older Codex). */
+  ephemeralFails?: boolean;
   version?: string;
   signedIn?: boolean | null;
   /** The debug prompt-input check still shows collaboration tools (the catalogue switch failed). */
@@ -107,11 +111,25 @@ interface Thread {
   word: string | null;
   turn: { id: string; steered: string[]; interrupted: boolean } | null;
   params: any;
+  /** The thread's sandbox. A turn's sandboxPolicy override sticks (`sticky`): resume params then change nothing (codex 0.172). */
+  sandbox?: unknown;
+  sticky?: boolean;
+}
+
+/**
+ * The sandbox a new thread gets: full access for danger-full-access, the person's own (`own`) when no
+ * sandbox is asked for, else workspace-write (no roots, network off, as codex 0.172 reports it).
+ */
+function fakeSandbox(mode: unknown, own?: unknown): unknown {
+  if (mode === undefined || mode === null) return own ?? { type: 'workspaceWrite', writableRoots: ['/own/root'], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+  return mode === 'danger-full-access' ? { type: 'dangerFullAccess' } : { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
 }
 
 export class FakeAppServer {
   readonly received: Array<{ method: string; params: any; id?: number | string }> = [];
   readonly threads = new Map<string, Thread>();
+  /** Ids of ephemeral threads started (probes); none is ever kept. */
+  readonly ephemeral: string[] = [];
   /** Threads that exist "on disk" (kept across server restarts by the test, if it wants). */
   readonly process: AppServerProcess;
   killed = false;
@@ -198,17 +216,26 @@ export class FakeAppServer {
       case 'config/read':
         return { config: { mcp_servers: { blender: { command: 'x' }, notes: { url: 'http://localhost' } } }, origins: {}, layers: null };
       case 'thread/start': {
-        const t: Thread = { id: this.id('thread'), word: null, turn: null, params: p };
+        const t: Thread = { id: this.id('thread'), word: null, turn: null, params: p, sandbox: fakeSandbox(p.sandbox, this.opts.sandbox) };
+        if (p.ephemeral) {
+          // Never kept: it cannot be resumed and is in no thread list.
+          if (this.opts.ephemeralFails) throw { code: -32600, message: 'unknown field ephemeral' };
+          this.ephemeral.push(t.id);
+          return { thread: { id: t.id, path: null, ephemeral: true }, sandbox: t.sandbox };
+        }
         this.threads.set(t.id, t);
         queueMicrotask(() => this.note('thread/started', { thread: { id: t.id } }));
-        return { thread: { id: t.id, path: `/tmp/fake/${t.id}.jsonl`, ephemeral: false } };
+        return { thread: { id: t.id, path: `/tmp/fake/${t.id}.jsonl`, ephemeral: false }, sandbox: t.sandbox };
       }
       case 'thread/resume': {
         const t = this.threads.get(p.threadId) ?? FakeAppServer.disk.get(p.threadId);
         if (!t) throw { code: -32600, message: `no rollout found for thread id ${p.threadId}` };
         t.params = p;
         this.threads.set(t.id, t);
-        return { thread: { id: t.id } };
+        // As codex 0.172: a start or resume param applies, unless a turn override ever set the sandbox:
+        // then the thread keeps it and resume's param changes nothing.
+        if (!t.sticky) t.sandbox = fakeSandbox(p.sandbox, this.opts.sandbox);
+        return { thread: { id: t.id }, sandbox: t.sandbox };
       }
       case 'thread/unsubscribe': {
         const t = this.threads.get(p.threadId);
@@ -218,6 +245,10 @@ export class FakeAppServer {
       case 'turn/start': {
         const t = this.threads.get(p.threadId);
         if (!t) throw { code: -32600, message: 'unknown thread' };
+        if (p.sandboxPolicy) {
+          t.sandbox = p.sandboxPolicy;
+          t.sticky = true;
+        }
         const turnId = this.id('turn');
         t.turn = { id: turnId, steered: [], interrupted: false };
         void this.runTurn(t, turnId, p);

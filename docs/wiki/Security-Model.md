@@ -41,6 +41,38 @@ a Windows device); its unit tests use a fake Tailscale. Setting it up: [Using Ma
   requests, audit log and settings) and the local-only messages (`Hub.publishLocal()`). It also never
   receives the local secret: a remote socket accepts only `device.<token>`, and its `/api/health`
   answers only the name. A device reads a conversation's details only while subscribed to it.
+- **New devices start read-only.** Approving a pairing request without choosing a role gives `read`
+  (the defaults of `RemoteAccess.decide()` in `server/remote/access.ts` and `DeviceRegistry.allow()`
+  in `server/remote/registry.ts`, and `m.role ?? 'read'` in `server/app/app.ts`). The approval card preselects "Read only"; more must be chosen on purpose.
+- **Switching the permission mode answers open approvals.** When the settings' permission mode
+  changes, `App.autoAllowPending()` allows every open approval the new mode would not have asked
+  for: all of them for `bypassPermissions`, file edits for `acceptEdits`. Questions are never
+  answered this way. Changing settings needs the local page or a device with the `full` role.
+- **Private scratch folders.** Each conversation has one temporary folder, shared by its agents and
+  given to Claude Code agents as `TMPDIR` (and `CLAUDE_CODE_TMPDIR`; also `TMP`/`TEMP` on Windows), so their
+  temporary files, downloads and browser profiles stay out of the shared `/tmp`. It is
+  `<cache>/masthead/scratch/<conversation id>`: `~/.cache/masthead/scratch` on Linux
+  (`$XDG_CACHE_HOME`), `~/Library/Caches/Masthead/scratch` on macOS,
+  `%LOCALAPPDATA%\Masthead\Cache\scratch` on Windows (inside the data folder, so private by its
+  `icacls` rule), or `<data folder>/scratch` when `MASTHEAD_DATA_DIR` is set. It is made with mode
+  `0700` when an agent's session opens; the id must match `[A-Za-z0-9_-]{1,128}`, so it cannot point
+  elsewhere. It is deleted with the conversation, and a sweep 10 s after start removes folders whose
+  conversation is gone, or whose conversation was neither active nor changed inside the folder
+  (looking up to 4 levels and 2000 entries deep, without following links; a bigger folder counts as
+  just changed) for 7 days; never a busy conversation's (`server/service/scratch.ts`). Codex agents
+  all share one `codex app-server`, so they get no `TMPDIR` of their own; they are told the folder,
+  and it is added to the thread's writable roots while its sandbox is `workspaceWrite` (a read-only
+  thread cannot write there). See [server/service](Source-Service.md#scratchts).
+- **A resumed Codex chat never runs wider than its mode.** A Codex thread keeps the last sandbox
+  it had, a turn's override included (full access after a turn in bypass), and resuming cannot change
+  it (Codex 0.172). So after every resume the session works out the sandbox a new thread would get in
+  its current mode: full access for bypass; a workspace-write sandbox with network off for `default`,
+  `acceptEdits` and `auto`; for `inherit`, the person's own config, learned once per app-server and
+  folder by a throwaway `ephemeral` `thread/start` with no turn (cached). If the thread reports
+  something else, every turn carries the wanted sandbox. Under `inherit`, if that probe fails and the
+  thread reports full access or nothing, the chat is not resumed (it fails closed). The probe thread
+  stays loaded in the shared app-server until it ends. See
+  [Codex backend](Source-Backend-Codex.md#sending-sendid-content).
 - **Windows caveat.** Tailscale cannot serve a Unix socket on Windows, so the remote listener there
   is `127.0.0.1:7719`, which any local program can reach. Such a program still has no token and can
   only ask to pair. The code shown when it asks will not match your device, and the settings say this
@@ -170,6 +202,7 @@ Details and the pairing flow are on [Remote access](Remote-Access.md). In short:
 | Secret | `~/.local/share/masthead/secret` | `0600` (Windows: `icacls`, current user only) |
 | Conversations, transcripts, pictures | `~/.local/share/masthead/conversations/` | files `0600`, folders `0700` |
 | Remote access (devices, audit, config) | `~/.local/share/masthead/remote/` | files `0600`, folder `0700` |
+| Scratch folders | `~/.cache/masthead/scratch/<conversation id>/` | folders `0700` when Masthead creates them |
 | Remote socket | `$XDG_RUNTIME_DIR/masthead/remote.sock`, else `/tmp/masthead-<uid>/remote.sock` (`remote-<hash>.sock` for a data folder other than the usual one) | socket `0600` in a `0700` folder that must be yours and not a link |
 
 On Windows the data folder and the sign-in folder are set with `icacls` (private to your account,

@@ -24,8 +24,8 @@ flowchart LR
   - The built-in `claude` profile keeps the 0.1.x ids `lead`, `opus`, `sonnet`, `haiku`, so 0.1.x conversations and their agents load unchanged. It always has exactly these four tiers. Only their settings can be changed.
   - Every other profile's tiers are numbered from 0 as `<profile>:<index>`, for example `codex:0` and `codex:1`. The server assigns these ids whatever the page sends.
 - **Built-in profiles**:
-  - `claude` (`claudeProfile()`): Fable 5.2 lead at `xhigh`; Opus 5.5 at `xhigh`, max 3; Sonnet 5.5 at `high`, max 4; Haiku 5.5 at `medium`, max 4; every tier except the lead is lean. It always exists and cannot be removed.
-  - `codex` (`codexProfile()` in `server/backends/registry.ts`): built from the installed Codex's model list when Codex is detected as usable. It has up to four tiers, from the most capable model down. Each tier uses the effort the model supports up to `xhigh`/`xhigh`/`high`/`medium`, with max 1/3/4/4, and every tier except the first is lean. Its description reads "Built from the installed Codex's model list. Change it in the settings." `withBuiltInProfiles()` adds it to the settings once. After that the stored copy is kept, even if the person edits it.
+  - `claude` (`claudeProfile()`): Fable 5.2 lead at `xhigh`; Opus 5.5 at `xhigh`, max 3; Sonnet 5.5 at `high`, max 4; Haiku 5.5 at `medium`, max 4; Sonnet and Haiku are lean, the lead and Opus are not (Opus stopped being lean in 0.2.1; a profile already stored keeps its own switch). It always exists and cannot be removed.
+  - `codex` (`codexProfile()` in `server/backends/registry.ts`): built from the installed Codex's model list when Codex is detected as usable. It has up to four tiers, from the most capable model down. Each tier uses the effort the model supports up to `xhigh`/`xhigh`/`high`/`medium`, with max 1/3/4/4; the third and fourth tiers are lean, the first two are not (the second stopped being lean in 0.2.1). Its description reads "Built from the installed Codex's model list. Change it in the settings." `withBuiltInProfiles()` adds it to the settings once. After that the stored copy is kept, even if the person edits it.
   - A built-in profile can be put back to its defaults with `{t:'reset_profile', id}` (`resetProfile()`). For any other profile, `App` answers "Only a built-in team can be reset."
 - **People's profiles**: any other id matching `^[a-z0-9][a-z0-9-]{0,30}$`, with 1–5 tiers that each have a model.
 
@@ -60,7 +60,7 @@ The file is `settings.json` in the config folder ([Configuration and settings](C
   "permissionMode": "inherit",
   "autoEffort": true,
   "leanSubagents": true,
-  "leanOpus": true,
+  "leanOpus": false,
   "collapseReports": false,
   "maxRunMinutes": 0,
   "keepAwake": true,
@@ -111,7 +111,8 @@ To go back to 0.1.x, restore `settings.json.v1.bak` as `settings.json`. A 0.1.x 
 | tier `max` | Each time a slot is requested or freed (`tierLimit`). A raised limit starts queued agents at once. Lowering it does not stop agents that are already running. |
 | tier `model` | The lead (`isLead`: no parent) follows the setting, in any profile. `launch()` takes it at each launch, and `applySettings()` changes a running lead's model (`setModel`, or a relaunch with the same session). Other agents keep the model they were started with. An agent whose tier no profile lists any more keeps its own model and effort. |
 | tier `effort` | At launch, and at once for running agents: a lowered ceiling caps them, and with automatic effort off the fixed level is set. A raised ceiling raises nobody. See [Thinking effort](Thinking-Effort.md). |
-| tier `lean`, `permissionMode` | When an agent's process is next launched; a running process keeps what it started with. |
+| tier `lean` | When an agent's process is next launched; a running process keeps what it started with. |
+| `permissionMode` | At once: running sessions get `setPermissionMode()` (or are relaunched, same session, before their next turn), and open approval cards the new mode would not have asked for are allowed. See [Permissions and questions](Permissions-and-Questions.md#changing-the-mode-while-agents-run). |
 | tier `backend` | When an agent of the tier next launches (`App.backend()` looks it up by tier id). |
 | `autoEffort` | The tool list is built at launch. A change marks running processes stale, so each is relaunched (same session) before its next turn. The tools themselves read the setting on every call. |
 | `maxRunMinutes` | From the next tick of the conversation timer, including for agents already running. |

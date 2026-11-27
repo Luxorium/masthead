@@ -96,8 +96,9 @@ sequenceDiagram
   `<data folder>/remote/devices.json` (`0600`). The token works only from the node it was issued to: a
   copy used on another device is refused and logged.
 - **Roles:** `full` (everything the local page can, except shutting Masthead down and managing remote
-  access or devices), `approve` (read, answer approvals, stop work), `read` (only read). The role can be
-  changed at any time; open connections follow at once.
+  access or devices), `approve` (read, answer approvals, stop work), `read` (read only). The role can be
+  changed at any time; open connections follow at once. The request card starts on `read`, and a
+  decision that names no role gives `read` (0.2.1; it used to be `full`).
 - **Expiry:** 30 days, renewed whenever the device is used.
 - **Remove** ends the device's connections at once; it must pair again.
 - Approving a device that was approved before replaces its old token.

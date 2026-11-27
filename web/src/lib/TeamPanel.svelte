@@ -8,8 +8,10 @@
   import { fmtTokens, store } from './store.svelte.ts';
   import { T } from './text.ts';
   import { ui } from './ui.svelte.ts';
+  import { profileById } from './tiers.ts';
 
   const lead = $derived(store.lead);
+  const chatTeam = $derived(store.conv ? profileById(store.settings, store.conv.profileId ?? store.settings?.defaultProfile) : undefined);
   const pct = $derived(lead && lead.usage.contextMax > 0 ? Math.min(100, Math.round((lead.usage.context / lead.usage.contextMax) * 100)) : 0);
   const totalOut = $derived(store.agentList.reduce((n, a) => n + a.usage.output, 0));
 
@@ -61,6 +63,10 @@
   {#if lead}
     <section class="grow">
       <CompactProgress />
+      {#if chatTeam && (store.settings?.profiles.length ?? 0) > 1}
+        <!-- Simple too: which team this chat uses (its levels are only editable in Advanced). -->
+        <p class="small muted chat-team">{T.team.usesTeam(chatTeam.label)}</p>
+      {/if}
       <TeamOutline />
       {#if store.conv && store.mayAct}
         <!-- Per chat: the person may switch automatic tidying off here only (the setting covers all chats). -->
@@ -134,6 +140,9 @@
     min-width: 32px;
     padding: 2px 8px;
     font-size: 16px;
+  }
+  .chat-team {
+    margin: 6px 12px 0;
   }
   .chat-tidy {
     display: flex;

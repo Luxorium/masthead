@@ -54,8 +54,8 @@ masthead --version
 | `npm run build:web` | `vite build` | Bundles the page from `web/` into `dist/web/`. |
 | `npm run dev:web` | `vite` | The page with hot reload on `MASTHEAD_DEV_WEB_PORT` (default 7718), forwarding `/ws`, `/api` and `/blob` (pictures) to `127.0.0.1:<MASTHEAD_PORT>` (default 7717). Stops if the port is taken or a port value is invalid. |
 | `npm run check` | `tsc … --noEmit` and `svelte-check` | Type-checks the server and the page without writing files. |
-| `npm test` | `node --import tsx --test test/*.test.ts` | Server unit tests. No Claude Code needed. |
-| `npm run test:web` | `vitest run --config web/vitest.config.ts` | Page tests in happy-dom (some in jsdom). No browser needed. |
+| `npm test` | `node scripts/run-tests.mjs` (runs `node --import tsx --test test/*.test.ts` in a per-run temp folder it removes) | Server unit tests. No Claude Code needed. |
+| `npm run test:web` | `node scripts/run-tests.mjs -- vitest run --config web/vitest.config.ts` | Page tests in happy-dom (some in jsdom). No browser needed. |
 | `npm run test:live` | `node … --import tsx test/live.e2e.ts` | End-to-end against the real Claude Code. **Spends usage.** |
 | `npm start` | `node --disable-warning=… dist/server/main.js serve` | Runs the built server in the terminal, on 7717 unless `--port` or `MASTHEAD_PORT` says otherwise. |
 | `npm pack` | `prepack` (`npm run build`), then packs | The tarball, from the `files` list. |

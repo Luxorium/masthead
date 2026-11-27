@@ -17,7 +17,8 @@ import {
   type Settings,
 } from '../../shared/protocol.js';
 import type { Agent } from '../runtime/agent.js';
-import { HOME, SETTINGS_FILE } from '../paths.js';
+import { DATA_DIR, HOME, SETTINGS_FILE } from '../paths.js';
+import { ensureScratch, removeScratch, scratchRoot, sweepScratch } from '../service/scratch.js';
 import { findClaude, type ClaudeInfo } from '../backends/claude/env.js';
 import { chatsUsing, deleteProfile, freshProfileIds, loadSettings, resetProfile, sanitizeSettings, settingsProblem, saveSettings, tierLimit, withBuiltInProfiles } from '../settings/settings.js';
 import { CLAUDE_PROFILE, findTier } from '../../shared/protocol.js';
@@ -25,6 +26,7 @@ import { Conversation, type ConversationHost } from '../core/conversation.js';
 import { Scheduler } from '../core/scheduler.js';
 import type { BlobRef } from '../storage/blobs.js';
 import { Store } from '../storage/store.js';
+import { writeFileAtomic } from '../storage/atomic.js';
 import type { RemoteAccess } from '../remote/access.js';
 import { ClientError, Hub, type Client } from './clients.js';
 import type { BackendStatusV2 } from '../../shared/protocol-v2.js';
@@ -32,8 +34,30 @@ import type { BackendStatusV2 } from '../../shared/protocol-v2.js';
 /** A browser tab connected to the server. */
 export type { Client } from './clients.js';
 
+/**
+ * The usage notices saved by an earlier run (`{ version: 1, notices }`), without those whose window has
+ * already reset (their figures no longer hold). A missing or unreadable file is no notices.
+ */
+export function loadUsage(file: string, now = Date.now()): RateLimitNotice[] {
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as { version?: unknown; notices?: unknown };
+    if (raw.version !== 1 || !Array.isArray(raw.notices)) return [];
+    return raw.notices.filter(
+      (n): n is RateLimitNotice =>
+        !!n && typeof n === 'object' && ['allowed', 'allowed_warning', 'rejected'].includes((n as RateLimitNotice).status) && typeof (n as RateLimitNotice).resetsAt === 'number' && (n as RateLimitNotice).resetsAt! * 1000 > now,
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Scratch folders are swept this long after start, so the sweep never delays it. */
+const SWEEP_DELAY_MS = 10_000;
+
 interface PendingPermission {
   request: PermissionRequest;
+  /** The backend's kind of ask, for the permission mode's auto-allow (autoAllowPending). */
+  askKind: PermissionAsk['kind'];
   resolve(answer: PermissionAnswer): void;
 }
 
@@ -61,6 +85,7 @@ export class App implements ConversationHost {
   private busy = new Map<string, boolean>();
   /** The latest usage-limit notice of each kind, so a tab that connects later sees it too. */
   private usage = new Map<string, RateLimitNotice>();
+  private readonly usageFile: string | null;
   /** Disk writes that are failing; each is logged once until it works again. */
   private failing = new Set<string>();
   /** The agent backends (Claude Code, Codex; only the fake when the environment selects it). */
@@ -70,7 +95,13 @@ export class App implements ConversationHost {
    * `settingsFile` is where changes to the settings are written. Tests pass their own file so they
    * never touch the person's real settings.
    */
-  constructor(opts: { store?: Store; claude?: ClaudeInfo; settings?: Settings; settingsFile?: string; registry?: BackendRegistry; remote?: RemoteAccess; awake?: { set(working: boolean): void; stop(): void } } = {}) {
+  constructor(opts: { store?: Store; claude?: ClaudeInfo; settings?: Settings; settingsFile?: string; registry?: BackendRegistry; remote?: RemoteAccess; awake?: { set(working: boolean): void; stop(): void }; restartReason?: string | null; scratchRoot?: string | null; usageFile?: string | null } = {}) {
+    this.lastRestart = opts.restartReason ?? null;
+    // The latest usage notice of each kind, kept across restarts so a new tab has them at once.
+    this.usageFile = opts.usageFile !== undefined ? opts.usageFile : opts.store ? null : join(DATA_DIR, 'usage.json');
+    if (this.usageFile) for (const n of loadUsage(this.usageFile)) this.usage.set(n.type ?? '', n);
+    // Agents' temporary folders: the real one for a real start; tests pass their own, or none.
+    this.scratch = opts.scratchRoot !== undefined ? opts.scratchRoot : opts.store ? null : scratchRoot(process.platform, process.env, HOME, DATA_DIR);
     this.remote = opts.remote ?? null;
     this.awake = opts.awake ?? null;
     // Local tabs see remote access change as it happens (requests, devices, the switch).
@@ -93,6 +124,38 @@ export class App implements ConversationHost {
       this.conversations.set(conv.meta.id, conv);
       // Images no transcript refers to any more (a conversation saved by an older run, a failed send).
       this.safely('images', () => void this.store.collectBlobs(conv.meta.id));
+    }
+    // Old scratch folders go shortly after start, off the start-up path; a failure is only logged.
+    if (this.scratch) {
+      const t = setTimeout(() => this.sweepScratch(), SWEEP_DELAY_MS);
+      t.unref?.();
+    }
+  }
+
+  /** The root of the conversations' scratch folders, or null for none. */
+  private readonly scratch: string | null;
+
+  /**
+   * Removes scratch folders of deleted conversations, and of those that were neither active nor
+   * changed inside for a week (never a busy one).
+   */
+  sweepScratch(now?: number): string[] {
+    if (!this.scratch) return [];
+    let removed: string[] = [];
+    this.safely('scratch folders', () => {
+      removed = sweepScratch(this.scratch!, { exists: (id) => this.conversations.has(id), busy: (id) => this.conversations.get(id)?.busy() ?? false, activeAt: (id) => this.conversations.get(id)?.meta.updatedAt, ...(now !== undefined ? { now } : {}) });
+    });
+    return removed;
+  }
+
+  scratchDir(convId: string): string | undefined {
+    if (!this.scratch) return undefined;
+    try {
+      return ensureScratch(this.scratch, convId);
+    } catch (e) {
+      // No scratch folder: the agent uses the system's temporary folder, as before.
+      console.error(`Masthead could not make a scratch folder: ${(e as Error).message}`);
+      return undefined;
     }
   }
 
@@ -131,9 +194,20 @@ export class App implements ConversationHost {
     }
   }
 
+  /** The newest `n` items of an agent's stored transcript. */
+  lastItems(convId: string, agentId: string, n: number): Item[] {
+    return this.store.readItems(convId, agentId, { limit: n }).items;
+  }
+
   /** Stored transcript of an agent (the read_archive tool). */
   readItems(convId: string, agentId: string): Item[] {
     return this.store.loadItems(convId, agentId);
+  }
+
+  /** Why the server was last restarted, when it is known (see service/laststop.ts); restored chats say so. */
+  private lastRestart: string | null;
+  restartReason(): string | null {
+    return this.lastRestart;
   }
 
   /** The team-compaction flow changed: every tab hears the state, and which agents are archived. */
@@ -161,6 +235,8 @@ export class App implements ConversationHost {
 
   rateLimit(notice: RateLimitNotice): void {
     this.usage.set(notice.type ?? '', notice);
+    const file = this.usageFile;
+    if (file) this.safely('usage notices', () => writeFileAtomic(file, JSON.stringify({ version: 1, notices: [...this.usage.values()] })));
     this.broadcast({ t: 'rate_limit', notice });
   }
 
@@ -188,7 +264,7 @@ export class App implements ConversationHost {
         resolvePermission(answer);
       };
       const onAbort = () => settle({ decision: 'deny', message: 'The request was cancelled.' });
-      this.pending.set(request.id, { request, resolve: settle });
+      this.pending.set(request.id, { request, askKind: ask.kind, resolve: settle });
       ask.signal.addEventListener('abort', onAbort, { once: true });
       this.broadcast({ t: 'permission_request', request });
     });
@@ -231,6 +307,15 @@ export class App implements ConversationHost {
         if (this.conversations.has(id)) this.safely('conversation', () => this.store.saveConversation(conv.toStored()));
       }, SAVE_DELAY_MS),
     );
+  }
+
+  /** Saves a conversation now instead of after SAVE_DELAY_MS (a once-only mark must survive a crash loop). */
+  saveNow(conv: Conversation): void {
+    const id = conv.meta.id;
+    const timer = this.dirty.get(id);
+    if (timer) clearTimeout(timer);
+    this.dirty.delete(id);
+    if (this.conversations.has(id)) this.safely('conversation', () => this.store.saveConversation(conv.toStored()));
   }
 
   private flush(): void {
@@ -378,7 +463,8 @@ export class App implements ConversationHost {
       case 'device_decision': {
         const m = msg as { requestId?: unknown; decision?: unknown; role?: unknown };
         if (m.decision !== 'allow' && m.decision !== 'deny') throw new Error('Allow or deny.');
-        this.requireRemote().decide(String(m.requestId ?? ''), m.decision, m.role ?? 'full');
+        // Without a role the most limited one: the page always sends one.
+        this.requireRemote().decide(String(m.requestId ?? ''), m.decision, m.role ?? 'read');
         return true;
       }
       case 'device_revoke':
@@ -602,6 +688,7 @@ export class App implements ConversationHost {
         this.busy.delete(conv.meta.id);
         this.keepAwake();
         this.store.deleteConversation(conv.meta.id);
+        if (this.scratch) this.safely('scratch folder', () => removeScratch(this.scratch!, conv.meta.id));
         this.broadcast({ t: 'deleted', convId: conv.meta.id });
         this.broadcast({ t: 'conversations', conversations: this.metas() });
         return;
@@ -615,13 +702,23 @@ export class App implements ConversationHost {
   }
 
   private updateSettings(next: Settings): void {
+    const modeChanged = next.permissionMode !== this.currentSettings.permissionMode;
     this.currentSettings = next;
     this.safely('settings', () => saveSettings(next, this.settingsFile));
     this.keepAwake();
     this.scheduler.limitsChanged();
     // Running agents take up what can change without restarting them.
     for (const conv of this.conversations.values()) conv.settingsChanged();
+    if (modeChanged) this.autoAllowPending(next.permissionMode);
     this.broadcast({ t: 'settings', settings: next });
+  }
+
+  /** Open approvals the new mode would not have asked for are allowed (bypass: all but questions; acceptEdits: file edits). */
+  private autoAllowPending(mode: Settings['permissionMode']): void {
+    for (const p of [...this.pending.values()]) {
+      if (p.askKind === 'question') continue;
+      if (mode === 'bypassPermissions' || (mode === 'acceptEdits' && p.askKind === 'file')) p.resolve({ decision: 'allow' });
+    }
   }
 
   private answerPermission(msg: Extract<ClientMsg, { t: 'permission' }>): void {

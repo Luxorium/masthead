@@ -22,6 +22,7 @@ Re-exported from `clients.ts` (see [Client and HubHost](Source-Clients.md#client
 4. The `BackendRegistry` (given, or new). Only on a real start (neither `claude` nor `registry` given) it calls `registry.detectAll()` in the background and then `backendsDetected()`.
 5. The `Store`, and a `Scheduler` whose limit for a tier is `tierLimit(settings, tier)`, which reads the tier's own team profile.
 6. Every saved conversation is restored with `Conversation.restore()`. For each, `store.collectBlobs()` (through `safely('images')`) removes pictures no transcript refers to any more.
+7. When there is a scratch root (the constructor's `scratchRoot` option; on a real start, without a given `store`, `scratchRoot()` in [server/service/scratch.ts](Source-Service.md#scratchts)), `sweepScratch()` runs 10 seconds later (`SWEEP_DELAY_MS`), off the start-up path. `App.sweepScratch(now?)` calls the module's `sweepScratch()` with `exists` = the conversation is loaded, `busy` = it is busy, and `activeAt` = its `meta.updatedAt`, so an existing chat's folder is kept while the chat was active or anything in the folder changed in the last 7 days. Failures are only logged (`safely('scratch folders')`). Deleting a conversation removes its folder too.
 
 ## `ConversationHost` implementation
 
@@ -37,6 +38,10 @@ Re-exported from `clients.ts` (see [Client and HubHost](Source-Clients.md#client
 | `rateLimit(notice)` | Keep it as the latest notice of its `type` (sent to later tabs in `AppState.usage`); broadcast `{t:'rate_limit'}`. |
 | `askPermission(conv, agent, ask)` | Create a `PermissionRequest` (kind `question` or `permission`; `canAlways` only for a permission the backend says can be remembered), keep it in `pending`, broadcast it, and return a promise settled by the person's answer, by the ask's abort signal ("The request was cancelled."), or by cancellation. Settling removes it and broadcasts `permission_resolved`. See [Permissions and questions](Permissions-and-Questions.md). |
 | `cancelPermissions(agentId)` | Deny every pending request from that agent ("The agent was stopped."). |
+| `restartReason()` | Why the server was last restarted, when known: the constructor's `restartReason` option, which `server/main.ts` fills with `lastStopNotice(takeLastStop())` (`server/service/laststop.ts`: "Masthead was restarted because the computer ran out of memory.", else null). A restored conversation shows it once when it was active in the last 6 hours or the restart cut something off in it (`afterRestart()`). |
+| `lastItems(convId, agentId, n)` | The last `n` stored items, oldest first (`store.readItems(…, { limit: n })`); `afterRestart()` reads the lead's last 50 to find an unanswered message. |
+| `scratchDir(convId)` | Makes (`ensureScratch()`) and returns the conversation's scratch folder, or `undefined` when there is no scratch root or it cannot be made (logged; the agent then uses the system's temporary folder). |
+| `saveNow(conv)` | Cancels the pending save timer and saves `conv.toStored()` at once (through `safely('conversation')`), if it is still registered. `afterRestart()` calls it so the once-only restart marks are on disk before anything else can happen. |
 
 ## Saving, shutdown and keeping awake
 
@@ -85,7 +90,7 @@ Any error becomes `hub.error(client, e, ref)`, where `ref` is the message's `ref
 Returns true for the types it handles. The comment says these come from the local browser only, which the gate enforces, except `forget_me` and `check_backends`.
 
 - **`remote_settings`** (`enabled?`, `port?`, `allowOtherTailnets?`, `allowTagged?`): `remote.configure(msg)` with the raw fields, which validates them. If `enabled` is a boolean it also calls `remote.setEnabled()` in the background. When that reports `ok: false`, the tab gets a `refused` error with the problem and, if given, "Run: <command>". Throws `not_found` "Remote access is not available here." when there is no remote access (`requireRemote()`).
-- **`device_decision`** (`requestId`, `decision`, `role?`): `decision` must be `allow` or `deny` ("Allow or deny."). Calls `remote.decide(requestId, decision, role ?? 'full')`.
+- **`device_decision`** (`requestId`, `decision`, `role?`): `decision` must be `allow` or `deny` ("Allow or deny."). Calls `remote.decide(requestId, decision, role ?? 'read')`: without a role, the most limited one (0.2.1; it was `full`). The page always sends one; its card now starts on `read` (`web/src/lib/remote/DeviceRequestCard.svelte`).
 - **`device_revoke`** (`nodeId`): `remote.revoke(nodeId)`.
 - **`device_role`** (`nodeId`, `role`): `remote.setRole(nodeId, role)`, which rejects an unknown device or role. The device's open sockets follow at once through [`setRole()`](Source-Transport-Remote.md#disconnectnodeid-and-setrolenodeid-role).
 - **`reset_profile`** (`id`): reads the profile id from `msg.id`. Only a built-in profile may be reset (`not_found`, "Only a built-in team can be reset."). Then `updateSettings(resetProfile(settings, id, registry.generatedProfiles()))`. Covered by "reset_profile: a built-in team goes back to how it ships; others and lower roles are refused" in `test/protocol-v2.test.ts`.

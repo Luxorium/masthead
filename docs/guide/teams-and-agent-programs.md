@@ -50,9 +50,14 @@ a built-in Claude team (Fable, then Opus, Sonnet and Haiku helpers).
 
 - **Team for new chats** chooses the team a new chat starts with. You can also pick one for a single
   chat with the **Uses …** button under the message box (for example **Uses Claude**; its menu is "Choose which AI works on this chat"), before the first message. It shows only when you have more than one team that can start.
-- Press **Edit …** (for example **Edit Claude**) to change a team's levels. For each level you can set the **Name shown**, the **Agent
+- Press **Edit …** (for example **Edit Claude**) to change a team's levels (in the simple view, turn
+  on **Show team controls** first). For each level you can set the **Name shown**, the **Agent
   program**, the **Model**, **Thinking time up to**, **Helpers at a time**, **Keep light** and a
   **Colour**. **Add a helper level** adds one below; a team can have at most 5 levels.
+- **Keep light** means agents on that level cannot use your connected services and tools (such as
+  an online shop or a mail service connected to Claude). Since 0.2.1 the built-in Opus level, and
+  the second level of a Codex team, are no longer kept light. A team you already saved keeps its
+  setting: to change it, press **Edit …**, and untick **Keep light** on that level.
 - **In 0.2.0 a team runs wholly on Claude Code or wholly on Codex**: every level of a team uses the
   same agent program. To use both, make one team for each.
 - If a team's program is missing or not signed in, the editor says "<program> is not ready on this computer, so this team cannot start yet."

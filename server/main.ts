@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { totalmem } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { VERSION } from '../shared/protocol.js';
 import { App } from './app/app.js';
@@ -12,9 +13,11 @@ import { serve } from './transport/http.js';
 import { chooseTarget, startRemote } from './transport/remote.js';
 import { RemoteAccess, targetUrl } from './remote/access.js';
 import { tailscaleFor } from './remote/tailscale.js';
-import { serviceFor, ServiceError } from './service/index.js';
+import { serviceFor, ServiceError, systemDeps } from './service/index.js';
+import { serviceUsage, tmpInfo } from './service/usage.js';
 import { statusSummary } from './service/common.js';
 import { Awake, awakeCommand } from './service/awake.js';
+import { lastStopNotice, takeLastStop } from './service/laststop.js';
 import { doctor, doctorExitCode, formatChecks, sdkBinaryPackage, systemDoctorFs } from './doctor.js';
 import { findClaude } from './backends/claude/env.js';
 import { CONFIG_DIR } from './paths.js';
@@ -166,6 +169,8 @@ async function doctorCommand(p: number): Promise<void> {
     service: serviceFor(process.platform),
     sdkBinary: () => sdkBinaryPackage(),
     isPrivate: (file) => isPrivate(file),
+    ...(process.platform === 'linux' ? { serviceUsage: () => serviceUsage(systemDeps().run), tmp: () => tmpInfo() } : {}),
+    totalMemory: totalmem(),
     awakeTool: () => {
       const c = awakeCommand(process.platform, process.pid);
       return { cmd: c?.cmd ?? null, found: c ? onPath(c.cmd, process.env, process.platform, existsSync) : false };
@@ -209,7 +214,8 @@ async function runServer(): Promise<void> {
   const p = port();
   // Remote access over Tailscale: off by default; Masthead adds and removes only its own serve entry.
   const remote = new RemoteAccess({ dir: join(DATA_DIR, 'remote'), tailscale: tailscaleFor(process.env), target: chooseTarget(process.env, DATA_DIR) });
-  const app = new App({ remote, awake: new Awake() });
+  // Why the last run ended, when systemd recorded it (the computer ran out of memory): chats it cut off say so.
+  const app = new App({ remote, awake: new Awake(), restartReason: lastStopNotice(takeLastStop()) });
   const dev = process.env.MASTHEAD_DEV === '1';
   let devWeb = 7718;
   try {

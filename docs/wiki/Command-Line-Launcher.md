@@ -147,7 +147,9 @@ The page saves the key in that browser for this address and removes it from the 
 | Config folder, Data folder | not a folder, or not writable | it does not exist yet |
 | Secret | it is a folder, or (not on Windows) others can read it | it does not exist yet |
 | Port N | another program answers there, or it could not be checked | |
-| Service | installed but not running; it could not be checked | not installed, none on this platform, or its state is unknown |
+| Service | installed but not running; it could not be checked | not installed, none on this platform, or its state is unknown; on Linux, a unit written by a Masthead before 0.2.1 (`OOMPolicy` not `continue`: running out of memory would stop every agent; or no `ExecStopPost=` line with `masthead-last-stop`: an out-of-memory restart could not be reported); the fix is `masthead service install`, or `scripts/install.sh` again |
+| Service memory (Linux, while the service runs) | | the service, with every agent's tools and browsers, uses half the computer's RAM or more. The line also says how many child processes it has |
+| Temporary folder (Linux, only when `/tmp` is in memory, tmpfs) | | `/tmp` is smaller than 2 GB or less than a fifth of it is free. Masthead's agents use their own scratch folders on disk ([server/service](Source-Service.md#scratchts)); other programs still use `/tmp` |
 | SDK private binary | | the Agent SDK's unused private copy of Claude Code is installed |
 | Keep awake | | the tool is missing, or the platform has none |
 
