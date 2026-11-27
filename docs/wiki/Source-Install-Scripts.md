@@ -1,18 +1,30 @@
 # Installing (scripts and packaging)
 
-Files: `scripts/install.sh`, `scripts/uninstall.sh`, `packaging/masthead.desktop` and `packaging/masthead.svg`. These install Masthead for the current user. Nothing needs root, and running `install.sh` again updates an existing installation.
+Files: `scripts/install.sh`, `scripts/uninstall.sh`, `packaging/masthead.desktop` and `packaging/masthead.svg`. They install Masthead 0.1.3 for the current user. Nothing needs root. Running `install.sh` again updates an existing installation. Everything on this page is read from the scripts, not run.
+
+## Where things go
+
+| What | Path | Set by |
+|---|---|---|
+| The app | `~/.local/lib/masthead` (always under `$HOME`) | `lib` |
+| The `masthead` command | `~/.local/bin/masthead` (always under `$HOME`) | `bin` |
+| The systemd user unit | `$XDG_CONFIG_HOME/systemd/user/masthead.service` (default `~/.config/…`) | `unit_dir` |
+| The desktop entry | `$XDG_DATA_HOME/applications/masthead.desktop` (default `~/.local/share/…`) | `apps` |
+| The icon | `$XDG_DATA_HOME/icons/hicolor/scalable/apps/masthead.svg` | `icons` |
+
+Because the unit, desktop entry and icon follow `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, run `install.sh` from a shell where those are either unset or set to the folders you really use. A shell left with a test server's temporary XDG folders would install the unit there and bake those folders into it (see step 6).
 
 ## What `install.sh` does
 
-Usage: `scripts/install.sh [--force]`. `--force` restarts even while agents are working; any other option is refused.
+Usage: `scripts/install.sh [--force]`. `--force` restarts even while agents are working. `-h` or `--help` prints the usage lines from the script's header and exits. Any other option is refused with exit code 2. The script runs with `set -euo pipefail`, so any failed command stops it.
 
 ```mermaid
 flowchart TD
   A["check: node ≥ 22 (else stop);<br/>find claude on PATH or in usual places"] --> B["in the project folder:<br/>npm ci if node_modules is missing or the lock file is newer;<br/>npm run build"]
-  B --> C{"running copy on 7717<br/>has agents working?"}
-  C -- "yes, no --force" --> X["ask (terminal) or stop;<br/>nothing changed"]
-  C -- "no, or confirmed" --> D["stage ~/.local/lib/masthead.new:<br/>dist, package files, node_modules"]
-  D --> E["swap: old copy to masthead.old,<br/>masthead.new to masthead"]
+  B --> C{"Masthead on 7717<br/>reports busy > 0 or no busy field?"}
+  C -- "yes, no --force" --> X["ask (terminal) or stop;<br/>nothing installed is changed"]
+  C -- "no, or confirmed, or --force" --> D["stage ~/.local/lib/masthead.new:<br/>dist, package files, node_modules"]
+  D --> E["swap: masthead to masthead.old,<br/>masthead.new to masthead"]
   E --> F["write ~/.local/bin/masthead"]
   F --> G["write systemd user unit masthead.service"]
   G --> H["write .desktop entry (full path) and copy icon"]
@@ -25,39 +37,69 @@ flowchart TD
 
 Step by step:
 
-1. **Checks.** It stops if `node` is missing or older than version 22. It looks for `claude` on `PATH`, then in `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin` and `~/.bun/bin`. If there is none it only prints a note, because Masthead can be installed before Claude Code.
-2. **Build** in the project folder. It runs `npm ci` when `node_modules` is missing or `package-lock.json` is newer than `node_modules/.package-lock.json` (which npm updates on every install, so a pull or checkout that changes the lock triggers it), then `npm run build`.
-3. **Busy check.** Before anything installed is touched, it asks `http://127.0.0.1:7717/api/health` for `busy`, the number of conversations with agents working. If that is more than 0, or the running copy is too old to say (0.1.0 has no `busy`), and `--force` was not given, it asks for confirmation in a terminal; without a terminal it stops. Either way, declining leaves everything as it was.
-4. **Stage and swap.** It builds the new copy in `~/.local/lib/masthead.new`: `dist/`, `package.json` and `package-lock.json`. When the lock file matches the installed one, it reuses `node_modules` with hard links (`cp -al`, else a plain copy); otherwise it runs `npm ci --omit=dev --omit=optional` there. The optional package holds a private copy of Claude Code, and Masthead runs the one the person installed; `AGENTS.md` makes that a rule. Then the old folder is renamed to `masthead.old` and the new one to `masthead`, so the running server never loses half its files. `masthead.old` is removed after the restart.
-5. **The `masthead` command.** It writes `~/.local/bin/masthead`, a two-line bash script that runs `dist/server/main.js` with the Node found in step 1 (and `--disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`), passing on all arguments. Both paths are quoted with `printf %q`.
-6. **The systemd user unit.** It writes `masthead.service` in `$XDG_CONFIG_HOME/systemd/user` (default `~/.config/systemd/user`). The unit:
-   - runs `node … main.js serve`, with both paths quoted for systemd (`%` and `$` escaped), so a home folder with spaces works;
-   - sets `PATH` to Node's folder, Claude Code's folder, the `PATH` the installer ran with, then `~/.local/bin`, `/usr/local/bin`, `/usr/bin` and `/bin`, so tools in `~/.npm-global`, `~/.bun` and the like are found;
-   - sets `MASTHEAD_CLAUDE` to the `claude` found in step 1, whenever one was found;
-   - sets `XDG_CONFIG_HOME` and `XDG_DATA_HOME` when the installer had them set, so the service uses the same settings, conversations and secret as the `masthead` command;
-   - restarts on failure after 2 seconds, allows 10 seconds to stop, and is wanted by `default.target`, so it starts at login.
+1. **Options.** The `for arg` loop sets `force=1` for `--force`, prints help for `-h`/`--help`, and refuses anything else.
+2. **Node check.** `node_bin` is `command -v node`. If it is missing, or `process.versions.node`'s major number is below 22, the script stops with exit 1.
+3. **Claude Code lookup.** `claude_bin` is `command -v claude`. If that finds nothing, it tries `~/.local/bin/claude`, `~/.claude/local/claude`, `~/.npm-global/bin/claude` and `~/.bun/bin/claude`, taking the first that is executable. If there is none it only prints a note, because Masthead can be installed before Claude Code.
+4. **Build in the project folder.** The `npm ci` rule: it runs `npm ci --no-audit --no-fund` when `node_modules` is missing or `package-lock.json` is newer than `node_modules/.package-lock.json`. npm rewrites that file on every install, so a pull or checkout that changes the lock file triggers a clean install. Then `npm run --silent build`.
+5. **Busy check.** Before anything installed is touched, a short Node script fetches `http://127.0.0.1:7717/api/health` with a 1.5-second time-out and prints:
+   - `0` if nothing answers, the answer is not JSON, or its `name` is not `masthead`;
+   - the `busy` number (conversations with agents working) if there is one;
+   - `unknown` if a Masthead answers without `busy` (an older version).
 
-   It also has `After=network-online.target`.
-7. **Desktop entry and icon.** It writes `~/.local/share/applications/masthead.desktop` from `packaging/masthead.desktop`, replacing `Exec=` with the full, quoted path of `~/.local/bin/masthead` (a desktop session's `PATH` often lacks `~/.local/bin`) and dropping the template's comment. It copies `masthead.svg` to `~/.local/share/icons/hicolor/scalable/apps/`. The entry (Name "Masthead", categories Development and Utility) makes Masthead appear in the desktop's application launcher.
-8. **Start.** If a systemd user session is available, it reloads systemd, enables the unit and restarts it. Otherwise it prints "start it with: masthead".
-9. It warns if `~/.local/bin` is not on `PATH`.
+   If the result is not `0` and `--force` was not given, it asks "Continue? [y/N]" when standard input is a terminal; anything but y stops with "Nothing was changed." Without a terminal it prints the reason and stops with exit 1.
+6. **Stage and swap.** It creates the folders above, deletes any old `masthead.new`, and builds the new copy there: `dist/`, `package.json` and `package-lock.json`.
+   - **node_modules reuse.** If `~/.local/lib/masthead/node_modules` exists and the new lock file is byte-for-byte the installed one (`cmp -s`), it copies `node_modules` with hard links (`cp -al`), falling back to a full copy (`cp -a`) if hard links fail.
+   - Otherwise it runs `npm ci --omit=dev --omit=optional` in the staged folder. The optional package holds a private copy of Claude Code; Masthead runs the one the person installed, as `AGENTS.md` requires.
+   - Then it deletes any leftover `masthead.old`, renames the current `masthead` to `masthead.old` and `masthead.new` to `masthead`. The running server keeps its files until it is restarted.
+7. **Quoting helpers.** Three shell functions make paths with spaces or odd characters safe in the generated files:
 
-The service always serves port 7717. The launcher's `masthead`, `masthead stop` and `masthead status` use systemd only for that port; any other port is a separate copy handled over HTTP (see [Command-line launcher](Command-Line-Launcher.md)). A clean `masthead stop` makes the server exit with code 0, so `Restart=on-failure` does not start it again.
+   | Function | Used for | What it escapes |
+   |---|---|---|
+   | `unit_quote` | One word in a unit file (`Environment=`) | `\` and `"`, doubles `%`, wraps the word in double quotes |
+   | `exec_quote` | One word on the unit's `ExecStart=` line | Doubles `$`, then `unit_quote` |
+   | `desktop_quote` | The desktop entry's `Exec=` argument | `\`, `"`, `` ` `` and `$` for the quoted argument; then `\` again (the value is a string) and doubles `%` |
+
+8. **The `masthead` command.** It writes `~/.local/bin/masthead`, a two-line bash script: `exec <node> --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED <lib>/dist/server/main.js "$@"`. Both paths are quoted with `printf %q`. It is made executable.
+9. **The systemd user unit.** It writes `masthead.service`:
+   - `ExecStart=` runs `node … main.js serve`, both paths through `exec_quote`. No port is given, so the service serves 7717 unless a `MASTHEAD_PORT` reaches it some other way.
+   - `PATH`: Node's folder, Claude Code's folder (if found), the `PATH` the installer ran with, then `~/.local/bin`, `/usr/local/bin`, `/usr/bin` and `/bin`. This lets the service find tools in `~/.npm-global`, `~/.bun` and the like.
+   - `MASTHEAD_CLAUDE` is set to the `claude` found in step 3, whenever one was found.
+   - `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are set only if the installer had them set, so the service uses the same settings, conversations and secret as the `masthead` command.
+   - All `Environment=` values go through `unit_quote`.
+   - `Restart=on-failure`, `RestartSec=2`, `TimeoutStopSec=10`, `After=network-online.target`, and `WantedBy=default.target`, so it starts at login.
+10. **Desktop entry and icon.** It reads `packaging/masthead.desktop` line by line: the `Exec=` line becomes `Exec=` plus `desktop_quote` of the full path of `~/.local/bin/masthead` (a desktop session's `PATH` often lacks `~/.local/bin`), every line starting with `#` is dropped, and the rest is copied. It copies `packaging/masthead.svg` to the icons folder.
+11. **Start.** If `systemctl` exists and `systemctl --user show-environment` works, it runs `daemon-reload`, `enable --quiet masthead.service` and `restart masthead.service`, and says it is running as a user service. Otherwise it prints "start it with: masthead".
+12. **Clean-up.** It deletes `masthead.old`. If a command in step 11 failed, `set -e` stops the script first, and `masthead.old` is left behind until the next run.
+13. It warns if `~/.local/bin` is not on `PATH`, and prints "Done. Open it with: masthead".
+
+The service always serves port 7717. The launcher's `masthead`, `masthead stop` and `masthead status` use systemd only for the unit's port; any other port is a separate copy handled over HTTP (see [Command-line launcher](Command-Line-Launcher.md)). A clean `masthead stop` makes the server exit with code 0, so `Restart=on-failure` does not start it again.
+
+## The packaging files
+
+| File | Content |
+|---|---|
+| `packaging/masthead.desktop` | `Type=Application`, `Name=Masthead`, `Comment=Run a tiered team of Claude agents`, `Exec=masthead` (replaced on install), `Icon=masthead`, `Terminal=false`, `Categories=Development;Utility;`, `StartupNotify=false`, and a `#` comment saying the installer replaces `Exec`. It makes Masthead appear in the desktop's application launcher. |
+| `packaging/masthead.svg` | A 32×32 icon: a dark rounded square with three light bars of falling length, like lines of text. `Icon=masthead` finds it by name in the hicolor theme. |
 
 ## What `uninstall.sh` does
 
-1. Runs `~/.local/bin/masthead stop`, if present. That stops the service and also a copy started without it, on 7717 or `MASTHEAD_PORT` (errors ignored).
-2. Disables and stops the unit (errors ignored).
-3. Removes the unit file, `~/.local/bin/masthead`, the desktop entry, the icon, `~/.local/lib/masthead` and any leftover `masthead.new` or `masthead.old`.
-4. Reloads systemd.
-5. Prints where the kept data is. Conversations and the local secret (`$XDG_DATA_HOME/masthead`) and settings (`$XDG_CONFIG_HOME/masthead`) are **not** removed.
+It runs with `set -euo pipefail`, but every command that may fail ignores its errors.
+
+1. If `~/.local/bin/masthead` is executable, runs `masthead stop`. That stops the service, and also a copy started without it, on 7717 or `MASTHEAD_PORT`.
+2. If `systemctl` exists, `systemctl --user disable --now masthead.service`.
+3. Removes the unit file, `~/.local/bin/masthead`, the desktop entry, the icon, `~/.local/lib/masthead`, and any leftover `masthead.new` or `masthead.old`.
+4. Reloads systemd (`daemon-reload`).
+5. Prints "Masthead was removed." and where the kept data is. Conversations and the local secret (`$XDG_DATA_HOME/masthead`) and settings (`$XDG_CONFIG_HOME/masthead`) are **not** removed.
+
+Like the installer, it finds the unit, desktop entry and icon through `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, so run it with the same values the installer had.
 
 ## Points to be aware of
 
 - `After=network-online.target` normally has no effect in a user unit, because user units cannot wait for that system target. It does no harm.
-- The build step in the project folder uses a full `npm ci`, so the source checkout's `node_modules` normally includes the optional package (npm installs optional packages unless told not to). Only the installed copy omits it.
-- The installed launcher and unit fix the paths to Node and Claude Code, and the `PATH`, found at install time. If any of them changes, run `install.sh` again.
-- The busy check only asks port 7717. A separate copy on another port is not checked, and a copy started without the service on 7717 is not restarted by systemd.
+- The build step in the project folder uses a full `npm ci`, so the source checkout's `node_modules` normally includes the optional package. Only the installed copy omits it.
+- The installed launcher and unit fix the paths to Node and Claude Code, and the whole `PATH`, as found at install time. If any of them changes, run `install.sh` again. Any relative entry in the installer's `PATH` (such as `.`) is copied into the unit as well.
+- The busy check only asks port 7717. A separate copy on another port is not checked. A copy on 7717 started without the service is not restarted. The service then exits with "Port 7717 is already in use" (`runServer` in `server/main.ts`), and `Restart=on-failure` retries it every 2 seconds until the old copy is stopped.
+- Anything on 7717 that does not answer as Masthead counts as "not busy".
 
 ## Related pages
 

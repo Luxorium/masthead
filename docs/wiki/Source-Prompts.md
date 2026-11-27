@@ -43,14 +43,19 @@ Used by `Conversation.report()`.
 To answer, use send_message to "bravo".
 ```
 
-`hint` is `'reply' | 'wait'` or left out. With `'reply'` the last line is "To answer, use send_message to "bravo"."; with `'wait'` it is ""bravo" is waiting for your answer: reply with send_message to "bravo"."; with no hint there is no line. `Conversation.message()` passes `'wait'` when the sender waits for the answer (send_message with `wait: true`, counted only toward its parent or the lead), otherwise `'reply'` when the sender is not the target's parent. A parent's message is answered by the target's report, so it needs no reply line, and leaving the line out avoids acknowledgement turns.
+`hint` is `'reply' | 'wait'` or left out. With `'reply'` the last line is "To answer, use send_message to "bravo"."; with `'wait'` it is ""bravo" is waiting for your answer: reply with send_message to "bravo"."; with no hint there is no line. `Conversation.message()` passes `'wait'` when the sender waits for the answer (send_message with `wait: true` from a sub-agent to its parent or the lead; a wait toward anyone else is not honoured and the sender's reply says "(Not waiting: you can wait only for your parent or the lead.)"), otherwise `'reply'` when the sender is not the target's parent. A parent's message is answered by the target's report, so it needs no reply line, and leaving the line out avoids acknowledgement turns.
 
 Used by:
 
 - `Conversation.message()`;
 - effort requests in `setOwnEffort()` (no reply line: the request says how to approve).
 
+Before 0.1.2 the last parameter was a boolean `replyHint`; 0.1.2 replaced it with `hint` to add the `'wait'` line.
+
 ## Escaping
+
+The two helpers below are internal (not exported).
+
 
 Both envelopes pass the body through `escapeBody()`, which turns the `<` of any opening or closing `agent-report` / `agent-message` tag (any case, spaces allowed, e.g. `< /AGENT-MESSAGE`) into `&lt;`. So an agent, or web content it quotes, cannot close the envelope and write text that seems to come from outside it, such as from the person. The `from` and `status` attributes go through `attr()`, which replaces quotes, `<`, `>`, `&` and whitespace with `_`; agent names cannot contain those anyway.
 
@@ -72,7 +77,14 @@ The system prompt connects the tags to the rule that a colleague's text does not
 - A Haiku's text names its parent and does not mention `spawn_agent`.
 - Switching a tier off, or turning automatic effort off, changes the text.
 
-It also checks both envelopes. `test/conversation.test.ts` adds checks for the real effort level, a/an, the line-number and reuse lines, envelope escaping and the reply line.
+It also checks both envelopes. `test/conversation.test.ts` adds checks for the real effort level, a/an, the line-number and reuse lines, envelope escaping, the reply line and the wait line.
+
+## Callers
+
+- `systemAppend`: `Agent.launch()`, each time a process starts.
+- `withArticle`: here and in `server/tools.ts`.
+- `reportEnvelope`: `Conversation.report()`.
+- `messageEnvelope`: `Conversation.message()` and `Conversation.setOwnEffort()`.
 
 ## Related pages
 

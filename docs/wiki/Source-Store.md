@@ -19,6 +19,8 @@
 
 `constructor(root = CONVERSATIONS_DIR)` creates the root folder with mode `0700`. Tests pass a temporary folder instead.
 
+**State:** only `root`, the folder path. Nothing is cached in memory; every call reads or writes the files. The private helpers `dir(convId)` and `itemsFile(convId, agentId)` build the paths, both through `assertId()`.
+
 | Method | Behaviour |
 |---|---|
 | `loadAll()` | For each entry in the root whose name is a safe id, reads its `conversation.json`. Keeps it if it parses, `meta.id` equals the folder name, and `agents` is an array. Unreadable ones are skipped without an error. |
@@ -29,7 +31,7 @@
 
 ## Callers
 
-All calls come from `App` in `server/app.ts`:
+All calls in the server come from `App` in `server/app.ts`, which builds it as `opts.store ?? new Store()` and wraps `appendItem` and `saveConversation` in `safely()`, so a failing disk write is reported once rather than thrown (`loadItems` and `deleteConversation` are not wrapped):
 
 - `loadAll`: in the constructor;
 - `saveConversation`: from the delayed save and from `flush`;
@@ -37,12 +39,16 @@ All calls come from `App` in `server/app.ts`:
 - `loadItems`: for `{t:'items'}`;
 - `deleteConversation`: for `{t:'delete'}`.
 
+The types are imported by `server/conversation.ts` (`StoredConversation` for `restore()` and `toStored()`). Tests that build an `App` (`test/app.test.ts`, `test/live.e2e.ts`) pass their own `Store` on a temporary folder. The page's `store` in `web/src/lib/store.svelte.ts` is a different class with the same name.
+
 ## Tests
 
 `test/unit.test.ts` checks two things:
 
 - A transcript keeps its order and the last version of each item.
 - Conversations round-trip through save and load, bad ids throw, and delete removes the folder.
+
+`test/app.test.ts` also saves conversations through a `Store` and checks what `loadAll()` returns after a delete.
 
 ## Points to be aware of
 

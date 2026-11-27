@@ -18,7 +18,7 @@ This page follows one agent from creation to its end, names each **status** it c
 |---|---|
 | `queued` | Waiting for a free slot in its tier. |
 | `running` | A turn is in progress. |
-| `waiting` | Its turn ended, but agents it started are still live (or, for a sub-agent, commands it put in the background still run), so it is not finished. It keeps its slot and its process. |
+| `waiting` | Its turn ended, but something will still wake it: agents it started are still live, commands Claude Code put in the background for it still run (the lead too), or, for a sub-agent, it asked its parent or the lead a question with `send_message` and `wait: true` and is waiting for the answer (`info.waitingFor` names whom). So it is not finished. It keeps its slot and its process (`mustWait()` in `server/conversation.ts`). |
 | `idle` | Lead only: nothing in progress. |
 | `done` | A sub-agent finished normally. Its process is closed and slot returned. |
 | `failed` | A sub-agent ended with an error, or its process was lost. |

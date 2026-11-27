@@ -17,7 +17,7 @@ The settings sidebar sets, for each of the Opus, Sonnet and Haiku tiers, how man
 - The slot is given back when the agent finishes, fails, is stopped, or its process is lost (`Agent.end()` and `Conversation.processLost()` call `release()`).
 - A tier limit of 0 means agents of that tier cannot be started at all (`spawn()` refuses before reaching the scheduler), and a finished one cannot be woken (`Conversation.message()` refuses).
 - Setting a limit to 0 while agents of that tier are queued refuses them: `limitsChanged()` rejects each waiter with `TierOff`. `ensureProcess()` passes that to `Conversation.processLost()`, so the agent fails with "This tier was switched off in the settings while the agent was waiting to start." and its parent gets the usual failure report (or is settled if no report was owed). Nobody is left waiting for ever.
-- Otherwise, lowering a limit does not stop agents already running; it only affects who starts next (a known limitation, deliberate for 0.1.1, and checked by a unit test). Raising it starts queued agents at once (`limitsChanged()`).
+- Otherwise, lowering a limit does not stop agents already running; it only affects who starts next (a known limitation, deliberate in 0.1.3, and checked by a unit test). Raising it starts queued agents at once (`limitsChanged()`).
 
 ## Fair queueing
 

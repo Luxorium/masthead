@@ -1,6 +1,6 @@
 # Security model
 
-Masthead's server can run commands and edit files as the person, because the Claude Code agents it starts can. Anyone who can talk to the server can therefore act as the person. This page explains what the server does to limit who can reach it, and what it does not protect against. Code: `serve()` and `serveStatic()` in `server/http.ts`; input checks in `server/app.ts` and `server/store.ts`.
+Masthead's server can run commands and edit files as the person, because the Claude Code agents it starts can. Anyone who can talk to the server can therefore act as the person. This page explains what the server does to limit who can reach it, and what it does not protect against. How the agents themselves are kept in hand is on [Safety model](Safety-Model.md). Code: `serve()` and `serveStatic()` in `server/http.ts`; the secret in `server/config.ts`; input checks in `server/app.ts` and `server/store.ts`. Everything here was read from the code at 0.1.3. The HTTP checks are exercised by `test/http.test.ts` (see [Tests](Source-Tests.md)); the rest was not verified by running.
 
 ## What it defends against
 
@@ -8,7 +8,7 @@ The main threat considered in the code is **a web page on another site** trying 
 
 ### 1. Listening only on the loopback address
 
-`server.listen(port, '127.0.0.1')`. Other machines on the network cannot connect.
+`server.listen(port, '127.0.0.1')` in `serve()`. Other machines on the network cannot connect. Other user accounts on the same machine can connect to the port, which is why the secret below exists.
 
 ### 2. The Host header check (DNS rebinding)
 
@@ -26,39 +26,64 @@ The Host and Origin checks stop web pages, not programs: a local program can sen
 
 - **Where it lives.** `<DATA_DIR>/secret`, by default `~/.local/share/masthead/secret` (`SECRET_FILE` in `server/config.ts`). `loadSecret()` creates it once, when it is missing: 32 random bytes written as 64 hex characters, mode `0600`, in a folder created with mode `0700`. The file is written to a temporary name and hard-linked into place, so a launcher and a server starting at the same moment end up with the same secret. An existing file that does not hold 64 hex characters is replaced; one with looser permissions is set back to `0600`. The secret is kept across restarts, so a signed-in browser stays signed in.
 - **The server** (`masthead serve`) loads it at start-up (`secretOrExit()` in `server/main.ts`; it exits with code 1 if the file can be neither read nor created) and passes it to `serve()`. Comparisons use `timingSafeEqual` (`secretOk()` in `server/http.ts`).
-- **Signing a browser in.** `masthead` (the `open` command) opens `http://127.0.0.1:<port>/?key=<secret>`. The page (`takeKey()` in `web/src/lib/store.svelte.ts`) saves the key in `localStorage` under `masthead.key`, which is per origin, and removes it from the address bar with `history.replaceState`, so it is not left in history or bookmarks. If storage is refused (private browsing), the key works for that page load only. A tab opened without a key and with none stored shows a signed-out screen asking the person to open Masthead with `masthead`.
+- **Signing a browser in.** `masthead` (the `open` command) opens `http://127.0.0.1:<port>/?key=<secret>`. The page (`takeKey()` in `web/src/lib/store.svelte.ts`) saves the key in `localStorage` under `masthead.key`, which is per origin, and removes it from the address bar with `history.replaceState`, so it is not left in the address bar or in bookmarks (see the history caveat below). If storage is refused (private browsing), the key works for that page load only. A tab opened without a key and with none stored shows a signed-out screen asking the person to open Masthead with `masthead`.
 - **The socket.** The page opens `/ws` offering two subprotocols: `masthead` and `key.<secret>`. The upgrade is refused with `403` unless the `key.` subprotocol carries the secret (`offeredKey()`). The server's answer names only `masthead` (`handleProtocols`), so the key is never echoed back.
 - **Shutdown.** `POST /api/shutdown` needs the header `x-masthead: 1` **and** `x-masthead-key: <secret>`. A page on another site cannot add custom headers to a cross-site request without a CORS "preflight" check, and this server never answers one with permission (it sends no CORS headers, and `OPTIONS` gets `405`). `masthead stop` reads the secret file and sends both headers.
-- **What needs no secret.** The page itself (HTML, scripts, styles) holds no secret and is served to anyone who passes the Host check. `GET /api/health` returns only the name, version, process id and `busy` (how many conversations have agents working).
+- **What needs no secret.** The page itself (HTML, scripts, styles) holds no secret and is served to anyone who passes the Host check. `GET /api/health` returns only `name`, `version`, `pid` and `busy`, the number of conversations with agents working (`App.workingCount()`). Any local program, including one run by another user, can read those four values. `masthead status` and `install.sh` rely on them.
 
 In development mode the server prints the Vite page's address with its key (`http://localhost:7718/?key=…`); that page keeps the key in its own origin's storage.
 
 ### 5. Headers on the page itself
 
-`serveStatic()` sends with each file:
+`serveStatic()` sends with each file it serves:
 
 - `Content-Security-Policy`: scripts, styles and connections only from the server itself (`default-src 'self'`), inline styles allowed, images also from `data:` and `blob:`, WebSockets only to `ws://127.0.0.1:*` or `ws://localhost:*`, and `frame-ancestors 'none'` so no other site can embed the page in a frame.
+- The rest of the policy: `base-uri 'none'` and `form-action 'none'`.
 - `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. The referrer policy also keeps a `?key=` in the address from being sent to any other site.
+- `Cache-Control`: `no-cache` for the page, `public, max-age=31536000, immutable` for the hashed files under `/assets/`. API replies carry `no-store`.
 
-Static paths are URL-decoded and normalised; a path containing a NUL byte gets `400`, and a path that does not stay inside the web folder (the folder itself or something below it) gets `403`.
+Static paths are URL-decoded and normalised (`serveStatic()`). A malformed escape or a NUL byte gets `400`. A path that does not stay inside the web folder gets `403`; the check compares against the folder name plus a path separator, so a sibling folder whose name starts the same way does not count as inside. A missing file under `/assets/`, or any path with a file extension, gets `404`. Any other path gets `index.html`, because the page handles its own routes. A file that vanishes between the check and the read gets `404`, never a crash. Only `GET` and `HEAD` are served; other methods get `405`. Paths such as `/%2e%2e/…` and a sibling folder sharing the root's prefix are tested in `test/http.test.ts`.
+
+Each socket is pinged every 30 seconds. One that did not answer the previous ping is closed (`attach()`), and a closed socket stops nothing: agents keep working.
 
 ### 6. Rendering agent output in the page
 
-Agent text is Markdown written by a model, and could contain HTML. The page turns it into HTML with `marked` and then cleans it with **DOMPurify**, a library that removes scripts and other dangerous markup (`renderMarkdown()` in `web/src/lib/markdown.ts`). It also forbids `style`, `form`, `input` and `iframe` tags and makes links open in a new tab with `rel="noopener noreferrer"`. Other text (the person's own messages, tool input and output, notices) is inserted as plain text by Svelte. See [Web front end](Source-Web-Front-End.md).
+Agent text is Markdown written by a model, and could contain HTML. The page turns it into HTML with `marked`, whose `html` hook escapes any raw HTML the agent wrote, and then cleans the result with **DOMPurify**, a library that removes scripts and other dangerous markup (`renderMarkdown()` in `web/src/lib/markdown.ts`). It also forbids `style`, `form`, `input` and `iframe` tags and `style`, `id` and `name` attributes, keeps only the classes Masthead's own renderer and highlight.js produce, and makes links open in a new tab with `rel="noopener noreferrer"`. So agent text cannot restyle the page, for example to draw a fake "Allow" button. Other text (the person's own messages, tool input and output, notices) is inserted as plain text by Svelte. See [Rendering Markdown safely](Source-Web-Front-End.md#rendering-markdown-safely-markdownts).
 
 ### 7. Input checks
 
-- Every browser message is checked by `App.dispatch()`: unknown types and bad ids produce an `error` reply, not a crash.
-- Settings from the browser go through `sanitizeSettings()`: model ids must match a strict character pattern, numbers are clamped, unknown values fall back to defaults, `defaultCwd` must be an absolute path.
-- Images must be one of four types and valid base64 characters; at most 8 per message; text at most 400,000 characters.
-- Ids used in file paths must match a safe pattern (`assertId` in `server/store.ts`).
+- Every socket message is parsed as JSON in `attach()`; one that is not JSON gets "Malformed message.". `App.handle()` wraps `dispatch()` so that any thrown error becomes an `error` reply, carrying the `ref` of a refused `send` (clipped to 80 characters), never a crash. Unknown types get "Unknown request."; unknown conversation or agent ids get "no longer exists".
+- **Messages** (`send`): text up to 400,000 characters (`MAX_TEXT`), not empty unless it has images. Images: at most 8 (`MAX_IMAGES`), media type PNG, JPEG, GIF or WebP, data only base64 characters (`checkImages()`). There is no size limit per image beyond the 48 MiB socket message limit (`MAX_WS_PAYLOAD` in `server/http.ts`).
+- **Folders.** A new conversation's folder must exist and be a directory (`checkDir()`, with `~` expanded). The folder picker (`listDirs()`) lists non-hidden folders and symlinks to folders inside any path the server can read.
+- **Settings** (`{t:'settings'}`) are merged over the current settings by `sanitizeSettings(raw, current)` in `server/config.ts`. A field that is missing or invalid keeps its current value, so a partial update changes only what it names. Model ids must match `^[A-Za-z0-9._\-\[\]:]{1,80}$`. Effort must be one of the four levels (no `max`). Limits are clamped to 0..12. The permission mode must be one of the five choices. Booleans must be booleans. `defaultCwd` must start with `/`.
+- **Rename**: whitespace collapsed, at most 120 characters; an empty title is ignored.
+- Ids used in file paths must match `^[A-Za-z0-9_-]{1,64}$` (`assertId()` in `server/store.ts`), so a conversation or agent id cannot lead out of the data folder.
+
+### 8. Files on disk
+
+| What | Where | Mode |
+|---|---|---|
+| Settings | `$XDG_CONFIG_HOME/masthead/settings.json` (default `~/.config/masthead/`) | `0600`; folder created `0700`. Written by `writeFileAtomic()`: a temporary file then a rename, so a crash never leaves half a file. |
+| Secret | `$XDG_DATA_HOME/masthead/secret` (default `~/.local/share/masthead/`) | `0600`, reset to `0600` if looser; folder `0700` (`loadSecret()`) |
+| Conversations | `…/masthead/conversations/<id>/conversation.json` | `0600` via `writeFileAtomic()`; folders `0700` (`Store`) |
+| Transcripts | `…/conversations/<id>/items/<agent>.jsonl` | `0600` when created (`Store.appendItem()`) |
+
+Folder modes apply only when Masthead creates the folder. A folder that already exists keeps its mode. Failed writes (a full disk, say) are logged once and never stop the server (`App.safely()`).
+
+### 9. Development mode
+
+With `MASTHEAD_DEV=1`, `runServer()` adds `http://localhost:7718` and `http://127.0.0.1:7718` to the allowed origins and their hosts to the Host list. Nothing else is relaxed: the secret is still required. At start-up the server prints the Vite page's address with the key to its own terminal.
 
 ## What it does not defend against
 
 - **Programs running as the person.** Any program running under the person's own account can read the secret file, so it can open the socket and drive agents. `README.md` says so: such a program could run `claude` itself anyway. Other user accounts on the machine cannot read the file (mode `0600`) and are refused.
+- **Other users on the machine** cannot read the secret file or the data and settings files (modes above), so they cannot open the socket or stop the server. They can still connect to the port, read `/api/health`, load the page, and run a server of their own on another port.
+- **The key passing through the browser and the command line.** `masthead` gives the URL with `?key=` to `xdg-open` or `gio` as a command-line argument (`openBrowser()` in `server/main.ts`). On most Linux systems other users can see a process's arguments while it runs (for example with `ps`), and a browser started by that call may keep the URL in its own arguments. The browser may also record the first address, key included, in its history before the page removes it (not verified). In development mode the key is printed to the terminal.
 - **A leaked key.** Whoever has the key can connect for as long as the secret file is unchanged. Nothing rotates it; deleting `<DATA_DIR>/secret` and restarting the server makes a new one, and every browser then has to be signed in again with `masthead`. (This follows from `loadSecret()`; not verified by running.)
 - **What the agents do.** Agents run with the person's permissions and the chosen permission mode. With `bypassPermissions`, Claude Code does not ask before acting. See [Permissions and questions](Permissions-and-Questions.md).
 - **The folder picker** (`{t:'dirs'}`) lists the names of non-hidden folders anywhere the server process can read, for anyone who holds the socket.
+- **A flood from a socket holder.** There is no rate limit on socket messages; each may be up to 48 MiB.
+- **Plain HTTP on loopback.** Traffic is not encrypted. That is normal for `127.0.0.1`, but anything able to capture loopback traffic (root) sees the key.
 
 ## Agents and authority
 
@@ -68,4 +93,4 @@ Masthead does not touch credentials. `agentEnv()` (`server/config.ts`) passes th
 
 ## Related pages
 
-[server/http.ts](Source-Http.md) · [Command-line launcher](Command-Line-Launcher.md) · [Configuration and settings](Configuration-and-Settings.md)
+[Safety model](Safety-Model.md) · [server/http.ts](Source-Http.md) · [server/cli.ts](Source-Cli.md) · [Command-line launcher](Command-Line-Launcher.md) · [Configuration and settings](Configuration-and-Settings.md) · [Storage on disk](Storage-on-Disk.md)

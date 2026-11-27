@@ -95,14 +95,14 @@ Three kinds of change, three treatments in `App`:
 | Change | Saved how | Sent as |
 |---|---|---|
 | A transcript item is added or updated | Appended to the agent's `.jsonl` file at once (`Store.appendItem`) | `{t:'item'}` |
-| An agent's info changes (status, effort, usage, activity) | The conversation file is rewritten at most every 400 ms (`scheduleSave`) | `{t:'agent'}` |
+| An agent's info changes (status, effort, usage, activity, `waitingFor`) | The conversation file is rewritten at most every 400 ms (`scheduleSave`) | `{t:'agent'}` |
 | The text being streamed right now ("draft") | Not saved | `{t:'draft'}`, at most every 70 ms per agent |
 
 Every broadcast goes to **every** connected tab, for every conversation. The server does not track which conversation a tab is looking at; the page filters by `convId` (`receive()` in `web/src/lib/store.svelte.ts`). The conversation list itself is re-sent whenever a conversation's title or time changes, or its `busy` flag flips.
 
 ## Agent sessions are long-lived processes
 
-Each `Agent` feeds its Claude Code process through an input stream (the `Channel` class in `server/agent.ts`) instead of starting a new process per message. That is why a report or a message from another agent can reach an agent while it is still working: it is pushed into the open stream and Claude Code picks it up. When a sub-agent finishes, its process is closed and its slot returned; sending it something later starts a new process that **resumes** the same Claude Code session (by `sessionId`), so it keeps its context. The lead's process is not closed between turns; it stays open until the app shuts down or the lead's process is lost. See [Agent life cycle](Agent-Life-Cycle.md).
+Each `Agent` feeds its Claude Code process through an input stream (the `Channel` class in `server/agent.ts`) instead of starting a new process per message. That is why a report or a message from another agent can reach an agent while it is still working: it is pushed into the open stream and Claude Code picks it up. When a sub-agent finishes, its process is closed and its slot returned; sending it something later starts a new process that **resumes** the same Claude Code session (by `sessionId`), so it keeps its context. The lead's process is not closed between turns; it stays open until the app shuts down or the lead's process is lost. An agent whose turn ends is not necessarily finished: it goes `waiting` while agents it started are live, while commands Claude Code put in the background for it still run, or while it waits for an answer it asked for with `send_message` and `wait: true` (`mustWait()` in `server/conversation.ts`). A setting changed while agents run reaches them through `App.updateSettings()` → `Conversation.settingsChanged()` → `Agent.applySettings()`. See [Agent life cycle](Agent-Life-Cycle.md).
 
 ## Where the rules are enforced
 

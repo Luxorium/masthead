@@ -8,7 +8,7 @@ Saved in `~/.config/masthead/settings.json` (see [Storage on disk](Storage-on-Di
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `tiers.lead.model` | string | `claude-fable-5-2` | Model id for the lead. Re-read every time the lead's process starts. The name shown for each tier everywhere comes from this id (`modelLabel()`). |
+| `tiers.lead.model` | string | `claude-fable-5-2` | Model id for the lead. Read every time the lead's process starts, and applied to a running lead at once through `Query.setModel()` (`Agent.applySettings()`). The name shown for each tier everywhere comes from this id (`modelLabel()`). |
 | `tiers.opus.model` | string | `claude-opus-5-5` | Model id for Opus agents, fixed when each agent is created. |
 | `tiers.sonnet.model` | string | `claude-sonnet-5-5` | Same, Sonnet. |
 | `tiers.haiku.model` | string | `claude-haiku-5-5` | Same, Haiku. |
@@ -38,14 +38,16 @@ It is used both when loading the file (`loadSettings()`; an unreadable file give
 
 ### When a change takes effect
 
-`App.updateSettings()` saves the file (a failed write is logged once and the new settings still apply), calls `scheduler.limitsChanged()` so queued agents start if a limit went up, or fail if their tier went to 0, and broadcasts the new settings. Beyond that, each setting is read at a particular moment:
+`App.updateSettings()` saves the file (a failed write is logged once and the new settings still apply), calls `scheduler.limitsChanged()` so queued agents start if a limit went up, or fail if their tier went to 0, calls `settingsChanged()` on every conversation so running agents take what they can at once (`Agent.applySettings()`), and broadcasts the new settings. Beyond that, each setting is read at a particular moment:
 
 | Setting | Read when |
 |---|---|
 | `max` | Each time a slot is requested or freed. Lowering does not stop running agents (known limitation). Setting a tier to 0 fails the agents of that tier still waiting in the queue (`TierOff`, see [Slot scheduling](Slot-Scheduling.md)) and stops finished ones from being woken. |
-| Lead model, permission mode, lean sub-agents and lean Opus, effort ceiling | Each time an agent's process is launched (`Agent.launch`). A running process keeps what it started with; lowering a ceiling does not lower running agents (known limitation). |
+| Permission mode, lean sub-agents and lean Opus | Each time an agent's process is launched (`Agent.launch`). A running process keeps what it started with. |
+| Effort ceiling (and the fixed level with automatic effort off) | At launch, and at once for running agents: `applySettings()` caps a running agent's effort at a lowered ceiling (or sets the fixed level) through `setEffort()`. A raised ceiling raises nobody. |
+| Lead model | At launch, and at once for a running lead through `Query.setModel()`; if that fails, the lead's process is relaunched (same session) before its next turn. |
 | Sub-agent model | When the agent is created (`spawn`). |
-| `autoEffort` | Tool list: at launch. Tool behaviour, starting effort: at the moment of the call. |
+| `autoEffort` | Tool list: at launch; a change marks running processes stale, so each is relaunched with the same session before its next turn. Tool behaviour, starting effort: at the moment of the call. |
 | Child `max` in the prompt | At launch, when the system prompt is built. |
 | `defaultCwd` | When a new conversation is started without a folder. |
 
@@ -65,7 +67,7 @@ It is used both when loading the file (`loadSettings()`; an unreadable file give
 
 ### The environment agents get
 
-`agentEnv()` copies the server's environment for each Claude Code process, except a named list of variables that a running Claude Code session sets about itself (`SESSION_VARS`: `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT` and ten session-describing `CLAUDE_CODE_*` names) and anything starting with `CLAUDE_CODE_BRIDGE_`. That way a Masthead server started from inside a Claude Code terminal still starts clean agents, while settings the person exports on purpose and credentials pass through untouched. It then sets `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/0.1.1`, which identifies Masthead to the SDK. The full list is on [server/config.ts](Source-Config.md#agentenv).
+`agentEnv()` copies the server's environment for each Claude Code process, except a named list of variables that a running Claude Code session sets about itself (`SESSION_VARS`: `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT` and ten session-describing `CLAUDE_CODE_*` names) and anything starting with `CLAUDE_CODE_BRIDGE_`. That way a Masthead server started from inside a Claude Code terminal still starts clean agents, while settings the person exports on purpose and credentials pass through untouched. It then sets `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/0.1.3`, which identifies Masthead to the SDK. The full list is on [server/config.ts](Source-Config.md#agentenv).
 
 ## Command-line options
 

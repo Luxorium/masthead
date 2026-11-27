@@ -50,10 +50,11 @@ One `switch` on `msg.t`. Every case is described on [Browser/server protocol](Br
 
 - **`send` with `convId: null`** creates the conversation, then compares the chosen folder with `defaultCwd` and saves it as the new default if different (so the next new conversation starts where the last one did). `created` goes only to the requesting tab, with its `ref`.
 - **`delete`** runs `stopAll()` then `shutdown()` on the conversation, cancels its pending save timer, forgets it (and its `busy` entry), deletes its folder, and broadcasts `deleted` and the new list.
-- **`settings`** goes through `sanitizeSettings(msg.settings, currentSettings)`, so a partial update changes only the fields it names, and then `updateSettings()`, which applies the settings, saves them to `settingsFile` (through `safely()`), calls `scheduler.limitsChanged()`, and broadcasts.
+- **`settings`** goes through `sanitizeSettings(msg.settings, currentSettings)`, so a partial update changes only the fields it names, and then `updateSettings()`, which applies the settings, saves them to `settingsFile` (through `safely()`), calls `scheduler.limitsChanged()`, calls `settingsChanged()` on every conversation so running agents take up what can change without a restart (effort ceiling, the lead's model; see [Agent life cycle](Agent-Life-Cycle.md#10-settings-changed-while-an-agent-runs)), and broadcasts.
 
 ## Validation helpers
 
+- `answerPermission(msg)`: settles a pending request from `{t:'permission'}`; unknown ids are ignored (another tab may have answered). Deny, question answers (only string values kept) and "always" (the SDK's suggested rules passed as `updatedPermissions`) are described on [Permissions and questions](Permissions-and-Questions.md).
 - `checkImages(images)`: not an array → none; more than 8 → error; each must have an allowed type and base64 characters only. Returns clean copies.
 - `checkDir(path)`: expands a leading `~`, resolves to an absolute path, and checks it is a folder; otherwise "… is not a folder."
 - `listDirs(path)`: non-hidden sub-folders (and symbolic links to folders) sorted by name, plus the parent path (null at `/`); a read error is returned in `error` rather than thrown.

@@ -4,7 +4,7 @@ Files: `package.json`, `package-lock.json`, `tsconfig.server.json`, `tsconfig.we
 
 ## `package.json`
 
-- `name` `masthead`, `version` `0.1.1`, `private`, `"type": "module"` (files are ES modules: `import`/`export`).
+- `name` `masthead`, `version` `0.1.3`, `private`, `"type": "module"` (files are ES modules: `import`/`export`).
 - `bin`: `masthead` → `dist/server/main.js`.
 - `engines`: Node 22 or newer.
 - Runtime dependencies:

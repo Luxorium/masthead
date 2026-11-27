@@ -59,10 +59,10 @@ Walkthrough with every function: [An effort request](Walkthrough-Effort-Request.
 
 ## Known limitations
 
-These are deliberate for 0.1.1, to be revisited in a later version:
+These are deliberate for 0.1.3, to be revisited in a later version:
 
 - **Effort does not drop back to low on its own.** Effort is part of `AgentInfo` and is saved, so it persists across turns and across a restart. Nothing resets an agent to low after a task; the prompt only asks agents to "go back down afterwards". Likewise, if automatic effort is turned off, `launch()` sets each agent's stored effort to its tier level, and turning it back on later only caps that level at the ceiling.
-- **Lowering a ceiling does not affect agents already running.** The new ceiling applies the next time each agent's process is launched, and to the tools from then on.
+- **A raised ceiling does not raise anyone.** When the person lowers a ceiling, `App.updateSettings()` calls `Conversation.settingsChanged()`, and `Agent.applySettings()` caps every running agent's effort at the new ceiling at once (through `setEffort()` and `applyFlagSettings`); agents without a process are capped at their next launch. Raising a ceiling only allows more: agents stay where they are until they ask, or are set, higher. Switching automatic effort on or off changes an agent's tools, so its process is relaunched with the same session before its next turn (see [Agent life cycle](Agent-Life-Cycle.md#10-settings-changed-while-an-agent-runs)).
 
 ## Related pages
 

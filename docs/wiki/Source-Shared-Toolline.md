@@ -33,7 +33,17 @@
 | any other `mcp__server__tool` | Used / Using *tool* | the server name |
 | anything else | Used / Using *name* | first of `description`, `file_path`, `path`, `command`, `query` |
 
-Helpers: `str()` accepts only non-empty strings; `oneLine()` collapses whitespace and cuts to 120 characters with `…`.
+Helpers (internal): `str()` accepts only non-empty strings; `oneLine()` collapses whitespace and cuts to 120 characters with `…`. Only the `Bash`, `Grep`, `WebSearch`, `ToolSearch` and fallback targets go through `oneLine()`; file paths and URLs are kept whole. A `null` or missing `input` is treated as `{}`. In `set_agent_effort`, a missing name reads "an agent" and a missing level "?".
+
+`mcp__masthead__set_effort` always reads "Asked for effort", even for the lead, whose call changes its effort directly.
+
+The file keeps no state.
+
+## Callers
+
+- `describeTool()` in `server/agent.ts`: `toolLine(name, input, true)`, joined into one string and cut to 90 characters, for the agent's activity line.
+- `web/src/lib/tools.ts` re-exports `toolLine` and `ToolLine`; `Transcript.svelte` and `TeamMap.svelte` pass `!item.done`, `PermissionCard.svelte` uses the default.
+- `test/unit.test.ts`: both tenses, the spawn title, `Bash` on one line, a foreign MCP tool, and an unknown tool with `null` input.
 
 ## Related pages
 

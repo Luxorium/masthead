@@ -6,7 +6,7 @@ The message types themselves (`ClientMsg`, `ServerMsg`, `Item`) are explained on
 
 ## Version
 
-`VERSION = '0.1.1'`. Used by the health endpoint, the launcher, `AppState`, the `CLAUDE_AGENT_SDK_CLIENT_APP` variable (`agentEnv()` in `server/config.ts`) and the team-tool server's version (`server/tools.ts`).
+`VERSION = '0.1.3'`. Used by the health endpoint, the launcher, `AppState`, the `CLAUDE_AGENT_SDK_CLIENT_APP` variable (`agentEnv()` in `server/config.ts`) and the team-tool server's version (`server/tools.ts`).
 
 ## Tiers
 
@@ -52,7 +52,8 @@ See [Configuration and settings](Configuration-and-Settings.md).
   - `task`: the first part of its task;
   - `status`, `model`, `effort`, `createdAt`, `endedAt?`, `usage`;
   - `activity?`: one line on what it is doing right now;
-  - `error?`.
+  - `error?`;
+  - `waitingFor?`: the name of the agent it asked a question of (`send_message` with `wait: true`) and is waiting to hear from; set and cleared by `Conversation` (`message()`, `clearWait()`), cleared on restore.
 
   The server's `Agent` object keeps one of these as `agent.info` and broadcasts it every time it changes.
 

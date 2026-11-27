@@ -40,11 +40,11 @@ The owner is the parent agent. Choosing the parent with the least current share 
 
 ## Tests
 
-`test/conversation.test.ts` checks, through a `Conversation`, that switching a tier off fails its queued agents and reports to the parent. `test/unit.test.ts` has five scheduler tests: the limit is never exceeded and the next waiter starts when one finishes; tiers are separate and the lead is unlimited (and a limit of 0 starts nothing); a freed slot goes to the parent with fewest running; cancelling frees a place and raising the limit starts waiters (while lowering it stops nothing); asking twice for the same agent holds one slot.
+`test/agent.test.ts` builds a `Scheduler(() => 1)` for its agents. `test/conversation.test.ts` checks, through a `Conversation`, that switching a tier off fails its queued agents and reports to the parent. `test/unit.test.ts` has five scheduler tests: the limit is never exceeded and the next waiter starts when one finishes; tiers are separate and the lead is unlimited (and a limit of 0 starts nothing); a freed slot goes to the parent with fewest running; cancelling frees a place and raising the limit starts waiters (while lowering it stops nothing); asking twice for the same agent holds one slot.
 
 ## Callers
 
-- `Agent.ensureProcess()`: `acquire`.
+- `Agent.ensureProcess()`: `acquire`, with `owner` = the agent's `parentId`, or the conversation id for the lead; and `release` when a slot is granted after the agent was already ended while waiting (the grant can land in the same pass that freed it, after `end()` had nothing left to cancel).
 - `Agent.launch()` (failure paths), `Agent.end()`, `Conversation.processLost()`: `release`.
 - `Agent.end()`, `Agent.dispose()`: `cancel` and `release`.
 - `Conversation.spawn()`: `running`, `queued`.

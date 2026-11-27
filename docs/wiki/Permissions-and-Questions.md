@@ -72,10 +72,13 @@ Pending requests live only in memory. A tab that connects gets all of them, from
 
 ## In the page
 
-Each pending request is shown as a card (`web/src/lib/PermissionCard.svelte`) above the message box, and also in the team map view. The sidebar shows a count next to any conversation with requests waiting for an answer.
+Each pending request is shown as a card (`web/src/lib/PermissionCard.svelte`) above the message box, and also in the team map view. The sidebar shows a count next to any conversation with requests waiting for an answer. Because `state` carries every open request (`App.state()`), a tab that reconnects sees approvals in conversations it does not have open (the page keeps them in `store.pending`, `web/src/lib/store.svelte.ts`).
+
+- **Who is asking.** Both kinds of card name the agent (`displayName(request.agentName)`), and the card's accessible label is "Permission request from X" or "Question from X". So the person always knows which agent is asking, even for a sub-agent's request.
+- **Focus.** A new card is an `alertdialog` and takes keyboard focus when it appears (`onMount`), unless the person is typing: a key pressed in the last 1.5 seconds, text in the field that has focus, or focus already on another card. Focus goes to the card itself, not to its Allow button, so a stray Enter answers nothing.
 
 - **Permission card:** the agent's name and Claude Code's `title`, or else a fixed phrase for common tools ("wants to run a command", "wants to write a file", "wants to edit a file", "wants to edit a notebook", "wants to read a file", "wants to fetch a web page", "wants to search the web"), or "wants to use <tool>" for any other (an MCP tool's `mcp__` prefix removed and `__` shown as " · "), with the target from `toolLine()` underneath when there is no title. A shell command is shown in full; other input sits behind "Show details". Claude Code's description, if any, appears below. The buttons are **Deny**, **Always allow** (only when `canAlways`), and **Allow**.
-- **Question card:** each question with its options as buttons (one choice, or several when `multiSelect`), plus a "Something else…" box for a typed answer. **Answer** is enabled once every question has a choice or typed text. Each answer is sent as the chosen labels and typed text joined with ", ". **Skip** sends `deny`.
+- **Question card:** headed "<agent> asks", then each question with its options as buttons (one choice, or several when `multiSelect`), plus a "Something else…" box for a typed answer. **Answer** is enabled once every question has a choice or typed text. Each answer is sent as the chosen labels and typed text joined with ", ". **Skip** sends `deny`.
 - The page removes the card as soon as the person answers, without waiting for `permission_resolved`. The page never sends the optional deny `message`, so a denial always reads "The person declined this."
 
 The labels in the team panel's "Permissions" menu are "Use my Claude Code settings" (`inherit`), "Ask me first" (`default`), "Accept file edits, ask for the rest" (`acceptEdits`), "Auto (a classifier decides)" (`auto`), and "Bypass all checks" (`bypassPermissions`). With bypass selected, the panel warns: "Every agent can run any command and change any file without asking."
@@ -90,4 +93,4 @@ Only the lead may use `AskUserQuestion`; it is in the disallowed list for every 
 
 ## Related pages
 
-[server/app.ts](Source-App.md) · [Browser/server protocol](Browser-Server-Protocol.md) · [Configuration and settings](Configuration-and-Settings.md) · [Security model](Security-Model.md)
+[server/app.ts](Source-App.md) · [Browser/server protocol](Browser-Server-Protocol.md) · [Configuration and settings](Configuration-and-Settings.md) · [Security model](Security-Model.md) · [Safety model](Safety-Model.md)

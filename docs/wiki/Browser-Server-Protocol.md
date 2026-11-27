@@ -56,7 +56,7 @@ Any other `t` gets "Unknown request."
 | `created` | `convId`, `ref?` | Reply to a `send` that started a conversation; `ref` echoes the browser's own reference so it can match the request. |
 | `deleted` | `convId` | A conversation was deleted. |
 | `items` | `convId`, `agentId`, `items: Item[]`, `draft: Draft \| null` | Reply to `items`. |
-| `agent` | `agent: AgentInfo` (including its `name` from the phonetic alphabet and its `title`) | Any change to an agent: status, effort, usage, activity line, session. Also sent when an agent is created. |
+| `agent` | `agent: AgentInfo` (including its `name` from the phonetic alphabet, its `title`, and `waitingFor` while it waits for an answer) | Any change to an agent: status, effort, usage, activity line, session, the start or end of a wait for an answer or of background work. Also sent when an agent is created. |
 | `item` | `convId`, `agentId`, `item: Item` | A transcript item was added **or updated**. An update has the same `id` as an earlier item and replaces it (tool calls are sent once when called and again when their result arrives). |
 | `draft` | `convId`, `agentId`, `draft: Draft \| null` | The text or thinking being streamed right now (`{kind:'text'\|'thinking', text}`), sent at most every 70 ms; `null` when the block is finished. |
 | `permission_request` | `request: PermissionRequest` | An agent needs approval or the lead asked a question. |

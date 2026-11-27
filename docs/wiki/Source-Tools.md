@@ -48,6 +48,16 @@ The tool descriptions are written for the model:
 - **`stop_agent`** says it is only for work that is no longer wanted: a stopped agent sends no report, so it must never be used to wait for or collect a result.
 - **`set_effort`** says low is right for most work (the agent's actual level is in its system prompt) and depends on the tier. The lead is told it changes its own effort directly. Everyone else is told that raising needs approval, to keep working at the current level, and that an approved level applies by itself (no message follows).
 
+## `send_message` and `wait`
+
+Only non-lead agents get the `wait` input; the lead's schema has just `to` and `message`, because the lead is never left waiting for an answer. The handler reads it with a cast (`(a as { wait?: boolean }).wait === true`) because the two schemas give `a` different types, and passes it to `team.message()`.
+
+`Conversation.message()` then decides whether the wait counts: only a sub-agent may wait, and only for its **parent or the lead**, who are bound to see the question. If it counts, the sender is marked as waiting for the target, the target's envelope gets the `'wait'` hint (see [server/prompts.ts](Source-Prompts.md)), and the reply ends "End your turn when you have nothing else to do; you resume when the answer arrives." If a sub-agent asks to wait for anyone else, the message is still delivered but nobody waits, and the reply ends "(Not waiting: you can wait only for your parent or the lead.)"
+
+## Callers
+
+`Conversation.tools(agent)` calls `teamTools(agent, this)`; `Agent.launch()` gets the result through its host and passes it as `mcpServers: { masthead: … }`. `Conversation` is the only implementation of `TeamActions`. The tool list is built once per launch.
+
 ## Two layers of enforcement
 
 `teamTools()` leaves out the tools an agent may not use, so the model never sees them. The `Conversation` methods check again anyway (tier, ancestry, limits, settings), because the tool list is fixed when a process launches while the settings can change afterwards. For example, if automatic effort is switched off while an agent is running, the agent still has `set_effort`, but calling it returns "Error: automatic effort is switched off in the settings."

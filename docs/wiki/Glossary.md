@@ -11,6 +11,7 @@ Terms used in the code and this wiki, in alphabetical order. Code names are in b
 | **Ancestor** | An agent's parent, its parent's parent, and so on up to the lead. Checked by `isAncestor()`. Ancestors may stop agents below them and set their effort. |
 | **Automatic effort** (`autoEffort`) | Setting: agents start at low effort and manage it with tools; tier effort settings become ceilings. See [Thinking effort](Thinking-Effort.md). |
 | **Backlog** | Messages an agent accepted while it had no process; handed to the next process at launch. |
+| **Background work** | Commands Claude Code runs in the background for an agent (Bash with `run_in_background`), as reported in its `system`/`background_tasks_changed` messages (`Agent.hasBackgroundWork`). While any runs, an agent whose turn ends stays `waiting`; when they end and no new turn starts within 3 s (`BACKGROUND_GRACE_MS`), it moves on. See [Agent life cycle](Agent-Life-Cycle.md#4a-background-work). |
 | **Breadcrumbs** | The "Alpha / Bravo / Charlie" path shown above a sub-agent's chat in the page. |
 | **Broadcast** | Sending a server message to every connected browser tab (`App.broadcast()`). |
 | **Busy** | An agent that has been sent something no finished turn has answered yet, or that is starting (`Agent.busy`). |
@@ -57,7 +58,7 @@ Terms used in the code and this wiki, in alphabetical order. Code names are in b
 | **Store (page)** | The single object in `web/src/lib/store.svelte.ts` holding everything the page knows. Not to be confused with `Store` in `server/store.ts`, which writes files. |
 | **Sub-agent** | Any agent other than the lead. |
 | **Svelte / runes** | The front-end framework; runes (`$state`, `$derived`, `$effect`) mark reactive values. |
-| **systemd user unit** | A service managed by Linux's systemd for one user. The launcher uses `masthead.service` if it exists. |
+| **systemd user unit** | A service managed by Linux's systemd for one user. The launcher starts and stops `masthead.service` through systemd only when that unit serves the port asked for (7717 unless its environment sets `MASTHEAD_PORT`). |
 | **Team** | All agents in one conversation. |
 | **Team map** | The page view that draws the team as a tree of cards, with a hover preview of each agent's chat. |
 | **Team panel** | The right-hand column of the page: limits, effort, permissions, context use and the agent list. |
@@ -66,6 +67,7 @@ Terms used in the code and this wiki, in alphabetical order. Code names are in b
 | **Title** | A few words on an agent's job, given by the agent that started it (`spawn_agent`'s `title`); shown beside its name. |
 | **Turn** | One round of work by the model, ending in a `result` message. |
 | **Unanswered** | Ids of messages sent to an agent that no finished turn has consumed yet. |
-| **Waiting** | Status of an agent whose turn ended while agents it started are still live. |
+| **Waiting** | Status of an agent whose turn ended while something will still wake it: agents it started are still live, background work still runs, or it is waiting for an answer (`mustWait()`). |
+| **Waiting for an answer** | A sub-agent that sent `send_message` with `wait: true` to its parent or the lead. Its turn ends, it goes `waiting` (`AgentInfo.waitingFor` names the recipient), and it resumes when the answer arrives. If the recipient's turn ends without answering it is reminded once; a non-lead recipient that still does not answer, a recipient that ends, or the person interrupting the recipient's turn releases it with "No answer from …". Kept in memory only (`waits` in `server/conversation.ts`). |
 | **WebSocket** | A two-way connection that stays open between page and server, at `/ws`. |
 | **XDG** | The Linux convention for where programs keep config (`~/.config`) and data (`~/.local/share`). |

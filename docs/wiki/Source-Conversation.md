@@ -33,6 +33,7 @@ What a conversation needs from the app. `App` implements it with:
 | `static restore(host, stored)` | Rebuilds a conversation from disk. Any agent saved as live (queued, running or waiting) was cut off when the app closed: the lead becomes `idle`; any other agent becomes `stopped` with the error "Masthead was closed while this agent was working." It also clears the activity line, sets `title` to `''` if the saved record has none, keeps `sessionId`, and sets `owesReport` to false for every agent. The code comment explains: nobody is waiting for a report after a restart, and a parent that messages the agent asks for one again. An agent that never started gets its saved `seed` back, so its task is not lost. Nothing is started. Finally, if `restartNote()` finds agents to tell about, an info notice with its text is added to the lead's transcript, deferred with `queueMicrotask` because the app registers the conversation only after `restore()` returns. |
 | `toStored()` | The meta (with `busy` removed) plus each agent's `info`, `sessionId`, `owesReport`, and `seed` when the agent has a `pendingSeed`. Passed to `Store.saveConversation()`. |
 | `busy()` | True while any agent in the conversation is live. `App` adds it to the conversation list it sends. |
+| `infos()` | Every agent's `AgentInfo`, for the `{t:'conversation'}` reply. |
 
 Private helpers:
 
@@ -52,7 +53,7 @@ Private helpers:
 |---|---|---|
 | `userSend(text, images, agentId?)` | `{t:'send'}` | The target is the agent with `agentId`, or the lead. If the title is still "New conversation" and the target is the lead, it sets the title from the text. It adds a `user` item. If the target is a finished sub-agent whose tier is off, it adds an error notice and stops there. Otherwise it clears the target's `stoppedByPerson` mark and any open wait of the target (the person answering a waiting agent ends its wait). When the target is the lead and `restartNote()` returns a note, the delivered text becomes "[note]", a blank line, then the person's text (the `user` item shows only what they typed), and those agents' error becomes `CLOSED_LEAD_TOLD`, so the lead is told once. Then it `deliver()`s the text (with any images). |
 | `interruptLead()` | `{t:'interrupt'}` | `lead.interrupt()`. Children keep working. |
-| `stopAgent(agentId, why)` | `{t:'stop_agent'}` | Only the person calls it. First marks the agent and every agent under it (not the lead) in `stoppedByPerson`. **Lead:** `stopTree()` on each child, interrupt the lead, then `settle(lead)` so a lead that was only waiting on those children goes `idle`. **Any other agent:** `stopTree()` it; if it was live and owed a report, `report(parent, 'stopped', why)`; otherwise `settle(parent)`. |
+| `stopAgent(agentId, why)` | `{t:'stop_agent'}` | Only the person calls it. First marks the agent and every agent under it (not the lead) in `stoppedByPerson` (private `markStoppedByPerson()`, recursive). **Lead:** `stopTree()` on each child, interrupt the lead, then `settle(lead)` so a lead that was only waiting on those children goes `idle`. **Any other agent:** `stopTree()` it; if it was live and owed a report, `report(parent, 'stopped', why)`; otherwise `settle(parent)`. |
 | `stopAll()` | `{t:'stop_all'}`, delete | `stopAgent(lead)` then `settle(lead)`. |
 | `shutdown()` | app shutdown, delete | Live sub-agents: `end('stopped', CLOSED_WHILE_WORKING)`. Every other agent: `dispose()`, which ends any process without changing its status. Then the lead is set to `idle`. |
 
@@ -70,7 +71,7 @@ Private helpers:
 
 ## `AgentHost` implementation
 
-Most methods just forward to the app with the conversation attached. The two that carry policy:
+Most methods just forward to the app with the conversation attached (`cwd` is the conversation folder; `parentName(agent)` gives the parent's name for the system prompt; `tools(agent)` builds `teamTools(agent, this)`). The two that carry policy:
 
 **`turnEnded(agent, outcome)`**:
 
@@ -146,12 +147,12 @@ A wait also ends when any message from the recipient reaches the waiter (`messag
 
 `test/conversation.test.ts` runs a `Conversation` with a fake host whose `claudePath()` is null, so an agent fails as soon as it gets a slot; tests keep agents queued by filling their tier's slots first. It covers spawn and the tiers, names and `find()`, stop, reports and settle, effort, restore, and regressions for Off tiers, report routing when woken, person-stopped agents and envelope escaping. The 0.1.2 tests at the end cover `list_agents`, waiting for an answer (reminder, no answer, interruption, the lead, stopping), the restart note and background work.
 
-## Known limitations (deliberate for 0.1.2)
+## Known limitations (deliberate in 0.1.3)
 
 - Waits for an answer (`waits`) are in memory only; a restart stops every waiting agent anyway.
 
 - The inter-agent message counter `agentMessages` and the `stoppedByPerson` marks are not saved, so they start empty after a restart. Effort requests add to the counter but are never refused by the limit.
-- Agents do not drop back to low effort by themselves, and lowering a ceiling or a limit does not change agents that are already running. See [Thinking effort](Thinking-Effort.md#known-limitations).
+- Agents do not drop back to low effort by themselves, and lowering a tier limit does not stop agents that are already running. (A lowered effort ceiling is applied to running agents at once by `settingsChanged()`.) See [Thinking effort](Thinking-Effort.md#known-limitations).
 
 ## Related pages
 

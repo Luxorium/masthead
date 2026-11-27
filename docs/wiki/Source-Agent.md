@@ -87,6 +87,7 @@ A small asynchronous queue that is also an async iterable: `push()` adds an item
 
 | Method | What it does |
 |---|---|
+| `constructor(info, host, opts)` | Keeps `info` and `host`; `opts` gives `sessionId`, `owesReport` and `seed` (all default to none/false). Sets `costBefore` from the saved usage, so cost keeps adding up across restarts. `Conversation` creates every agent (`create()`, `spawn()`, `restore()`). |
 | `setStatus(status, error?)` | Sets status and error; clears the activity line unless running; sets `endedAt` for done/failed/stopped and clears it otherwise; notifies only if something changed. |
 | `addItem(item)` | Gives a `NewItem` an id (unless it has one) and timestamp and passes it to `itemChanged` (which saves and broadcasts it). |
 | `start()` | `ensureProcess()`. |
@@ -103,6 +104,9 @@ A small asynchronous queue that is also an async iterable: `push()` adds an item
 | `turnStarted()`, `backgroundChanged(tasks)`, `checkIdleSoon()` (private) | Set `inTurn` and cancel the grace timer; replace the background set with the non-ambient task ids (broadcast when it becomes empty or non-empty); when it empties, start the `BACKGROUND_GRACE_MS` timer, which calls `host.backgroundIdle?.()` only if the same process is still open, not closing, not in a turn, not busy and has no background work. |
 | `setActivity()`, `setDraft()` (private) | Update and broadcast; the draft is throttled to one send per 70 ms unless `now` is true. |
 | `currentDraft()` | For `{t:'items'}` replies. |
+| `userMessage(content)` (private) | Wraps content as an SDK user message with a fresh `uuid`, adds that id to `unanswered` and returns it; every input goes through it, so the unanswered rule sees every message. |
+| `closeOpenTools()` (private) | Marks every tool item still waiting for its result as done (sent again through `itemChanged`), at turn end and when the process ends. |
+| `clearBackground()` (private) | Cancels the grace timer and empties the background set; called at launch, when the process ends, and by `end()`/`dispose()`. |
 | `interrupt()` | If running, sets `interrupted` and calls `q.interrupt()`. |
 | `end(status, error?)` | Cancels a queued slot request, increases the generation, marks closing, clears backlog, unanswered, `runTexts` and the background set, closes the input gracefully (`done`) or the process at once (`stopped`/`failed`), releases the slot, sets the status. |
 | `dispose()` | Like `end()` but without changing the status: cancels a queued request, increases the generation, marks closing, clears backlog, unanswered, `runTexts` and the background set, closes the process at once, releases the slot. Used by `Conversation.shutdown()` for agents that are not live (the lead, and finished agents whose process may still be closing), so their saved status stays what it was. |

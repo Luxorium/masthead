@@ -48,20 +48,31 @@ Start with **[Architecture](Architecture.md)**, then read **[Agent life cycle](A
 
 - **Concepts:** [Architecture](Architecture.md) · [Agent life cycle](Agent-Life-Cycle.md) · [Team rules](Team-Rules.md) · [Slot scheduling](Slot-Scheduling.md) · [Thinking effort](Thinking-Effort.md) · [Permissions and questions](Permissions-and-Questions.md) · [Glossary](Glossary.md)
 - **Interfaces:** [Browser/server protocol](Browser-Server-Protocol.md) · [Configuration and settings](Configuration-and-Settings.md) · [Command-line launcher](Command-Line-Launcher.md)
-- **Operations:** [Storage on disk](Storage-on-Disk.md) · [Security model](Security-Model.md) · [Building, testing and installing](Building-Testing-Installing.md) · [Tests](Source-Tests.md) · [Installing](Source-Install-Scripts.md) · [Project documents](Project-Documents.md)
-- **Server and shared source:** [shared/protocol.ts](Source-Shared-Protocol.md) · [shared/toolline.ts](Source-Shared-Toolline.md) · [server/config.ts](Source-Config.md) · [server/scheduler.ts](Source-Scheduler.md) · [server/store.ts](Source-Store.md) · [server/prompts.ts](Source-Prompts.md) · [server/agent.ts](Source-Agent.md) · [server/tools.ts](Source-Tools.md) · [server/conversation.ts](Source-Conversation.md) · [server/app.ts](Source-App.md) · [server/http.ts](Source-Http.md) · [server/main.ts](Source-Main.md) · [Build configuration](Source-Build-Config.md)
-- **Web source:** [Web front end](Source-Web-Front-End.md) · [Web store](Source-Web-Store.md) · [Web components](Source-Web-Components.md)
+- **Operations:** [Storage on disk](Storage-on-Disk.md) · [Security model](Security-Model.md) · [Safety model](Safety-Model.md) · [Code coverage map](Code-Coverage-Map.md) · [Building, testing and installing](Building-Testing-Installing.md) · [Tests](Source-Tests.md) · [Installing](Source-Install-Scripts.md) · [Project documents](Project-Documents.md)
+- **Server and shared source:** [shared/protocol.ts](Source-Shared-Protocol.md) · [shared/toolline.ts](Source-Shared-Toolline.md) · [server/config.ts](Source-Config.md) · [server/scheduler.ts](Source-Scheduler.md) · [server/store.ts](Source-Store.md) · [server/prompts.ts](Source-Prompts.md) · [server/agent.ts](Source-Agent.md) · [server/tools.ts](Source-Tools.md) · [server/conversation.ts](Source-Conversation.md) · [server/app.ts](Source-App.md) · [server/http.ts](Source-Http.md) · [server/main.ts](Source-Main.md) · [server/cli.ts](Source-Cli.md) · [Build configuration](Source-Build-Config.md)
+- **Web source:** [Web front end](Source-Web-Front-End.md) · [Web store](Source-Web-Store.md) · [Web components](Source-Web-Components.md) · [Web styles](Source-Web-Styles.md)
 - **Walkthroughs:** [Sending a message](Walkthrough-Sending-a-Message.md) · [An agent starting another](Walkthrough-Starting-an-Agent.md) · [A report coming back](Walkthrough-Report-Coming-Back.md) · [An effort request](Walkthrough-Effort-Request.md) · [Stopping an agent](Walkthrough-Stopping-an-Agent.md) · [Restarting with saved conversations](Walkthrough-Restarting-the-App.md)
 
-## Known limitations in 0.1.1
+## Security and safety
 
-These are deliberate for this version:
+How Masthead keeps the local server closed to others, and how it keeps its agents in hand:
 
-- **Any program running as the person can drive Masthead**, because it can read the local secret; other user accounts cannot ([Security model](Security-Model.md#what-it-does-not-defend-against)).
-- **Effort does not drop back to low on its own.**
-- **Lowering an effort ceiling or a tier limit does not affect agents already running** ([Thinking effort](Thinking-Effort.md#known-limitations), [Slot scheduling](Slot-Scheduling.md)).
-- **The inter-agent message counter resets on restart** ([Team rules](Team-Rules.md#limits-per-conversation)).
-- **Sub-agents' context maximum is assumed to be 1,000,000 tokens** ([server/agent.ts](Source-Agent.md)).
+- **[Security model](Security-Model.md)**: who can reach the server: loopback only, Host and Origin checks, the local secret, response headers, path and input checks, file modes, and what it does not defend against.
+- **[Safety model](Safety-Model.md)**: how agents are kept in hand: fixed tiers, limits and the queue, disallowed tools, approvals and permission modes, stopping, effort ceilings, caps, envelope escaping, safe rendering, credentials, and what it does not protect against.
+- **[Permissions and questions](Permissions-and-Questions.md)**: approval requests, permission modes and the lead's questions.
+
+## Known limitations in 0.1.3
+
+These follow from the code as it is today (not verified by running unless the linked page says so):
+
+- **Any program running as the person can drive Masthead**, because it can read the local secret; other user accounts cannot ([Security model](Security-Model.md)).
+- **A background command that never ends keeps its agent waiting.** An agent whose Claude Code still reports background work goes `waiting` and never finishes until that work ends or someone stops it (`mustWait()` in `server/conversation.ts`; [Agent life cycle](Agent-Life-Cycle.md#4a-background-work)).
+- **At a usage limit agents fail rather than pause.** Masthead passes Claude Code's usage notices to the page, but a turn that ends with an error ends a sub-agent as `failed`; nothing waits for the limit to reset (`Conversation.turnEnded()`).
+- **Waits and stop marks are kept in memory only.** Waits for an answer (`waits`), the agents the person stopped (`stoppedByPerson`) and the inter-agent message counter start empty after a restart ([Team rules](Team-Rules.md)).
+- **Lowering a tier limit does not stop agents already running**; it only affects who starts next ([Slot scheduling](Slot-Scheduling.md)). A lowered effort ceiling, by contrast, is applied to running agents at once (`Agent.applySettings()`).
+- **Effort does not drop back to low on its own** ([Thinking effort](Thinking-Effort.md#known-limitations)).
+- **Sub-agents' context maximum is assumed to be 1,000,000 tokens**; only the lead asks Claude Code for the real figure ([server/agent.ts](Source-Agent.md)).
+- **No time or spend cap.** Nothing stops a team after a time or an amount of usage; the tier limits and low default effort are the only brakes ([Safety model](Safety-Model.md)).
 
 ## How to read this wiki
 
@@ -69,4 +80,4 @@ Every statement here was written from the source code. Where the code leaves som
 
 ---
 
-Written 2026-11-26, updated the same day for Masthead version 0.1.1 (`VERSION` in `shared/protocol.ts`).
+Written 2026-11-26, updated for Masthead version 0.1.3 (`VERSION` in `shared/protocol.ts`). To find the page that explains a given source file, use the [Code coverage map](Code-Coverage-Map.md).
