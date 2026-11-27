@@ -42,7 +42,7 @@ export interface AgentHost {
   /** A turn finished and no further input is queued for the agent. */
   turnEnded(agent: Agent, outcome: TurnOutcome): void;
   /** The Claude Code process went away without being asked to. */
-  processLost(agent: Agent, message: string): void;
+  processLost(agent: Agent, message: string, usageLimit?: UsageLimit): void;
   /**
    * The agent's background commands have all ended, its last turn is over and Claude Code did not
    * start a new turn within a short grace time. A host that kept the agent waiting for that work
@@ -53,11 +53,23 @@ export interface AgentHost {
   query?: typeof query;
 }
 
+/** The usage limit stopped the agent. `resetsAt` is when it lifts, in ms since the epoch, if known. */
+export interface UsageLimit {
+  resetsAt?: number;
+  /** Background commands were running and were stopped with the process. */
+  backgroundStopped?: true;
+}
+
 export interface TurnOutcome {
   /** What the agent said since it last took up work: the final text of every turn in that run, oldest first. */
   text: string;
   error?: string;
   interrupted: boolean;
+  /**
+   * Set when the turn failed because the usage limit was reached. The messages it never answered are
+   * kept by the agent and sent again, first, with the next deliver().
+   */
+  usageLimit?: UsageLimit;
 }
 
 type Content = string | Array<Record<string, unknown>>;
@@ -100,6 +112,9 @@ const DISALLOWED = [
 /** What Claude Code writes when the session to resume no longer exists (seen in Claude Code 2.1.331). */
 const MISSING_SESSION = /No conversation found with session ID/;
 const STDERR_KEEP = 4_000;
+/** A run's outcome keeps at most this many turn texts and this many characters, newest first. */
+const RUN_TEXT_TURNS = 8;
+const RUN_TEXT_CHARS = 60_000;
 /**
  * How long to wait, after the last background command ends, for the turn Claude Code starts by
  * itself to tell the agent about it. In a real run (Claude Code 2.1.331) system/init followed the
@@ -205,6 +220,21 @@ export class Agent {
   private launchedAutoEffort: boolean | null = null;
   /** Settings changed in a way the running process cannot take; relaunch it before its next turn. */
   private stale = false;
+  /** The latest rate_limit_event of this process said a limit is reached (status 'rejected'). */
+  private rejected: UsageLimit | null = null;
+  /** The `error` field of this turn's assistant message, e.g. 'rate_limit'. */
+  private turnApiError: string | undefined;
+  /**
+   * Messages a usage-limit turn or loss never answered, kept as content so they do not count as
+   * busy, and sent again (under new ids) before the next message. end() and dispose() drop them.
+   */
+  private held: Content[] = [];
+  /** This process hit the usage limit; its later results only repeat that and are not reported. */
+  private limited = false;
+  /** The usage limit this process last reported. */
+  private lastLimit: UsageLimit | null = null;
+  /** Whether older turn texts of the current run were dropped (see addRunText). */
+  private runTextsCut = false;
 
   constructor(
     readonly info: AgentInfo,
@@ -271,25 +301,36 @@ export class Agent {
 
   /** Sends a message into the session, starting or resuming it if needed. */
   deliver(content: Content): void {
-    const msg = this.userMessage(content);
-    if (this.stale && this.input && !this.closing && this.unanswered.size === 1 && !this.inTurn && !this.hasBackgroundWork) {
+    this.limited = false;
+    const between = this.unanswered.size === 0 && !this.inTurn && !this.hasBackgroundWork;
+    // Held messages go first. They exist only when the process that got them is gone (see `held`).
+    const msgs = [...this.held.splice(0).map((c) => this.userMessage(c)), this.userMessage(content)];
+    if (this.stale && this.input && !this.closing && between) {
       // Between turns: let the old process exit and resume the same session with the new settings.
       // ensureProcess keeps the slot (the scheduler sees the same agent) and waits for the exit.
       this.stale = false;
       this.closing = true;
       this.input.close();
-      this.backlog.push(msg);
+      this.backlog.push(...msgs);
       this.ensureProcess();
       return;
     }
     if (this.input && !this.closing) {
-      this.input.push(msg);
-      this.sent.push(msg);
+      // Every message goes the same way, so none can sit in the backlog of a live process.
+      for (const m of msgs) {
+        this.input.push(m);
+        this.sent.push(m);
+      }
       if (this.info.status !== 'running') this.setStatus('running');
     } else {
-      this.backlog.push(msg);
+      this.backlog.push(...msgs);
       this.ensureProcess();
     }
+  }
+
+  /** Forgets the messages kept from a usage-limit stop, as when the person stops the agent. */
+  dropHeld(): void {
+    this.held = [];
   }
 
   static imageContent(text: string, images: ImageAttachment[] | undefined): Content {
@@ -401,6 +442,10 @@ export class Agent {
     if (this.sessionId) options.resume = this.sessionId;
     this.resumedFrom = this.sessionId;
     this.launchedAutoEffort = settings.autoEffort;
+    this.rejected = null;
+    this.limited = false;
+    this.lastLimit = null;
+    this.turnApiError = undefined;
     this.stale = false;
     this.inTurn = false;
     this.clearBackground();
@@ -451,15 +496,20 @@ export class Agent {
     this.setDraft(null, true);
     this.closeOpenTools();
     this.inTurn = false;
+    const hadBackground = this.hasBackgroundWork;
     this.clearBackground();
     if (this.closing) return; // we asked it to end
     if (this.resumeWasMissing(failure)) {
       this.startFresh();
       return;
     }
+    const usageLimit = this.usageLimitFor(failure ?? '');
+    if (usageLimit && hadBackground) usageLimit.backgroundStopped = true;
+    if (usageLimit && !this.limited) this.holdUnanswered();
+    this.limited = false;
     this.unanswered.clear();
-    this.runTexts = [];
-    this.host.processLost(this, failure ?? 'The Claude Code process ended unexpectedly.');
+    this.clearRunTexts();
+    this.host.processLost(this, failure ?? 'The Claude Code process ended unexpectedly.', usageLimit);
   }
 
   /**
@@ -490,7 +540,7 @@ export class Agent {
       this.input = null;
       this.q = null;
       this.unanswered.clear();
-      this.runTexts = [];
+      this.clearRunTexts();
       this.host.processLost(this, (e as Error)?.message || String(e));
     }
   }
@@ -510,7 +560,8 @@ export class Agent {
             this.host.agentChanged(this);
           }
           // Claude Code also starts turns by itself, for instance when a background command finishes.
-          if (this.info.status === 'idle' || this.info.status === 'waiting') this.setStatus('running');
+          // Not while the conversation has paused the agent at the usage limit: that state is its own.
+          if ((this.info.status === 'idle' || this.info.status === 'waiting') && this.info.pausedUntil === undefined) this.setStatus('running');
         } else if (sub === 'status') {
           const st = (m as { status?: string | null }).status;
           if (st === 'compacting') this.setActivity('Compacting its context');
@@ -543,7 +594,10 @@ export class Agent {
             this.setActivity(describeTool(b.name, b.input));
           }
         }
-        if (err) this.turnError = `${err}${this.turnText ? `: ${this.turnText}` : ''}`;
+        if (err) {
+          this.turnApiError = err;
+          this.turnError = `${err}${this.turnText ? `: ${this.turnText}` : ''}`;
+        }
         return;
       }
       case 'user': {
@@ -580,6 +634,12 @@ export class Agent {
           }
         }
         if (!sent) this.host.rateLimit({ status: info.status, type: info.rateLimitType, utilization: info.utilization, resetsAt: info.resetsAt });
+        // Remember whether a limit is reached now. resetsAt arrives in seconds (seen: 1796144400).
+        const hit = windows && typeof windows === 'object' ? Object.values(windows).find((w) => w && typeof w === 'object' && w.status === 'rejected') : undefined;
+        if (info.status === 'rejected' || hit) {
+          const at = typeof hit?.resetsAt === 'number' ? hit.resetsAt : info.resetsAt;
+          this.rejected = { resetsAt: typeof at === 'number' ? at * 1000 : undefined };
+        } else this.rejected = null;
         return;
       }
       case 'result': {
@@ -662,15 +722,51 @@ export class Agent {
     } else if (m.is_error === true && !wasInterrupted && !error) {
       error = typeof m.result === 'string' && m.result ? m.result : 'The turn ended with an error.';
     }
+    const usageLimit = error && !wasInterrupted ? this.usageLimitFor(error) : undefined;
+    this.turnApiError = undefined;
+    if (this.limited) {
+      // A result that was already on its way when the process was closed at the limit. Its messages
+      // are held already; report it the same way (the conversation treats repeats as one pause).
+      this.turnText = '';
+      this.turnError = undefined;
+      this.interrupted = false;
+      this.unanswered.clear();
+      this.host.agentChanged(this);
+      this.host.turnEnded(this, { text: this.runText(), error, interrupted: false, usageLimit: usageLimit ?? this.lastLimit ?? {} });
+      return;
+    }
     const turnText = typeof m.result === 'string' && m.result ? m.result : this.turnText;
-    if (turnText.trim() && this.runTexts[this.runTexts.length - 1] !== turnText) this.runTexts.push(turnText);
-    const text = this.runTexts.join('\n\n');
+    this.addRunText(turnText);
+    const text = this.runText();
     this.lastText = text || this.lastText;
     this.turnText = '';
     this.turnError = undefined;
     this.interrupted = false;
     this.host.agentChanged(this);
 
+    if (usageLimit) {
+      // Report at once even if more input is queued, and close the process: then nothing stays queued
+      // inside it and no turn can start by itself during the pause. Messages no turn consumed are
+      // held and sent again on the next deliver(), which resumes the session. The message this turn
+      // consumed is not re-sent: it is already in the session, with the error.
+      // All of this happens before turnEnded: anything the host delivers from inside it must go to
+      // the backlog and a new process, never into this one, which is being closed.
+      this.holdUnanswered();
+      this.unanswered.clear();
+      this.limited = true;
+      if (this.hasBackgroundWork) usageLimit.backgroundStopped = true;
+      this.lastLimit = usageLimit;
+      if (this.q && !this.closing) {
+        this.closing = true;
+        try {
+          this.q.close();
+        } catch {
+          // already gone
+        }
+      }
+      this.host.turnEnded(this, { text, error, interrupted: false, usageLimit });
+      return;
+    }
     if (this.unanswered.size > 0) {
       // Another turn follows for input that arrived meanwhile.
       if (error) this.addItem({ kind: 'notice', level: 'error', text: error });
@@ -678,8 +774,48 @@ export class Agent {
     }
     // With background work still running the run is not over: Claude Code starts a turn by itself
     // when it ends, and that turn's outcome carries this turn's text too.
-    if (!this.hasBackgroundWork) this.runTexts = [];
+    if (!this.hasBackgroundWork) this.clearRunTexts();
+    // Read the real context size while the process is still up (the host may end it right after).
+    void this.refreshContext();
     this.host.turnEnded(this, { text, error, interrupted: wasInterrupted });
+  }
+
+  /**
+   * Whether an error means the usage limit was reached. Conservative: the process must have had a
+   * rate_limit_event with status 'rejected' as its latest, and the error must be marked as a rate
+   * limit (the assistant message's `error` is 'rate_limit') or say so. A network or tool error has
+   * no rejected event behind it, so it never counts.
+   */
+  private usageLimitFor(error: string): UsageLimit | undefined {
+    if (!this.rejected) return undefined;
+    if (this.turnApiError === 'rate_limit' || /rate[ _]limit|usage limit|limit reached|hit your limit/i.test(error)) return { ...this.rejected };
+    return undefined;
+  }
+
+  /** Moves the messages this process was sent and no turn consumed into `held`. */
+  private holdUnanswered(): void {
+    for (const m of this.sent) if (this.unanswered.has(m.uuid as string)) this.held.push(m.message.content as Content);
+  }
+
+  /** Adds a turn's final text to the run, keeping at most RUN_TEXT_TURNS texts and RUN_TEXT_CHARS characters. */
+  private addRunText(text: string): void {
+    if (!text.trim() || this.runTexts[this.runTexts.length - 1] === text) return;
+    this.runTexts.push(text);
+    let total = this.runTexts.reduce((n, t) => n + t.length, 0);
+    while (this.runTexts.length > 1 && (this.runTexts.length > RUN_TEXT_TURNS || total > RUN_TEXT_CHARS)) {
+      total -= this.runTexts.shift()!.length;
+      this.runTextsCut = true;
+    }
+  }
+
+  private runText(): string {
+    const text = this.runTexts.join('\n\n');
+    return this.runTextsCut && text ? `(earlier text not shown)\n\n${text}` : text;
+  }
+
+  private clearRunTexts(): void {
+    this.runTexts = [];
+    this.runTextsCut = false;
   }
 
   private turnStarted(): void {
@@ -770,9 +906,14 @@ export class Agent {
     this.closing = true;
     this.backlog = [];
     this.unanswered.clear();
-    this.runTexts = [];
+    this.clearRunTexts();
+    this.dropHeld();
+    this.limited = false;
+    // A clean end lets Claude Code finish on its own; with background commands still running it might
+    // wait for them, so then the process is closed at once.
+    const kill = status !== 'done' || this.hasBackgroundWork;
     this.clearBackground();
-    if (status === 'done') this.input?.close();
+    if (!kill) this.input?.close();
     else {
       try {
         this.q?.close();
@@ -792,7 +933,9 @@ export class Agent {
     this.closing = true;
     this.backlog = [];
     this.unanswered.clear();
-    this.runTexts = [];
+    this.clearRunTexts();
+    this.dropHeld();
+    this.limited = false;
     this.clearBackground();
     try {
       this.q?.close();

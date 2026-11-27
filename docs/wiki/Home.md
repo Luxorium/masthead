@@ -61,18 +61,17 @@ How Masthead keeps the local server closed to others, and how it keeps its agent
 - **[Safety model](Safety-Model.md)**: how agents are kept in hand: fixed tiers, limits and the queue, disallowed tools, approvals and permission modes, stopping, effort ceilings, caps, envelope escaping, safe rendering, credentials, and what it does not protect against.
 - **[Permissions and questions](Permissions-and-Questions.md)**: approval requests, permission modes and the lead's questions.
 
-## Known limitations in 0.1.3
+## Known limitations in 0.1.4
 
 These follow from the code as it is today (not verified by running unless the linked page says so):
 
 - **Any program running as the person can drive Masthead**, because it can read the local secret; other user accounts cannot ([Security model](Security-Model.md)).
-- **A background command that never ends keeps its agent waiting.** An agent whose Claude Code still reports background work goes `waiting` and never finishes until that work ends or someone stops it (`mustWait()` in `server/conversation.ts`; [Agent life cycle](Agent-Life-Cycle.md#4a-background-work)).
-- **At a usage limit agents fail rather than pause.** Masthead passes Claude Code's usage notices to the page, but a turn that ends with an error ends a sub-agent as `failed`; nothing waits for the limit to reset (`Conversation.turnEnded()`).
-- **Waits and stop marks are kept in memory only.** Waits for an answer (`waits`), the agents the person stopped (`stoppedByPerson`) and the inter-agent message counter start empty after a restart ([Team rules](Team-Rules.md)).
+- **A background command that never ends keeps the lead waiting.** A sub-agent waiting only on background work is finished after 10 minutes with its text so far and the note "A background command was still running when Masthead closed this agent." (`BACKGROUND_WAIT_MS`, `tick()` in `server/conversation.ts`). The lead is exempt: it shows `waiting` with background work for as long as that runs ([Agent life cycle](Agent-Life-Cycle.md#4a-background-work)).
+- **Usage-limit pauses are not verified against a real limit.** An agent (the lead too) whose turn ends at a usage limit pauses as `waiting` until Claude Code's reset time (else 15 minutes), its slot freed and messages to it held, and a 30-second timer resumes it; after 3 pauses in a row it fails as before (`pause()`, `tick()` in `server/conversation.ts`). Covered by unit tests with a fake clock only.
+- **Waits for an answer are kept in memory only** (`waits` in `server/conversation.ts`); a restart stops the waiting agents anyway. The agents the person stopped and the inter-agent message counter are saved (`stoppedByPerson`, `agentMessages` in `StoredConversation`).
 - **Lowering a tier limit does not stop agents already running**; it only affects who starts next ([Slot scheduling](Slot-Scheduling.md)). A lowered effort ceiling, by contrast, is applied to running agents at once (`Agent.applySettings()`).
-- **Effort does not drop back to low on its own** ([Thinking effort](Thinking-Effort.md#known-limitations)).
 - **Sub-agents' context maximum is assumed to be 1,000,000 tokens**; only the lead asks Claude Code for the real figure ([server/agent.ts](Source-Agent.md)).
-- **No time or spend cap.** Nothing stops a team after a time or an amount of usage; the tier limits and low default effort are the only brakes ([Safety model](Safety-Model.md)).
+- **No spend cap.** A run-time limit exists (`settings.maxRunMinutes`, 0 = off): a sub-agent that has been running longer than that on one piece of work is stopped with a report to its parent. Only time spent actually running counts (not queued, waiting, paused or waiting for an approval; `ranMs()`), and the lead is never stopped (`Conversation.tick()`). Nothing limits spend; the tier limits and low default effort are the only brakes ([Safety model](Safety-Model.md)).
 
 ## How to read this wiki
 
@@ -80,4 +79,4 @@ Every statement here was written from the source code. Where the code leaves som
 
 ---
 
-Written 2026-11-26, updated for Masthead version 0.1.3 (`VERSION` in `shared/protocol.ts`). To find the page that explains a given source file, use the [Code coverage map](Code-Coverage-Map.md).
+Written 2026-11-26, updated for Masthead version 0.1.4 (`VERSION` in `shared/protocol.ts`). To find the page that explains a given source file, use the [Code coverage map](Code-Coverage-Map.md).

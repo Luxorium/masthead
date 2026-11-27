@@ -66,7 +66,10 @@
       const parts = [...(picked[qi] ?? [])];
       const free = (other[qi] ?? '').trim();
       if (free) parts.push(free);
-      answers[q.question] = parts.join(', ');
+      const answer = parts.join(', ');
+      // Claude Code's AskUserQuestion takes answers keyed by question text (sdk-tools.d.ts), so two
+      // questions with the same text share one entry: both answers are kept, in order, separated by " | ".
+      answers[q.question] = q.question in answers ? `${answers[q.question]} | ${answer}` : answer;
     });
     store.answer(request.id, 'allow', answers);
   }
@@ -157,7 +160,7 @@
     overflow: auto;
     border-radius: 8px;
     background: var(--code-bg);
-    color: #e3e7ee;
+    color: var(--code-text);
     font: 12.5px/1.5 var(--mono);
     white-space: pre-wrap;
     overflow-wrap: anywhere;

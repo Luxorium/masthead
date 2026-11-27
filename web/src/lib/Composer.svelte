@@ -28,7 +28,7 @@
     isNew
       ? 'Ask for anything'
       : direct
-        ? `Message ${displayName(agent?.name ?? '')} directly`
+        ? `Message ${displayName(agent?.name ?? '')} directly, not ${displayName(store.lead?.name ?? 'the lead')}`
         : leadBusy
           ? `Add to what ${displayName(store.lead?.name ?? 'the lead')} is doing`
           : `Reply to ${displayName(store.lead?.name ?? 'the lead')}`,
@@ -78,7 +78,7 @@
         continue;
       }
       if (file.size > MAX_IMAGE_BYTES) {
-        store.fail(`${file.name} is larger than 5 MB.`);
+        store.fail(`${file.name || 'That image'} is larger than 5 MB.`);
         continue;
       }
       if (draft.images.length >= MAX_IMAGES) {
@@ -136,11 +136,20 @@
 {#if direct && agent?.status === 'waiting' && agent.waitingFor}
   <p class="hint">{displayName(agent.name)} is waiting for an answer from {displayName(agent.waitingFor)}. What you send here reaches it as that answer.</p>
 {/if}
+{#if direct && agent}
+  <!-- Says plainly who the box is pointed at, so nobody types to a sub-agent thinking it is the lead. -->
+  <div class="addressee tier-{agent.tier}">
+    <span class="to">To <b>{displayName(agent.name)}</b> · {modelLabel(agent.model).split(' ')[0]}</span>
+    {#if store.lead}
+      <button class="back" onclick={() => store.lead && store.viewOf(store.lead.id)}>Back to {displayName(store.lead.name)}</button>
+    {/if}
+  </div>
+{/if}
 <div
-  class="composer"
+  class="composer {direct && agent ? `direct tier-${agent.tier}` : ''}"
   class:dragging
   role="group"
-  aria-label="Message"
+  aria-label={direct && agent ? `Message to ${displayName(agent.name)}` : 'Message'}
   ondragover={(e) => {
     e.preventDefault();
     dragging = true;
@@ -224,6 +233,36 @@
   }
   .composer:focus-within {
     border-color: var(--muted);
+  }
+  .composer.direct,
+  .composer.direct:focus-within {
+    border-color: var(--tier);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--tier) 35%, transparent), var(--shadow);
+  }
+  .addressee {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 6px 6px;
+    font-size: 13px;
+  }
+  .to {
+    color: var(--tier);
+  }
+  .to b {
+    font-weight: 600;
+  }
+  .back {
+    margin-left: auto;
+    padding: 1px 9px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .back:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
   }
   .composer.dragging {
     border-color: var(--accent);

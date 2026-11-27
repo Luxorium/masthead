@@ -11,6 +11,9 @@ import type {
   RateLimitNotice,
   ServerMsg,
   Settings,
+  SettingsPatch,
+  Tier,
+  TierSettings,
 } from '../../../shared/protocol.ts';
 
 /** What the composer holds for one conversation and agent: text and attached images. */
@@ -66,7 +69,14 @@ class Store {
   newCwd = $state('');
   dirs = $state<DirListing | null>(null);
   error = $state<string | null>(null);
-  rateLimit = $state<RateLimitNotice | null>(null);
+  /** The banner's notice key the person dismissed; the banner returns when the worst notice changes. */
+  private dismissedLimit = $state<string | null>(null);
+  /** The worst usage window known (any rejected, else any warning), unless the person dismissed it. */
+  rateLimit = $derived.by((): RateLimitNotice | null => {
+    const all = Object.values(this.usage);
+    const worst = all.find((n) => n.status === 'rejected') ?? all.find((n) => n.status === 'allowed_warning') ?? null;
+    return worst && limitKey(worst) !== this.dismissedLimit ? worst : null;
+  });
   /** True between sending the first message of a new conversation and the server creating it. */
   creating = $state(false);
   /** The latest notice per usage-limit type. */
@@ -82,6 +92,8 @@ class Store {
   private pendingRef: string | null = null;
   private refusals = 0;
   private sent: Sent[] = [];
+  /** Agents whose transcript the page wants; an `items` reply for any other is dropped. */
+  private wanted = new Set<string>();
 
   conv = $derived(this.conversations.find((c) => c.id === this.convId) ?? null);
   agentList = $derived(Object.values(this.agents).sort((a, b) => a.createdAt - b.createdAt));
@@ -101,7 +113,7 @@ class Store {
   }
 
   connect(): void {
-    const key = takeKey();
+    const { key, untried } = takeKey();
     if (!key) {
       this.signedOut = 'nokey';
       return;
@@ -113,6 +125,11 @@ class Store {
       ws = new WebSocket(`${proto}://${location.host}/ws`, ['masthead', `key.${key}`]);
     } catch {
       // A key with characters a subprotocol cannot carry: it did not come from `masthead`.
+      if (untried && storedKey()) {
+        candidate = null;
+        this.connect();
+        return;
+      }
       this.signedOut = 'refused';
       return;
     }
@@ -120,6 +137,7 @@ class Store {
     let opened = false;
     ws.onopen = () => {
       opened = true;
+      if (untried) keepCandidate();
       this.connected = true;
       this.retry = 0;
       this.refusals = 0;
@@ -130,14 +148,56 @@ class Store {
       this.connected = false;
       this.ws = null;
       this.dropped();
-      if (!opened && ++this.refusals >= MAX_REFUSALS) {
-        this.signedOut = 'refused';
-        return;
-      }
-      const wait = Math.min(5000, 400 * 2 ** this.retry++);
-      setTimeout(() => this.connect(), wait);
+      if (opened) return this.later();
+      // Closed before it opened: refused, or the server is down (a restart takes a while). Only a
+      // server that answers can have refused us; while it is down, keep trying (and keep any
+      // candidate key) for as long as it takes.
+      void serverUp().then((up) => {
+        if (this.ws) return; // something else connected meanwhile
+        if (!up) return this.later();
+        if (untried && storedKey()) {
+          // A key from the address that the server refused, with a good one already stored: forget
+          // it and carry on with the stored key, without the sign-in page.
+          candidate = null;
+          return this.connect();
+        }
+        if (++this.refusals >= MAX_REFUSALS) {
+          this.signedOut = 'refused';
+          return;
+        }
+        this.later();
+      });
     };
     ws.onerror = () => ws.close();
+  }
+
+  /** Connects again after the back-off: 400 ms, doubling up to 5 s. */
+  private later(): void {
+    const wait = Math.min(5000, 400 * 2 ** this.retry++);
+    setTimeout(() => {
+      if (!this.ws && !this.signedOut) this.connect();
+    }, wait);
+  }
+
+  /**
+   * The address changed and its fragment carries `key=` (the sign-in address pasted into an open
+   * tab): take it as a candidate and connect with it now, closing any current socket.
+   */
+  keyFromAddress(): void {
+    if (!/(^#|&)key=/.test(location.hash) && !new URLSearchParams(location.search).has('key')) return;
+    takeKey();
+    const old = this.ws;
+    this.ws = null;
+    old?.close();
+    this.refusals = 0;
+    this.retry = 0;
+    this.signedOut = null;
+    this.connect();
+  }
+
+  /** The usage banner's Dismiss: hidden until the worst notice changes. */
+  dismissLimit(): void {
+    if (this.rateLimit) this.dismissedLimit = limitKey(this.rateLimit);
   }
 
   /** "Try again" on the signed-out page. */
@@ -231,7 +291,8 @@ class Store {
         if (m.convId === this.convId) this.newConversation();
         return;
       case 'items':
-        if (m.convId !== this.convId) return;
+        // A preview that closed before its reply came does not want it any more (see dropItems).
+        if (m.convId !== this.convId || !this.wanted.has(m.agentId)) return;
         this.items[m.agentId] = m.items;
         this.drafts[m.agentId] = m.draft;
         return;
@@ -262,12 +323,8 @@ class Store {
         this.settings = m.settings;
         return;
       case 'rate_limit':
+        // The banner (rateLimit) is derived from usage, so it follows the worst window known.
         this.usage[m.notice.type ?? ''] = m.notice;
-        {
-          // The banner follows the worst window known, not whichever notice came last.
-          const all = Object.values(this.usage);
-          this.rateLimit = all.find((n) => n.status === 'rejected') ?? all.find((n) => n.status === 'allowed_warning') ?? null;
-        }
         return;
       case 'dirs':
         this.dirs = { path: m.path, parent: m.parent, entries: m.entries, error: m.error };
@@ -295,6 +352,7 @@ class Store {
     this.agents = {};
     this.items = {};
     this.drafts = {};
+    this.wanted.clear();
     this.view = 'chat';
     if (location.hash !== `#/c/${convId}`) history.replaceState(null, '', `#/c/${convId}`);
     this.send({ t: 'open', convId });
@@ -306,18 +364,22 @@ class Store {
     this.agents = {};
     this.items = {};
     this.drafts = {};
+    this.wanted.clear();
     this.view = 'chat';
     if (location.hash) history.replaceState(null, '', location.pathname);
   }
 
   /** Fetches an agent's transcript if the page does not have it yet. */
   loadItems(agentId: string): void {
-    if (this.convId && !this.items[agentId]) this.send({ t: 'items', convId: this.convId, agentId });
+    if (!this.convId) return;
+    this.wanted.add(agentId);
+    if (!this.items[agentId]) this.send({ t: 'items', convId: this.convId, agentId });
   }
 
   /** Forgets a transcript fetched only for a preview. It is fetched again if the agent is opened. */
   dropItems(agentId: string): void {
     if (agentId === this.viewAgent?.id) return;
+    this.wanted.delete(agentId);
     delete this.items[agentId];
   }
 
@@ -354,16 +416,19 @@ class Store {
   }
 
   /** Changes a copy of the settings and saves it. */
+  /**
+   * Changes a copy of the settings, shows it at once, and sends only the fields that changed. The
+   * server merges a partial update, so a tab with stale settings cannot put back an old folder or limit.
+   */
   updateSettings(change: (s: Settings) => void): void {
     if (!this.settings) return;
-    const next = structuredClone($state.snapshot(this.settings)) as Settings;
+    const before = $state.snapshot(this.settings) as Settings;
+    const next = structuredClone(before);
     change(next);
-    this.saveSettings(next);
-  }
-
-  saveSettings(next: Settings): void {
+    const patch = settingsPatch(before, next);
+    if (Object.keys(patch).length === 0) return;
     this.settings = next;
-    this.send({ t: 'settings', settings: next });
+    this.send({ t: 'settings', settings: patch });
   }
 
   answer(requestId: string, decision: 'allow' | 'always' | 'deny', answers?: Record<string, string>): void {
@@ -388,26 +453,84 @@ class Store {
  * of the address bar so it is not left in history or bookmarks.
  */
 let pageKey: string | null = null;
-function takeKey(): string | null {
+/**
+ * A key that came in the address and has not yet been accepted by the server. It replaces the stored
+ * key only once a socket opened with it, so a link to `…/#key=junk` cannot sign a browser out.
+ */
+let candidate: string | null = null;
+
+/**
+ * The key to connect with, and whether it is an untried candidate. `masthead` opens the page with
+ * the key in the fragment (`#key=…`), which is never sent to the server or kept in its logs; `?key=`
+ * from older launchers still works. Either way it is taken out of the address bar at once.
+ */
+function takeKey(): { key: string | null; untried: boolean } {
   const url = new URL(location.href);
-  const fromUrl = url.searchParams.get('key');
+  const hash = new URLSearchParams(url.hash.slice(1));
+  const fromUrl = hash.get('key') || url.searchParams.get('key');
   if (fromUrl) {
-    try {
-      localStorage.setItem(KEY_STORAGE, fromUrl);
-    } catch {
-      // Storage refused (private mode): the key still works for this page load.
-    }
+    candidate = fromUrl;
     url.searchParams.delete('key');
-    history.replaceState(history.state, '', url.pathname + url.search + url.hash);
-    return (pageKey = fromUrl);
+    // URLSearchParams would re-encode a route such as `/c/<id>`; keep the rest of the hash as written.
+    const rest = url.hash.slice(1).split('&').filter((part) => part && !part.startsWith('key=')).join('&');
+    history.replaceState(history.state, '', url.pathname + url.search + (rest ? `#${rest}` : ''));
   }
-  // Read again each time: another tab may have been signed in with a newer key.
+  if (candidate) return { key: candidate, untried: true };
+  return { key: storedKey(), untried: false };
+}
+
+/** The stored key, read again each time: another tab may have been signed in with a newer key. */
+function storedKey(): string | null {
   try {
     pageKey = localStorage.getItem(KEY_STORAGE) ?? pageKey;
   } catch {
-    // Keep the key this page was opened with.
+    // Keep the key this page already had.
   }
   return pageKey;
+}
+
+/** The fields of `next` that differ from `before`, tier fields one by one. */
+function settingsPatch(before: Settings, next: Settings): SettingsPatch {
+  const patch: Record<string, unknown> = {};
+  for (const k of Object.keys(next) as (keyof Settings)[]) {
+    if (k === 'tiers') continue;
+    if (next[k] !== before[k]) patch[k] = next[k];
+  }
+  const tiers: Record<string, Record<string, unknown>> = {};
+  for (const tier of Object.keys(next.tiers) as Tier[]) {
+    for (const f of Object.keys(next.tiers[tier]) as (keyof TierSettings)[]) {
+      if (next.tiers[tier][f] !== before.tiers[tier]?.[f]) (tiers[tier] ??= {})[f] = next.tiers[tier][f];
+    }
+  }
+  if (Object.keys(tiers).length) patch.tiers = tiers;
+  return patch as SettingsPatch;
+}
+
+/** Whether the Masthead server answers at all (it needs no key). */
+async function serverUp(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/health', { cache: 'no-store' });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** What identifies a usage notice for dismissing the banner: a change in any of these shows it again. */
+function limitKey(n: RateLimitNotice): string {
+  return `${n.type ?? ''}|${n.status}|${n.resetsAt ?? ''}`;
+}
+
+/** The server accepted the candidate: it becomes the stored key. */
+function keepCandidate(): void {
+  if (!candidate) return;
+  pageKey = candidate;
+  try {
+    localStorage.setItem(KEY_STORAGE, candidate);
+  } catch {
+    // Storage refused (private mode): the key still works for this page load.
+  }
+  candidate = null;
 }
 
 function idFromHash(): string | null {
@@ -432,10 +555,32 @@ export function shortPath(path: string, home: string | undefined): string {
  * sub-state of a status belongs here, as one line.
  */
 export function statusWords(a: AgentInfo): string {
+  if (a.pausedUntil) return `Paused until ${new Date(a.pausedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · usage limit`;
   if (a.status === 'waiting' && a.waitingFor) return `Waiting for an answer from ${displayName(a.waitingFor)}`;
   if (a.status === 'running') return a.activity ?? 'Working';
-  if (a.status === 'failed') return a.error ? `Failed: ${a.error}` : 'Failed';
+  if (a.status === 'failed') return a.error ? `Failed: ${shortReason(a.error)}` : 'Failed';
+  if (a.status === 'stopped' && a.error) return `Stopped · ${shortReason(a.error)}`;
   return STATUS_LABEL[a.status];
+}
+
+/**
+ * Why an agent ended, in a few words: the server's known reasons are named plainly, anything else is
+ * cut to its first sentence and 60 characters.
+ */
+export function shortReason(error: string): string {
+  const named: [RegExp, (m: RegExpExecArray) => string][] = [
+    [/^Stopped by the person\.?$/, () => 'by you'],
+    [/run-time limit/, () => 'run-time limit'],
+    [/^Stopped by "([^"]+)"/, (m) => `by ${displayName(m[1]!)}`],
+    [/^"([^"]+)" ended before this agent finished/, (m) => `${displayName(m[1]!)} ended first`],
+    [/^Masthead was closed while this agent was working/, () => 'Masthead was closed'],
+  ];
+  for (const [re, words] of named) {
+    const m = re.exec(error);
+    if (m) return words(m);
+  }
+  const first = error.split(/(?<=[.!?])\s/)[0]!.trim().replace(/\.$/, '');
+  return first.length > 60 ? `${first.slice(0, 59)}…` : first;
 }
 
 export const STATUS_LABEL: Record<AgentInfo['status'], string> = {

@@ -43,14 +43,15 @@ The person sends a message to the lead. If there is a restart note, `userSend()`
 - **The task of an agent that never started.** An agent still `queued` at shutdown has no session yet. Its task is saved as `seed` (`Agent.pendingSeed` → `Conversation.toStored()`) and restored, so if it is woken later its new session begins with the original task, followed by the new message.
 - The URL: a reloaded page reopens the conversation named in `#/c/<id>`.
 
+The marks of agents the person stopped and the count of messages between agents are saved too (`stoppedByPerson` and `agentMessages` in `StoredConversation`). `restore()` reads them back, keeping only marks for agents that exist and clamping the count to 0–1000, so agents still cannot wake an agent the person stopped, and the message limit carries on where it was.
+
 ## What does not survive a restart
 
 - **Work in progress.** Sub-agents that were working are `stopped`, and their reports were never sent (`owesReport` is reset to false). When an agent later wakes one of them with `send_message`, `message()` sets `owesReport` again only if its parent can receive a report: the lead always can; any other parent only while it is live. So an Opus agent woken by the lead reports to the lead, but a Sonnet whose Opus parent is also stopped does not report to anyone, and answers only with `send_message`.
 - **Waits for an answer** (`send_message` with `wait`): memory only; the waiting agents are stopped anyway.
 - **Open approval requests** and the **live draft**: memory only.
-- **The inter-agent message counter** starts at zero (a known limitation).
-- **Which agents the person stopped.** That mark is kept in memory only (`stoppedByPerson` in `server/conversation.ts`), so after a restart any agent may wake them again.
 - **Usage notices** (`AppState.usage`) start empty until Claude Code reports again.
+- **Usage-limit pauses.** `restore()` clears `pausedUntil`; `shutdown()` also clears the conversation's 30 s timer. An agent that was paused is treated like any other agent stopped while working.
 - **Processes and slots**: nothing runs until something is delivered.
 
 ## Related pages

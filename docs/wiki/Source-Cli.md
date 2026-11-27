@@ -1,10 +1,10 @@
 # server/cli.ts
 
-**Role:** the command-line parsing for `masthead`. It is kept apart from [server/main.ts](Source-Main.md) so it can be tested without starting a server, opening a browser or calling systemd (`test/launcher.test.ts`). It has no side effects: every function takes its input as an argument and returns a value or throws. How the person uses the command is on [Command-line launcher](Command-Line-Launcher.md).
+**Role:** the command-line parsing and the sign-in step for `masthead`. It is kept apart from [server/main.ts](Source-Main.md) so it can be tested without starting a server, opening a browser or calling systemd (`test/launcher.test.ts`). The parsing functions have no side effects: each takes its input as an argument and returns a value or throws. The sign-in functions write and remove files in the folder they are given, and run commands only through the `Opener` they are given. How the person uses the command is on [Command-line launcher](Command-Line-Launcher.md).
 
-> Checked against the 0.1.3 source. The behaviour described here is read from the code, not run (`npm test` passes).
+> Checked against the 0.1.4 source. The behaviour described here is read from the code, not run (`npm test` passes).
 
-It imports one thing: `DEFAULT_PORT` (7717) from [server/config.ts](Source-Config.md).
+It imports `DEFAULT_PORT` (7717) from [server/config.ts](Source-Config.md), `randomBytes` from `node:crypto`, file functions from `node:fs` and `join` from `node:path`.
 
 ## Exports at a glance
 
@@ -14,8 +14,17 @@ It imports one thing: `DEFAULT_PORT` (7717) from [server/config.ts](Source-Confi
 | `parsePort(args, env)` | function | The port every command talks to or serves on. |
 | `parseCommand(args)` | function | Which command to run. |
 | `unitPortFrom(showOutput)` | function | Whether the installed systemd unit serves the asked-for port. |
+| `parseDevWebPort(env)` | function | The Vite page's port in development mode. |
+| `signInUrl(base, secret)` | function | The address that signs a browser in. |
+| `signInDir(env, dataDir)` | function | Where sign-in files go. |
+| `SIGN_IN_STALE_MS` | constant | Age (2 minutes) after which a leftover sign-in file is removed. |
+| `writeSignInFile(dir, target, now)` | function | Writing the private sign-in page (used by `openSignedIn()`). |
+| `OPENER_WAIT_MS` | constant | How long (3 seconds) `openSignedIn()` waits for the opener before counting it as having opened the browser. |
+| `serverProves(base, port, secret, fetchFn)` | function | Checking that the server on the port knows the secret before it is sent the key. |
+| `Opener` | interface | What `openSignedIn()` needs to run commands and print. |
+| `openSignedIn(opts)` | function | Opening the browser, signed in, without the key on a command line. |
 
-`checkPort(raw)` is a private helper.
+`checkPort(raw)` and `htmlAttr(s)` (escapes `&`, `"`, `<` and `>` for an HTML attribute) are private helpers.
 
 ## UsageError
 
@@ -90,6 +99,61 @@ Edge cases (read from the code, not run against a real systemd):
 - The regex reads digits only and has no end anchor, so `MASTHEAD_PORT=7720abc` reads as 7720.
 - `scripts/install.sh` does not set `MASTHEAD_PORT` in the unit, so an installed unit normally reports 7717.
 
+## parseDevWebPort(env)
+
+`env.MASTHEAD_DEV_WEB_PORT` checked with `checkPort()`, or 7718 when it is unset or empty. A bad value throws the same `UsageError` as a bad port; `runServer()` in `main.ts` rewords it to `Invalid MASTHEAD_DEV_WEB_PORT: …` and exits 2. `vite.config.ts` reads the same variable for the page's own port.
+
+## signInUrl(base, secret)
+
+Returns `<base>/#key=<secret>`. The key is in the fragment, which browsers never send to a server, so it does not appear in a request, a server log or a `Referer` header. The page reads it with `takeKey()` in `web/src/lib/store.svelte.ts`, which also still accepts `?key=`.
+
+## signInDir(env, dataDir)
+
+`$XDG_RUNTIME_DIR/masthead` when `XDG_RUNTIME_DIR` is set and starts with `/` (normally a per-user tmpfs with mode `0700`), else `<dataDir>/open`. `main.ts` passes `DATA_DIR`.
+
+## writeSignInFile(dir, target, now)
+
+1. Creates `dir` with mode `0700` and then `chmod`s it to `0700`, so a folder that already existed with looser rights is tightened.
+2. Removes every `sign-in-*` file in it whose modification time is more than `SIGN_IN_STALE_MS` (2 minutes) before `now`. A file that vanished meanwhile is skipped.
+3. Writes `sign-in-<12 random hex characters>.html` with mode `0600` and the flag `wx`, which fails if the name exists rather than writing through it (for example through a planted symlink).
+4. The page: `<meta charset="utf-8">`, `<meta name="referrer" content="no-referrer">`, `<meta http-equiv="refresh" content="0; url=<target>">`, the title `Masthead` and a plain `Open Masthead` link to the target, in case the refresh does not run. The target is escaped with `htmlAttr()`.
+5. Returns the file's path.
+
+Whether a real browser follows the refresh from a `file://` page was not verified by running.
+
+## serverProves(base, port, secret, fetchFn)
+
+Asks the server at `base` to prove it knows `secret`, so that only a real Masthead with this data folder's secret is ever sent the key. It makes a fresh nonce, `randomBytes(32)` as 64 lowercase hex characters, and calls `fetchFn` on `<base>/api/proof?nonce=<nonce>` with a 1.5-second timeout (`AbortSignal.timeout(1500)`). `fetchFn` defaults to the global `fetch`; the tests pass a stand-in. It returns true only when the status is `200` and `proofOk(secret, port, nonce, body.proof)` in [server/config.ts](Source-Config.md) holds: the proof must be 64 lowercase hex characters equal, compared in constant time, to HMAC-SHA256 keyed with the secret over `masthead-proof\n<port>\n<nonce>`. Every other outcome is false: no answer, a status other than 200 (an older Masthead without `/api/proof`), a body that is not JSON, a wrong proof, or a proof made for another port, which is what a program relaying the question to a Masthead on another port would return. Asking sends no secret. The server's side is on [server/http.ts](Source-Http.md#http-requests); why it matters is on [Security model](Security-Model.md#4-the-local-secret). Tested in `test/launcher.test.ts`.
+
+## Opener
+
+```ts
+interface Opener {
+  has(cmd: string): boolean;                                // whether a command exists
+  run(cmd: string, args: string[]): Promise<number | null>; // exit code, or null if it could not start; must not keep the process alive
+  detach(cmd: string, args: string[]): void;                // start in the background and forget
+  log(line: string): void;
+}
+```
+
+`main.ts` passes `systemOpener`; the tests pass a fake that records calls.
+
+## openSignedIn(opts)
+
+`opts` is `{ base, secret, dir, opener, tty, waitMs? }`. `tty` says whether output goes to a terminal; `waitMs` defaults to `OPENER_WAIT_MS` (3000). Returns true when the browser was opened, or the opener is still running after `waitMs`.
+
+1. The target is `signInUrl(base, secret)`.
+2. Picks `xdg-open`, else `gio`, whichever `opener.has()` finds first.
+3. If one was found, writes the sign-in file with `writeSignInFile(dir, target)`. If that throws, it logs `Could not write the sign-in file in <dir>: <reason>`.
+4. If there is an opener and a file, it runs `xdg-open <file>` or `gio open <file>`. The opener gets the file's **path**, never the key, so the key is not in any process's arguments, which other users can read. It waits for the opener at most `waitMs`: some openers run the browser in the foreground, and one still running has opened it, so `masthead` never hangs on it. On exit code 0, or when the opener is still running after the wait, it detaches `sh -c 'sleep 60; rm -f -- "$1"' sh <file>`, which removes the file a minute later; when `tty` it logs `If the browser did not open signed in, run: masthead --no-browser` (a confined browser may not have been able to read the file, which nothing here can see); and it returns true. On any other result it removes the file.
+5. Otherwise (no opener, no file, or the opener failed) it returns false, and no file is left behind. What it logs depends on `tty`:
+   - a terminal: `Open this address in your browser to sign it in (keep it private):` and the target on the next line, then `If the browser did not open signed in, run: masthead --no-browser`;
+   - not a terminal: only ``Could not open the browser. Run `masthead --no-browser` in a terminal to get the sign-in address.`` The key is never written to output that may end up in a log other people can read.
+
+So in a terminal the output always ends with the `masthead --no-browser` hint. The tty and no-tty output and the wait (with a short `waitMs` and an opener that never exits) are tested in `test/launcher.test.ts`; the 3-second wait with a real browser was not verified by running.
+
+A snap or flatpak browser may be unable to read a file in `$XDG_RUNTIME_DIR` or `~/.local/share`. Then `masthead --no-browser` in a terminal prints the address to paste.
+
 ## Related pages
 
-[Command-line launcher](Command-Line-Launcher.md) · [server/main.ts](Source-Main.md) · [server/config.ts](Source-Config.md) · [Tests](Source-Tests.md) · [Installing](Source-Install-Scripts.md)
+[Command-line launcher](Command-Line-Launcher.md) · [server/main.ts](Source-Main.md) · [server/config.ts](Source-Config.md) · [Tests](Source-Tests.md) · [Installing](Source-Install-Scripts.md) · [Security model](Security-Model.md)

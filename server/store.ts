@@ -17,6 +17,10 @@ export interface StoredAgent {
 export interface StoredConversation {
   meta: ConversationMeta;
   agents: StoredAgent[];
+  /** Ids of agents the person stopped, which other agents may not wake. Missing in files before 0.1.4. */
+  stoppedByPerson?: string[];
+  /** Messages sent between agents so far, counted against the conversation's limit. Missing before 0.1.4. */
+  agentMessages?: number;
 }
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;

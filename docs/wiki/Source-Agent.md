@@ -17,13 +17,13 @@ What an agent needs from the conversation that owns it. `Conversation` implement
 | `agentChanged`, `itemChanged`, `draftChanged`, `rateLimit` | Change notifications, passed up to the app. |
 | `askPermission(...)` | Where `canUseTool` goes. |
 | `turnEnded(agent, outcome)` | A turn finished and nothing it was sent is still unanswered. Also called when background work is still running (check `hasBackgroundWork`). |
-| `processLost(agent, message)` | The process went away without being asked. |
+| `processLost(agent, message, usageLimit?)` | The process went away without being asked. `usageLimit` is set when it died at the usage limit (see `TurnOutcome`). |
 | `backgroundIdle?(agent)` | Optional. Background work has ended, the last turn is over and Claude Code started no new turn within `BACKGROUND_GRACE_MS`; a host that kept the agent waiting should now end it as usual. |
 | `query?` | Optional. Starts a Claude Code session in place of the SDK's `query`; only the tests set it (`test/agent.test.ts`). |
 
 ### `TurnOutcome`
 
-`{ text, error?, interrupted }`: what the agent said since it last took up work (the final text of every turn in that run, oldest first; see [Agent life cycle](Agent-Life-Cycle.md#4-end-of-a-turn-handleresult-and-the-unanswered-set)), an error if the turn failed, and whether it was interrupted.
+`{ text, error?, interrupted, usageLimit? }`: what the agent said since it last took up work (the final text of every turn in that run, oldest first; see [Agent life cycle](Agent-Life-Cycle.md#4-end-of-a-turn-handleresult-and-the-unanswered-set)), an error if the turn failed, whether it was interrupted, and `{ resetsAt? }` (ms since the epoch) when the turn failed at the usage limit (see [Agent life cycle](Agent-Life-Cycle.md#7b-the-usage-limit)).
 
 ## `Channel<T>`
 
@@ -108,11 +108,12 @@ A small asynchronous queue that is also an async iterable: `push()` adds an item
 | `closeOpenTools()` (private) | Marks every tool item still waiting for its result as done (sent again through `itemChanged`), at turn end and when the process ends. |
 | `clearBackground()` (private) | Cancels the grace timer and empties the background set; called at launch, when the process ends, and by `end()`/`dispose()`. |
 | `interrupt()` | If running, sets `interrupted` and calls `q.interrupt()`. |
-| `end(status, error?)` | Cancels a queued slot request, increases the generation, marks closing, clears backlog, unanswered, `runTexts` and the background set, closes the input gracefully (`done`) or the process at once (`stopped`/`failed`), releases the slot, sets the status. |
+| `end(status, error?)` | Cancels a queued slot request, increases the generation, marks closing, clears backlog, unanswered, `runTexts` and the background set, drops held messages, closes the input gracefully (`done` with no background work) or the process at once (`stopped`, `failed`, or `done` while background commands run), releases the slot, sets the status. |
+| `dropHeld()` | Forgets messages held from a usage-limit stop (see [Agent life cycle](Agent-Life-Cycle.md#7b-the-usage-limit)). Called by `end()`, `dispose()` and the conversation when the person stops an agent. |
 | `dispose()` | Like `end()` but without changing the status: cancels a queued request, increases the generation, marks closing, clears backlog, unanswered, `runTexts` and the background set, closes the process at once, releases the slot. Used by `Conversation.shutdown()` for agents that are not live (the lead, and finished agents whose process may still be closing), so their saved status stays what it was. |
-| `setEffort(level)` | Updates `info.effort`, broadcasts, and calls `q.applyFlagSettings({ effortLevel })` on a live process; failures are ignored because the level is applied at the next launch anyway. |
+| `setEffort(level)` | Updates `info.effort`, broadcasts, and calls `q.applyFlagSettings({ effortLevel })` on a live process (checked on 2026-11-27 with Claude Code 2.1.331: sent mid-turn, it applies from the next request of the same turn); failures are ignored because the level is applied at the next launch anyway. |
 | `applySettings(settings)` | Applies changed settings to a live process (does nothing without one, or while closing; `launch()` reads settings anyway). Caps effort to the tier's ceiling, or sets the tier's fixed effort when `autoEffort` is off, through `setEffort()`. For the lead, a changed model is set on `info` and passed to `q.setModel()`; if that fails the process is marked `stale`. A change of `autoEffort` since launch marks it `stale`, because tools are built at launch. |
-| `refreshContext()` | Asks Claude Code for real context usage (`q.getContextUsage()`) and stores `totalTokens` / `maxTokens`. Called by the conversation after each lead turn. |
+| `refreshContext()` | Asks Claude Code for real context usage (`q.getContextUsage()`) and stores `totalTokens` / `maxTokens`. Called by `handleResult()` at the end of every agent's turn, while the process is still up. |
 
 ### `launch()` in detail
 
@@ -139,9 +140,8 @@ Notes:
 
 ## Points to be aware of
 
-- **Known limitation (deliberate since 0.1.0):** sub-agents never call `refreshContext()`, so their `usage.contextMax` is assumed to be 1,000,000 and their `context` is the estimate from the stream.
 - If `launch()` threw *after* `query()` had succeeded (for example inside a status callback), the catch in `ensureProcess()` sets `q` to null without closing that process. Nothing in the current callbacks is expected to throw, so this is theoretical.
-- The background-work sequence was seen once with a real Claude Code 2.1.331 (see [Agent life cycle](Agent-Life-Cycle.md#4a-background-work)). The grace timer, `backgroundIdle()` and the relaunch of a stale process are covered only by unit tests with a stand-in for `query` (`test/agent.test.ts`).
+- Checked on 2026-11-27 against Claude Code 2.1.331 (Haiku) with a throwaway harness that drives the real `Agent` class: the background-work sequence and the grace path, the lead's model change, the relaunch after the automatic-effort switch, and the fresh session after a deleted session file all behaved as described (see [Agent life cycle](Agent-Life-Cycle.md)). The usage-limit path has not been seen for real (it needs a reached limit); only unit tests cover it.
 - `message_delta` output tokens are added each time the event arrives. This assumes one such usage figure per message; whether Claude Code emits more than one per message was not checked.
 
 ## Related pages

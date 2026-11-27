@@ -90,6 +90,7 @@
     <div
       class="card tier-{a.tier}"
       class:live={isLive(a)}
+      class:stoppable={isLive(a) && a.tier !== 'lead'}
       class:ended={a.status === 'done' || a.status === 'stopped' || a.status === 'failed'}
       onmouseenter={() => enter(a.id)}
       onmouseleave={leave}
@@ -122,7 +123,13 @@
             {#each lines as l (l.id)}
               <div class="p-line {l.kind}">{#if l.who}<b>{l.who}</b> {/if}{l.text}</div>
             {/each}
-            {#if draft?.text}<div class="p-line text live"><b>{displayName(a.name)}</b> {flat(draft.text.slice(-220), 220)}</div>{/if}
+            {#if draft?.text}
+              {#if draft.kind === 'thinking'}
+                <div class="p-line thinking live">Thinking… {flat(draft.text.slice(-160), 160)}</div>
+              {:else}
+                <div class="p-line text live"><b>{displayName(a.name)}</b> {flat(draft.text.slice(-220), 220)}</div>
+              {/if}
+            {/if}
           {/if}
           <div class="p-foot">Click to open the chat</div>
         </div>
@@ -282,6 +289,11 @@
   .doing.bad {
     color: var(--bad);
   }
+  /* A live sub-agent's stop button sits in the bottom-right corner; the meta line keeps clear of it. */
+  .card.stoppable .meta,
+  .card.stoppable .doing {
+    padding-right: 26px;
+  }
   .meta {
     font-size: 11.5px;
     color: var(--faint);
@@ -316,7 +328,8 @@
     overflow-wrap: anywhere;
   }
   .p-line.tool,
-  .p-line.notice {
+  .p-line.notice,
+  .p-line.thinking {
     color: var(--muted);
   }
   .p-line.live::after {

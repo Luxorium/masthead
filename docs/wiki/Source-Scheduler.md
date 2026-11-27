@@ -8,7 +8,7 @@ The error a queued request is rejected with when it is cancelled. `Agent.ensureP
 
 ## `class TierOff extends Error`
 
-The error a queued request is rejected with when its tier's limit is 0 after the limits change. Its message is "This tier was switched off in the settings while the agent was waiting to start." and `toString()` returns just that, because `ensureProcess()` passes `String(error)` to `processLost()` and the agent shows it as its error.
+The error a request is rejected with when its tier's limit is 0: at once in `acquire()`, or for requests already queued when the limits change. Its message is "This tier was switched off in the settings while the agent was waiting to start." and `toString()` returns just that, because `ensureProcess()` passes `String(error)` to `processLost()` and the agent shows it as its error.
 
 ## `class Scheduler`
 
@@ -28,7 +28,7 @@ Constructed by `App` as `new Scheduler((tier) => this.currentSettings.tiers[tier
 |---|---|
 | `cap(tier)` (private) | `Infinity` for the lead; otherwise `max(0, limit(tier))`. |
 | `running(tier)`, `queued(tier)` | Counts, used by `Conversation.spawn()` to predict queueing. |
-| `acquire(tier, id, owner)` | Returns a promise. Resolves at once if the agent already holds a slot, or if there is room **and** nobody is queued. Otherwise adds a waiter and calls `pump()`. |
+| `acquire(tier, id, owner)` | Returns a promise. Resolves at once if the agent already holds a slot. Rejects at once with `TierOff` if the tier's cap is 0 (never for the lead), so a paused agent that resumes while its tier is off fails and reports instead of queuing for ever. Resolves at once if there is room **and** nobody is queued. Otherwise adds a waiter and calls `pump()`. |
 | `release(tier, id)` | Removes the agent from `active`; if it was there, calls `pump()`. Safe to call twice. |
 | `cancel(tier, id)` | Removes a queued waiter and rejects it with `SlotCancelled`. Returns whether one was found. |
 | `limitsChanged()` | For every tier with a queue: if its cap is now 0, removes every waiter and rejects it with `TierOff`; otherwise calls `pump()`. `App.updateSettings()` calls it. |
@@ -40,7 +40,7 @@ The owner is the parent agent. Choosing the parent with the least current share 
 
 ## Tests
 
-`test/agent.test.ts` builds a `Scheduler(() => 1)` for its agents. `test/conversation.test.ts` checks, through a `Conversation`, that switching a tier off fails its queued agents and reports to the parent. `test/unit.test.ts` has five scheduler tests: the limit is never exceeded and the next waiter starts when one finishes; tiers are separate and the lead is unlimited (and a limit of 0 starts nothing); a freed slot goes to the parent with fewest running; cancelling frees a place and raising the limit starts waiters (while lowering it stops nothing); asking twice for the same agent holds one slot.
+`test/agent.test.ts` builds a `Scheduler(() => 1)` for its agents. `test/conversation.test.ts` checks, through a `Conversation`, that switching a tier off fails its queued agents and reports to the parent, and that `acquire()` refuses a new request at once on a tier at 0. `test/unit.test.ts` has five scheduler tests: the limit is never exceeded and the next waiter starts when one finishes; tiers are separate and the lead is unlimited (and a limit of 0 refuses at once with an error); a freed slot goes to the parent with fewest running; cancelling frees a place and raising the limit starts waiters (while lowering it stops nothing); asking twice for the same agent holds one slot.
 
 ## Callers
 

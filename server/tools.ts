@@ -78,7 +78,7 @@ export function teamTools(agent: Agent, team: TeamActions): McpSdkServerConfigWi
         'set_effort',
         agent.tier === 'lead'
           ? 'Change your own thinking effort from your next step on. Low is right for most work. Raise it when the task needs careful multi-step reasoning, subtle debugging or a design decision, or when you catch yourself making mistakes; lower it again afterwards. Change it at the start of a piece of work, not repeatedly.'
-          : 'Ask to change your own thinking effort. Low is right for most work. Lowering applies at once. Raising needs the approval of the agent that started you: this sends the request and returns; keep working at your current level. If approved, the new level applies by itself.',
+          : 'Ask to change your own thinking effort. Low is right for most work. Lowering applies at once. Raising needs the approval of the agent that started you: this sends the request and returns; keep working at your current level. If approved, the new level applies by itself from your next step; no message is sent. list_agents shows your current effort.',
         { level: effortSchema, reason: z.string().min(1).max(500).describe('One sentence on why') },
         async (a) => reply(team.setOwnEffort(agent, a.level, a.reason)),
       ),

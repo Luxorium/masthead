@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -36,6 +36,7 @@ export function defaultSettings(): Settings {
     leanSubagents: true,
     leanOpus: true,
     collapseReports: false,
+    maxRunMinutes: 0,
     defaultCwd: HOME,
   };
 }
@@ -69,6 +70,7 @@ export function sanitizeSettings(raw: unknown, base: Settings = defaultSettings(
   if (typeof r.leanSubagents === 'boolean') d.leanSubagents = r.leanSubagents;
   if (typeof r.leanOpus === 'boolean') d.leanOpus = r.leanOpus;
   if (typeof r.collapseReports === 'boolean') d.collapseReports = r.collapseReports;
+  d.maxRunMinutes = clampInt(r.maxRunMinutes, 0, 24 * 60, d.maxRunMinutes);
   if (typeof r.defaultCwd === 'string' && r.defaultCwd.startsWith('/')) d.defaultCwd = r.defaultCwd;
   return d;
 }
@@ -94,6 +96,24 @@ export function saveSettings(s: Settings, file: string = SETTINGS_FILE): void {
 }
 
 const SECRET_FORMAT = /^[0-9a-f]{64}$/;
+/** A proof nonce: 32 random bytes as lowercase hex. */
+export const NONCE_FORMAT = /^[0-9a-f]{64}$/;
+
+/**
+ * The server's proof that it knows the secret, for a nonce the launcher chose: HMAC-SHA256 over the
+ * port and the nonce. It reveals nothing about the secret. The port is part of it so another program
+ * holding port N cannot pass on a question to a real Masthead on another port and replay its answer.
+ */
+export function proofOf(secret: string, port: number, nonce: string): string {
+  return createHmac('sha256', secret).update(`masthead-proof\n${port}\n${nonce}`).digest('hex');
+}
+
+/** Whether `answer` is the proof for this secret, port and nonce, compared in constant time. */
+export function proofOk(secret: string, port: number, nonce: string, answer: unknown): boolean {
+  if (typeof answer !== 'string' || !/^[0-9a-f]{64}$/.test(answer)) return false;
+  return timingSafeEqual(Buffer.from(answer, 'hex'), Buffer.from(proofOf(secret, port, nonce), 'hex'));
+}
+
 
 /** The secret in `file`, or null when there is none (or it is not one Masthead wrote). */
 export function readSecret(file: string = SECRET_FILE): string | null {

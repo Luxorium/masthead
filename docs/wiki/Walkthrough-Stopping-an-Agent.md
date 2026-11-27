@@ -14,7 +14,7 @@ sequenceDiagram
   participant K as its children
   participant L as alpha, the lead (its parent)
   B->>C: stop_agent(bravo)
-  C->>C: mark bravo and its subtree in stoppedByPerson
+  C->>C: mark live agents of bravo's subtree in stoppedByPerson
   C->>C: remember wasLive, owesReport
   C->>K: stopTree(child) for each (children first, recursively)
   C->>X: stopTree(bravo)
@@ -28,13 +28,15 @@ sequenceDiagram
 
 Step by step:
 
-1. `stopAgent()` finds the agent and marks it and every agent under it in `stoppedByPerson`. From now on other agents cannot wake them with `send_message` ("Error: the person stopped "bravo"; only they can wake it."); the person can, by messaging the agent, which clears its mark. The marks are in memory only and are gone after a restart. It then records whether it was live and whether it owed a report **before** stopping, because `stopTree()` clears `owesReport`.
+1. `stopAgent()` finds the agent and marks it and every agent under it that was live in `stoppedByPerson` (a finished helper stays reusable by the lead). From now on other agents cannot wake them with `send_message` ("Error: the person stopped "bravo"; only they can wake it."); the person can, by messaging the agent, which clears its mark. The marks are saved with the conversation (`stoppedByPerson` in `conversation.json`), so they survive a restart; saving is asked for through `metaChanged()`. It then records whether it was live and whether it owed a report **before** stopping, because `stopTree()` clears `owesReport`.
 2. `stopTree(agent, why)` recurses into the children first, so the deepest agents stop first. For each agent that is live:
    - `host.cancelPermissions(agent.id)` denies any approval request from it ("The agent was stopped.");
    - `owesReport = false`;
    - `agent.end('stopped', why)`: cancels a queued slot request (rejecting it with `SlotCancelled`), marks the agent as closing, clears its backlog and unanswered set, closes the Claude Code process at once (`q.close()`), releases its slot (which may start a queued agent of that tier), and sets status `stopped` with the reason as the error;
    - adds an info notice with the reason.
    Agents that are not live (already done, failed or stopped) are skipped.
+
+   Stopping also ends a usage-limit pause: `agentChanged()` clears pause state when an agent stops being live, and `stopAgent()` on the lead (which stays live) calls `clearPause()`. Messages held for a paused agent are dropped (`dropHeld()`).
 3. If the agent was live and owed a report, its parent gets a report with status `stopped` and the text "Stopped by the person.". That wakes the parent, so it can react. Otherwise `settle(parent)` moves a parent that was only waiting on it to `idle` (lead) or `done`.
 
 When the process ends, `consume()` sees `closing` is set and does not report a lost process.
@@ -46,7 +48,7 @@ An agent stopped while it was still queued, or while its old process was exiting
 - `{t:'stop_agent'}` with the lead's id: `stopTree()` on each of the lead's children, then `lead.interrupt()`, then `settle(lead)`. The lead keeps its session and process. `interrupt()` only acts if the lead is `running` (its turn then ends as interrupted); if the lead was `waiting` on those children, `settle()` moves it to `idle`.
 - `{t:'stop_all'}` (the "Stop everything" button): `stopAll()` does the same, then calls `settle(lead)` once more.
 
-No reports are sent in either case: `stopTree()` clears `owesReport` and the lead is not told. Every sub-agent is marked in `stoppedByPerson`, so the lead cannot wake them again; the person can.
+No reports are sent in either case: `stopTree()` clears `owesReport` and the lead is not told. Every sub-agent that was live is marked in `stoppedByPerson`, so the lead cannot wake them again; the person can.
 
 ## Interrupting the lead
 

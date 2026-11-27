@@ -46,7 +46,7 @@ The tool descriptions are written for the model:
 - **`spawn_agent`** says the new agent gets the next name from the phonetic alphabet, and that the reply says which name.
 - **`send_message`** gives an example name ("charlie") and mentions the aliases "lead" and "parent". Its `wait` input (not offered to the lead) is described as: "You need the answer to continue: end your turn and you resume when it arrives. Parent or lead only".
 - **`stop_agent`** says it is only for work that is no longer wanted: a stopped agent sends no report, so it must never be used to wait for or collect a result.
-- **`set_effort`** says low is right for most work (the agent's actual level is in its system prompt) and depends on the tier. The lead is told it changes its own effort directly. Everyone else is told that raising needs approval, to keep working at the current level, and that an approved level applies by itself (no message follows).
+- **`set_effort`** says low is right for most work (the agent's actual level is in its system prompt) and depends on the tier. The lead is told it changes its own effort directly. Everyone else is told that raising needs approval, to keep working at the current level, and ends: "If approved, the new level applies by itself from your next step; no message is sent. list_agents shows your current effort."
 
 ## `send_message` and `wait`
 

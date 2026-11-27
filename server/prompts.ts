@@ -51,7 +51,7 @@ export function systemAppend(opts: {
 
   if (settings.autoEffort) {
     lines.push(
-      `You run at ${effort} thinking effort; low keeps simple work fast. When a task needs careful reasoning, use set_effort before you start it, and go back down afterwards.`,
+      `You run at ${effort} thinking effort. When a task needs careful reasoning, use set_effort before you start it; Masthead resets you to low after each piece of work.`,
     );
   }
 

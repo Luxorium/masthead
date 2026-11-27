@@ -32,9 +32,25 @@
     position: absolute;
     right: 6px;
     bottom: 6px;
+    width: 24px;
+    padding: 0;
+    justify-content: center;
+  }
+  /* On a map card the word floats above the button, so it never covers the card's text. */
+  .stop.map .label {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 4px);
+    padding: 2px 7px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--raised);
+    color: var(--bad);
+    box-shadow: var(--shadow);
+    white-space: nowrap;
   }
   .glyph {
-    font-size: 11px;
+    font-size: 14px;
     line-height: 1;
   }
   /* The word appears on hover and keyboard focus, so the square is never a mystery. */

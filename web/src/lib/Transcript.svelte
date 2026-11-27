@@ -153,7 +153,9 @@
     {/if}
 
     {#if agent && !draft && store.convId !== null}
-      {#if agent.status === 'running' && !toolRunning}
+      {#if agent.pausedUntil}
+        <div class="working"><span class="dot queued"></span>{statusWords(agent)}</div>
+      {:else if agent.status === 'running' && !toolRunning}
         <div class="working"><span class="dot running"></span>{agent.activity ?? 'Working…'}</div>
       {:else if agent.status === 'queued'}
         <div class="working"><span class="dot queued"></span>Waiting for a free slot…</div>

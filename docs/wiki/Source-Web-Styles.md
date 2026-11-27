@@ -1,6 +1,6 @@
 # Styles and web build files (app.css, favicon, Vite and Svelte config)
 
-This page covers the global stylesheet `web/src/app.css`, the layout grid in `web/src/App.svelte`, the tab icon and the three config files that build the page. The page shell (`web/index.html`) and the entry script (`web/src/main.ts`) are described in [Web front end](Source-Web-Front-End.md#the-page-shell-indexhtml). `main.ts` imports `app.css` and the highlight.js theme `github-dark`. That theme is dark in both schemes because code blocks always sit on a dark background (`--code-bg`, below). This page describes version 0.1.3.
+This page covers the global stylesheet `web/src/app.css`, the layout grid in `web/src/App.svelte`, the tab icon and the three config files that build the page. The page shell (`web/index.html`) and the entry script (`web/src/main.ts`) are described in [Web front end](Source-Web-Front-End.md#the-page-shell-indexhtml). `main.ts` imports `app.css` and the highlight.js theme `github-dark`. That theme is dark in both schemes because code blocks always sit on a dark background (`--code-bg`, below). This page describes version 0.1.4.
 
 ## `web/src/app.css`
 
@@ -27,6 +27,9 @@ Design tokens are CSS custom properties on `:root`. The light values are the def
 | `--bad` | `#c0322b` | `#ff8a80` | Errors, `.btn.danger`, `.dot.failed`. Most components. |
 | `--user-bubble` | `#e6e9ef` | `#1d222c` | Background of the person's messages. Transcript. |
 | `--code-bg` | `#12151b` | `#07090c` | Code blocks; dark in both schemes. PermissionCard and `.md .code-block`. |
+| `--code-text` | `#e3e7ee` | `#e6e9f0` | Text in code blocks and in PermissionCard's command box. |
+| `--code-faint` | `#7c8494` | `#808899` | The language label of a code block. |
+| `--code-muted` | `#b3bac7` | `#b8bfcc` | The Copy button's text. |
 | `--tier-lead` | `#a8720a` | `#e9b949` | Lead tier colour (see below). |
 | `--tier-opus` | `#6d4bc4` | `#b39cf5` | Opus tier colour. |
 | `--tier-sonnet` | `#2463c9` | `#7fb0ff` | Sonnet tier colour. |
@@ -93,9 +96,9 @@ There are no scrollbar styles; scrollbars follow the browser and the `color-sche
 Code blocks come from `markdown.ts` as `div.code-block` holding an optional `span.code-lang`, a `button.code-copy` ("Copy") and `pre > code.hljs`.
 
 - `.code-block`: `--code-bg`, 9px corners, clips its content. `pre` has 14×16px padding and scrolls sideways.
-- Code text is fixed `#e3e7ee`, 13px. This fixed light colour, the dark `--code-bg` in both schemes and the `github-dark` highlight theme together make code blocks dark in light mode too (not checked in a browser).
-- `.code-lang`: 11px mono label in `#7c8494`, top left. When it is present, `pre` gets 28px top padding so the label does not overlap the code.
-- `.code-copy`: top right, `#b3bac7` text on 8% white. It is invisible until the block is hovered or the button has keyboard focus.
+- Code text is `--code-text`, 13px. The code tokens are light on dark in both schemes (since 0.1.4 they are tokens rather than fixed colours); with the dark `--code-bg` and the `github-dark` highlight theme they keep code blocks dark in light mode too (not checked in a browser).
+- `.code-lang`: 11px mono label in `--code-faint`, top left. When it is present, `pre` gets 28px top padding so the label does not overlap the code.
+- `.code-copy`: top right, `--code-muted` text on 8% white. It is invisible until the block is hovered or the button has keyboard focus.
 
 ## Layout regions (`web/src/App.svelte`)
 

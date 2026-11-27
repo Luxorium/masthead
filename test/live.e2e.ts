@@ -1,8 +1,8 @@
 // A live end-to-end run against the real Claude Code on this machine. It spends real usage, so it is
 // not part of `npm test`; run it with `npm run test:live`. Every tier uses Haiku to keep it cheap.
 // It works in a fresh folder under the system temp directory and leaves that folder behind.
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentInfo, Item, ServerMsg } from '../shared/protocol.ts';
 import { App, type Client } from '../server/app.ts';
@@ -23,6 +23,8 @@ const items = new Map<string, Item[]>();
 const t0 = Date.now();
 const log = (...a: unknown[]) => console.log(((Date.now() - t0) / 1000).toFixed(1).padStart(6), ...a);
 let convId = '';
+/** Every effort level each agent was seen at, since an agent goes back to low when it finishes. */
+const effortsSeen = new Map<string, Set<string>>();
 const waiters: Array<() => void> = [];
 const client: Client = {
   send(sent: ServerMsg) {
@@ -32,6 +34,9 @@ const client: Client = {
     else if (m.t === 'agent') {
       const before = agents.get(m.agent.id);
       agents.set(m.agent.id, m.agent);
+      const seen = effortsSeen.get(m.agent.name) ?? new Set<string>();
+      seen.add(m.agent.effort);
+      effortsSeen.set(m.agent.name, seen);
       if (!before || before.status !== m.agent.status || before.effort !== m.agent.effort) {
         log(`[${m.agent.name}] ${m.agent.tier} ${m.agent.status} effort=${m.agent.effort}${m.agent.error ? ' error=' + m.agent.error : ''}`);
       }
@@ -108,7 +113,8 @@ try {
   await until('second round settles', settled);
   const mid = byName('bravo');
   check('mid was resumed and finished again', mid?.status === 'done' && (mid?.usage.turns ?? 0) >= 2);
-  check('mid effort was raised by its parent', mid?.effort === 'medium');
+  // With automatic effort, a finished agent goes back to low, so look for the raise while it ran.
+  check('mid effort was raised by its parent', effortsSeen.get('bravo')?.has('medium') === true);
   check('the lead reported back', leadText().length > before);
 
   log('--- 3. limits: with one slot, two agents run one after the other; stopping works');
@@ -155,6 +161,39 @@ try {
   const askReports = (items.get(lead()!.id) ?? []).filter((i) => i.kind === 'inbound' && i.via === 'report' && i.from === byTitle('asker')!.name);
   check('the asker was shown as waiting for the lead', sawWaiting);
   check('its question was not taken as a report', askReports.length === 1 && /COLOUR=\s*teal/i.test((askReports[0] as { text: string }).text));
+  log('--- 6. settings change, then a resume whose session file is gone: one fresh session, message answered');
+  const convFile = join(dir, 'conversations', convId, 'conversation.json');
+  let leadSession: string | null = null;
+  await until('lead session saved', () => {
+    try {
+      leadSession = (JSON.parse(readFileSync(convFile, 'utf8')) as { agents: Array<{ info: AgentInfo; sessionId: string | null }> }).agents.find((a) => a.info.tier === 'lead')?.sessionId ?? null;
+    } catch {
+      leadSession = null;
+    }
+    return leadSession !== null;
+  }, 30_000);
+  const sessionFile = join(homedir(), '.claude', 'projects', realpathSync(dir).replace(/[^a-zA-Z0-9]/g, '-'), `${leadSession}.jsonl`);
+  check('the lead session file is where Claude Code keeps it', existsSync(sessionFile));
+  // Switching automatic effort off makes the lead's process restart (same session) before its next turn.
+  settings.autoEffort = false;
+  app.handle(client, { t: 'settings', settings });
+  unlinkSync(sessionFile);
+  const freshNotices = () => (items.get(lead()!.id) ?? []).filter((i) => i.kind === 'notice' && /starts fresh/.test(i.text)).length;
+  app.handle(client, { t: 'send', convId, text: 'Sixth wiring test. Reply with exactly FRESH-OK.' });
+  await until('lead starts', () => lead()?.status !== 'idle', 30_000);
+  await until('sixth round settles', settled);
+  check('the lost session was noticed once', freshNotices() === 1);
+  check('the message was answered by the fresh session', /FRESH-OK/.test(leadText()));
+
+  log('--- 7. switching automatic effort back restarts the process on the same session');
+  settings.autoEffort = true;
+  app.handle(client, { t: 'settings', settings });
+  app.handle(client, { t: 'send', convId, text: 'Seventh wiring test. Reply with exactly SAME- followed by the word you replied with to my previous message.' });
+  await until('lead starts', () => lead()?.status !== 'idle', 30_000);
+  await until('seventh round settles', settled);
+  check('the restarted process kept the session', /SAME-\s*FRESH-OK/.test(leadText()));
+  check('no second fresh start', freshNotices() === 1);
+
   log('usage\n  ' + all().map((a) => `${a.name}: ctx ${a.usage.context} out ${a.usage.output} $${a.usage.costUsd.toFixed(4)} turns ${a.usage.turns}`).join('\n  '));
   check('usage was recorded', all().filter((a) => a.usage.turns > 0).every((a) => a.usage.context > 0 && a.usage.output > 0));
 } catch (e) {

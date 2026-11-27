@@ -70,6 +70,8 @@ export class Scheduler {
   acquire(tier: Tier, id: string, owner: string): Promise<void> {
     const active = this.activeOf(tier);
     if (active.has(id)) return Promise.resolve();
+    // A tier that is off would keep the request queued for ever (a paused agent resuming, say).
+    if (this.cap(tier) === 0) return Promise.reject(new TierOff());
     if (active.size < this.cap(tier) && this.queueOf(tier).length === 0) {
       active.set(id, owner);
       return Promise.resolve();

@@ -74,6 +74,10 @@
     return store.agentList.filter((a) => a.tier === tier && (a.status === 'running' || a.status === 'waiting')).length;
   }
 
+  function queued(tier: Tier): number {
+    return store.agentList.filter((a) => a.tier === tier && a.status === 'queued').length;
+  }
+
   const lead = $derived(store.lead);
   const pct = $derived(lead && lead.usage.contextMax > 0 ? Math.min(100, Math.round((lead.usage.context / lead.usage.contextMax) * 100)) : 0);
   const workers = $derived(store.agentList.filter((a) => a.tier !== 'lead'));
@@ -124,7 +128,7 @@
             <span class="under">{under(tier, s)}</span>
           </div>
           <div class="line">
-            <span>At once{#if running(tier) > 0}<span class="now"> · {running(tier)} now</span>{/if}</span>
+            <span>At once{#if running(tier) > 0}<span class="now"> · {running(tier)} now</span>{/if}{#if queued(tier) > 0}<span class="queued"> · {queued(tier)} queued</span>{/if}</span>
             <span class="stepper">
               <button onclick={() => step(tier, -1)} disabled={s.tiers[tier].max <= 0} aria-label="Fewer {TIER_LABEL[tier]} agents">−</button>
               <output aria-live="polite">{s.tiers[tier].max === 0 ? 'Off' : s.tiers[tier].max}</output>
@@ -274,6 +278,9 @@
     gap: 8px;
     min-height: 30px;
     font-size: 13.5px;
+  }
+  .queued {
+    color: var(--muted);
   }
   .now {
     color: var(--accent);

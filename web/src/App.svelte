@@ -18,6 +18,8 @@
   onMount(() => {
     store.connect();
     const onHash = () => {
+      // The sign-in address pasted into this tab changes only the fragment: take the key from it.
+      store.keyFromAddress();
       const m = /^#\/c\/([A-Za-z0-9_-]+)$/.exec(location.hash);
       if (m && m[1] !== store.convId && store.conversations.some((c) => c.id === m[1])) store.open(m[1]!);
     };
@@ -55,7 +57,7 @@
       <h1>Masthead</h1>
       <p>Open Masthead with the <code>masthead</code> command (or its launcher entry) to sign this browser in.</p>
       {#if store.signedOut === 'refused'}
-        <p class="muted small">Masthead refused this browser's key, or is not running. A key from an earlier start no longer works.</p>
+        <p class="muted small">Masthead did not accept this browser's key. Open it with the <code>masthead</code> command to sign in again.</p>
         <button class="btn primary" onclick={() => store.retryConnect()}>Try again</button>
       {/if}
     </div>
@@ -116,7 +118,7 @@
       <div class="banner" class:bad={store.rateLimit.status === 'rejected'}>
         {store.rateLimit.status === 'rejected' ? 'Your Claude usage limit has been reached.' : 'You are close to your Claude usage limit.'}
         {#if store.rateLimit.resetsAt}Resets {new Date(store.rateLimit.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}.{/if}
-        <button class="btn ghost" onclick={() => (store.rateLimit = null)}>Dismiss</button>
+        <button class="btn ghost" onclick={() => store.dismissLimit()}>Dismiss</button>
       </div>
     {/if}
 

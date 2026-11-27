@@ -177,9 +177,9 @@ It exits 1 on any failure or time-out and leaves its temp folder behind; the pat
 
 ## Browser test (`test/ui.e2e.mjs`)
 
-It refuses to run against port 7717, the installed app (message, exit code 2). It needs the test server's secret: from `?key=` in the URL, else `MASTHEAD_KEY`, else `$XDG_DATA_HOME/masthead/secret`. Without one it stops with exit code 2. It opens the page with `?key=`, as `masthead` does. With no arguments it uses `http://127.0.0.1:7799` and the current folder for screenshots.
+It refuses to run against port 7717, the installed app (message, exit code 2). It needs the test server's secret: from `?key=` in the URL, else `MASTHEAD_KEY`, else `$XDG_DATA_HOME/masthead/secret`. Without one it stops with exit code 2. It opens the main page with `?key=` (still accepted); one check opens it with `#key=`, as `masthead` does since 0.1.4. With no arguments it uses `http://127.0.0.1:7799` and the current folder for screenshots.
 
-It drives the real page with **playwright-core**, a library that controls a browser from code, using Chromium (`CHROMIUM` variable, default `/usr/bin/chromium`, run with `--no-sandbox`) in a 1440×900 window. It uses a dark colour scheme unless `SCHEME=light`. It saves numbered screenshots to the folder given, and `failure-<scheme>.png` if it fails. It sends real messages, so the server must use cheap models and have its own `XDG_CONFIG_HOME` and `XDG_DATA_HOME` (`AGENTS.md`). Not run for this page (it spends usage).
+It drives the real page with **playwright-core**, a library that controls a browser from code, using Chromium (`CHROMIUM` variable, default `/usr/bin/chromium`, run with `--no-sandbox`) in a 1440×900 window. It uses a dark colour scheme unless `SCHEME=light`. It saves numbered screenshots to the folder given, and `failure-<scheme>.png` if it fails. It sends real messages, so the server must use cheap models and have its own `XDG_CONFIG_HOME` and `XDG_DATA_HOME` (`AGENTS.md`). Last run for 0.1.4 against a test server on port 7798: all 33 checks passed in about 26 seconds.
 
 ### Running it
 
@@ -202,47 +202,56 @@ XDG_CONFIG_HOME=$T/config XDG_DATA_HOME=$T/data node dist/server/main.js stop --
 
 `stop` with the same `XDG_DATA_HOME` reads the same secret and shuts the server down over HTTP. It does not touch the systemd unit, because the port is not 7717 (`server/main.ts`, case `stop`; read from the code, not run). Never use port 7717 or the real `~/.config/masthead` and `~/.local/share/masthead`.
 
-### The 26 checks
+### The 33 checks
 
-Before any agent runs (10 checks):
+Before any agent runs (15 checks):
 
 | Check | What it proves |
 |---|---|
 | no key shows the sign-in message | In a fresh browser context, no key shows "…to sign this browser in" and no Try again button. |
 | a wrong key shows the sign-in message with Try again | `?key=not-the-key` ends with Try again after the refused attempts. |
+| Try again connects once the right key is stored | The right key is written to that context's `localStorage` (as another signed-in tab would), and Try again then connects. |
+| a key in the fragment works and leaves the address bar | In a fresh context, `#key=<secret>` signs in and no `key=` is left in the URL. |
 | the right key works and leaves the address bar | The page loads and `key` is removed from the URL. |
+| a wrong key in a link does not sign the browser out | A fresh load of `#key=not-the-key` in the signed-in browser: the candidate is refused, the stored key is used, the page stays signed in and the address is clean. |
+| a wrong key pasted into the open tab is taken and refused, and it stays signed in | Setting `location.hash` to a wrong `#key=` (as pasting the address would) is handled by `hashchange`, refused, and the tab stays signed in. |
 | new conversation screen renders | The right panel's first heading is "Team". |
 | the stepper changes the limit | "More Opus 5.5 agents" changes the value; "Fewer" brings it back. |
 | the usage section renders | "No usage reported yet" or at least one limit row. |
 | the settings popup opens from the gear | Enter on the focused gear opens the dialog. |
 | Escape closes it and focus returns to the gear | Keyboard handling and focus return. |
 | "Fold agent reports" persists across a reload | The setting is saved on the server. A click outside then closes the popup (not a separate check). |
+| "Longest run for a sub-agent" persists across a reload | 30 minutes chosen in the popup is still chosen after a reload. |
 | a refused message is given back to the composer | A 400,001-character message gets the "too long" toast and the text comes back. |
 
-Then one three-branch task is sent: "shell job" (Opus) starts "helper job" (Sonnet) running `sleep 6; echo ready`; "list job" saves a list with the Write tool; "busy one" runs `sleep 8` twelve times in the foreground (16 checks):
+Then one three-branch task is sent: "shell job" (Opus) starts "helper job" (Sonnet) running `sleep 6; echo ready`; "list job" saves a list with the Write tool; "busy one" runs `sleep 8` twelve times in the foreground (18 checks):
 
 | Check | What it proves |
 |---|---|
 | an approval card names the agent | The first card names the asker, also in its accessible label. |
 | the card takes focus | Nobody is typing, so the card gets focus. |
 | Allow answers the card | The card goes away. After this, Allow is clicked automatically every half second. |
-| the map shows three levels | At least four cards on the Team map. |
+| the map shows three levels | The "helper job" card sits three levels deep in the map's tree (lead > shell job > helper job). |
 | agents are named Alpha, Bravo, Charlie, Delta | Display names. |
-| hovering an agent previews its chat | The preview shows the task. |
+| hovering an agent previews its chat | The preview shows the task and real content (a chat line or "Nothing yet."), not "Loading…". |
 | the stop button says "Stop" on hover | The ■ on "busy one"'s card shows its label. |
 | the map ■ stops the agent | The card reads Stopped. |
 | a sub-agent transcript opens with its task | Opening "list job" shows breadcrumbs and its task. |
+| the composer names the sub-agent it is pointed at | The line above the box reads "To <Name> · …" and the placeholder says "not Alpha". |
+| Back returns the composer to the lead | "Back to Alpha" beside the composer removes that line and the breadcrumbs. |
 | reports reached the lead | At least three reports, then a Markdown table after the last one. |
 | a report is folded to one line | With the setting on, no body is shown. |
 | a folded report opens on click | The body appears. |
 | the final answer has a table | Markdown table rendering. |
 | the conversation survives a reload | It comes back from disk. |
 | the sidebar lists it | The left sidebar has a row. |
-| no page errors | No `pageerror` or console error the whole run. |
+| no page errors | No `pageerror` or console error the whole run, except the browser's own log line for each socket the sign-in checks have refused on purpose ("WebSocket connection … 403"). |
 
 ### Not covered by the browser test
 
-- Try again actually reconnecting, and a dropped socket giving a message back.
+- A dropped socket giving a message back.
+- A server restart while a tab is open (the page should keep reconnecting rather than show the sign-in page); the test does not control the server.
+- The "Paused until … · usage limit" words (`pausedUntil`), which need a real usage limit.
 - Images in general, including the page's 5 MB per-image and 30 MB total caps (`web/src/lib/Composer.svelte`).
 - The composer hint for an agent waiting for an answer (an agent would have to ask on cue).
 - Light scheme, unless run again with `SCHEME=light`.

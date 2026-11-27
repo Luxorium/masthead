@@ -9,7 +9,7 @@
   - `sessionId: string | null`: the Claude Code session to resume;
   - `owesReport: boolean`;
   - optional `seed: string`: the task of an agent that never got to start, so the task is not lost if the agent is woken later. Written by `Conversation.toStored()` from `Agent.pendingSeed`.
-- `StoredConversation`: `meta: ConversationMeta` and `agents: StoredAgent[]`. Produced by `Conversation.toStored()` and read back by `Conversation.restore()`.
+- `StoredConversation`: `meta: ConversationMeta`, `agents: StoredAgent[]`, and since 0.1.4 the optional `stoppedByPerson?: string[]` (agents the person stopped) and `agentMessages?: number` (messages between agents so far). Old files without them still load. Produced by `Conversation.toStored()` and read back by `Conversation.restore()`.
 
 ## Id safety
 

@@ -4,7 +4,7 @@ import { defaultSettings } from '../server/config.ts';
 import { Conversation, type ConversationHost } from '../server/conversation.ts';
 import type { Agent } from '../server/agent.ts';
 import { messageEnvelope, reportEnvelope, systemAppend, withArticle } from '../server/prompts.ts';
-import { Scheduler } from '../server/scheduler.ts';
+import { Scheduler, TierOff } from '../server/scheduler.ts';
 import type { Item, Tier } from '../shared/protocol.ts';
 
 // These tests run Conversation without Claude Code: claudePath() returns null, so an agent that gets a
@@ -535,3 +535,387 @@ test('settingsChanged: every agent gets the new settings', () => {
   conv.settingsChanged();
   assert.deepEqual(got, [settings]);
 });
+
+// ---- 0.1.4: limits survive a restart ----
+
+test('restart: the person\'s stop marks and the message counter are saved and restored', () => {
+  const { conv, host, block, byName } = setup();
+  let saves = 0;
+  const counting: ConversationHost = { ...host, metaChanged: () => void saves++ };
+  block('opus');
+  block('sonnet');
+  const c = Conversation.restore(counting, JSON.parse(JSON.stringify(conv.toStored())));
+  c.spawn(c.lead, 'A', 'task', undefined);
+  const bravo = [...c.agents.values()].find((a) => a.name === 'bravo')!;
+  c.spawn(bravo, 'S', 'task', undefined);
+  saves = 0;
+  c.stopAgent(bravo.id, 'Stopped by the person.');
+  assert.ok(saves > 0, 'a stop mark asks for a save');
+  saves = 0;
+  c.message(c.lead, 'lead', 'x'); // refused (that is you): not counted
+  c.message(c.lead, 'bravo', 'x'); // refused: stopped by the person
+  assert.equal(saves, 0);
+
+  const stored = JSON.parse(JSON.stringify(c.toStored()));
+  assert.equal(stored.stoppedByPerson.length, 2, 'bravo and its child');
+  assert.equal(typeof stored.agentMessages, 'number');
+  const again = Conversation.restore(host, stored);
+  assert.match(again.message(again.lead, 'bravo', 'wake'), /^Error: the person stopped "bravo"/);
+  assert.match(again.message(again.lead, 'charlie', 'wake'), /^Error: the person stopped "charlie"/);
+});
+
+test('restart: the message cap carries on, and effort requests are refused at it', () => {
+  const { conv, host, block } = setup();
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const stored = JSON.parse(JSON.stringify(conv.toStored()));
+  stored.agentMessages = 999;
+  const again = Conversation.restore(host, stored);
+  const bravo = [...again.agents.values()].find((a) => a.name === 'bravo')!;
+  assert.match(again.message(bravo, 'lead', 'one more'), /^Delivered/);
+  assert.match(again.message(bravo, 'lead', 'too many'), /limit of messages/);
+  assert.match(again.setOwnEffort(bravo, 'medium', 'why'), /^Error: .*limit of messages/);
+  assert.equal(bravo.info.effort, 'low');
+  assert.equal(JSON.parse(JSON.stringify(again.toStored())).agentMessages, 1000);
+});
+
+test('restart: files from before 0.1.4 (no marks, no counter) still load', () => {
+  const { conv, host } = setup();
+  const stored = JSON.parse(JSON.stringify(conv.toStored()));
+  delete stored.stoppedByPerson;
+  delete stored.agentMessages;
+  const again = Conversation.restore(host, stored);
+  assert.deepEqual(again.toStored().stoppedByPerson, []);
+  assert.equal(again.toStored().agentMessages, 0);
+  stored.stoppedByPerson = 'not a list';
+  stored.agentMessages = 'many';
+  assert.equal(Conversation.restore(host, stored).toStored().agentMessages, 0);
+});
+
+// ---- 0.1.4: effort back to low, usage-limit pauses, run-time limit ----
+
+function withClock(host: ConversationHost) {
+  const c = { t: Date.now(), fn: null as null | (() => void), starts: 0 };
+  host.clock = {
+    now: () => c.t,
+    every: (_ms, fn) => {
+      c.fn = fn;
+      c.starts++;
+      return () => void (c.fn = null);
+    },
+  };
+  const minutes = (m: number) => void (c.t += m * 60_000);
+  const tickNow = () => c.fn?.();
+  return { c, minutes, tickNow };
+}
+
+type Outcome = Parameters<Conversation['turnEnded']>[1];
+function limitTurn(conv: Conversation, agent: Agent, resetsAt?: number) {
+  agent.setStatus('running');
+  conv.turnEnded(agent, { text: '', error: 'usage limit', interrupted: false, usageLimit: { resetsAt } } as Outcome);
+}
+
+test('effort: back to low when a piece of work ends; a level a parent sets for a finished child is kept', async () => {
+  const { conv, settings, block, byName } = setup();
+  conv.lead.setEffort('high');
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', 'high');
+  const bravo = byName('bravo');
+  endTurn(conv, conv.lead);
+  assert.equal(conv.lead.status, 'waiting');
+  assert.equal(conv.lead.info.effort, 'high', 'still working through its agents');
+  endTurn(conv, bravo); // bravo finishes its piece of work
+  assert.equal(bravo.status, 'done');
+  assert.equal(bravo.info.effort, 'low');
+  await tick();
+  endTurn(conv, conv.lead);
+  assert.equal(conv.lead.status, 'idle');
+  assert.equal(conv.lead.info.effort, 'low');
+
+  // The parent raises a finished child, then gives it new work: the raise holds.
+  conv.setAgentEffort(conv.lead, 'bravo', 'high');
+  conv.message(conv.lead, 'bravo', 'new work');
+  assert.equal(bravo.info.effort, 'high');
+  settings.autoEffort = false;
+  conv.lead.info.effort = 'high';
+  endTurn(conv, conv.lead);
+  assert.equal(conv.lead.info.effort, 'high', 'without automatic effort nothing is reset');
+  assert.match(systemAppend({ tier: 'opus', name: 'b', parentName: 'a', settings: defaultSettings() }), /resets you to low after each piece of work/);
+});
+
+test('usage limit: a sub-agent pauses instead of failing, keeps its children, and resumes when the limit resets', () => {
+  const { conv, host, block, byName, items, reports } = setup();
+  const { c, minutes, tickNow } = withClock(host);
+  block('opus');
+  block('sonnet');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  conv.spawn(bravo, 'S', 'task', undefined);
+  const resetsAt = c.t + 20 * 60_000;
+  limitTurn(conv, bravo, resetsAt);
+  assert.equal(bravo.status, 'waiting');
+  assert.equal(bravo.info.pausedUntil, resetsAt);
+  assert.equal(byName('charlie').status, 'queued', 'its children keep going');
+  assert.equal(reports('alpha', 'bravo').length, 0, 'no report');
+  assert.equal(notices(items, 'bravo', /Paused at the usage limit until \d\d:\d\d/).length, 1);
+  assert.match(conv.list(conv.lead), /- bravo: Opus 5\.5, paused until \d\d:\d\d \(usage limit\)/);
+  minutes(10);
+  tickNow();
+  assert.equal(bravo.info.pausedUntil, resetsAt, 'not yet');
+  minutes(11);
+  tickNow();
+  assert.equal(bravo.info.pausedUntil, undefined);
+  assert.equal(notices(items, 'bravo', /usage limit has reset/).length, 1);
+  assert.equal(c.fn, null, 'the timer stops when nothing needs watching');
+});
+
+test('usage limit: unknown reset time pauses 15 minutes; a fourth hit in a row fails as before', () => {
+  const { conv, host, block, byName, reports } = setup();
+  const { c, minutes, tickNow } = withClock(host);
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  for (let i = 0; i < 3; i++) {
+    limitTurn(conv, bravo);
+    assert.equal(bravo.info.pausedUntil, c.t + 15 * 60_000);
+    minutes(16);
+    tickNow();
+  }
+  limitTurn(conv, bravo);
+  assert.equal(bravo.status, 'failed');
+  assert.equal(reports('alpha', 'bravo').length, 1);
+});
+
+test('usage limit: a turn that gets through resets the count; the lead pauses too; stop everything ends the pause', async () => {
+  const { conv, host, block, byName, items } = setup();
+  const { minutes, tickNow } = withClock(host);
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  limitTurn(conv, bravo);
+  limitTurn(conv, bravo);
+  conv.message(conv.lead, 'bravo', 'try again'); // delivered at once
+  endTurn(conv, bravo); // got through: ends the pause, and bravo finishes
+  assert.equal(bravo.status, 'done');
+  assert.equal(bravo.info.pausedUntil, undefined);
+  await tick(); // its report reaches the lead, which cannot start here
+
+  limitTurn(conv, conv.lead);
+  assert.equal(conv.lead.status, 'waiting');
+  assert.notEqual(conv.lead.info.pausedUntil, undefined);
+  conv.stopAll();
+  assert.equal(conv.lead.info.pausedUntil, undefined);
+  assert.equal(conv.lead.status, 'idle');
+  minutes(20);
+  tickNow();
+  assert.equal(notices(items, 'alpha', /usage limit has reset/).length, 0);
+});
+
+test('usage limit: a process lost at the limit pauses too; restore and shutdown clear pauses', () => {
+  const { conv, host, block, byName } = setup();
+  const { c } = withClock(host);
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  conv.processLost(bravo, 'limit', { resetsAt: c.t + 60_000 });
+  assert.equal(bravo.status, 'waiting');
+  assert.notEqual(bravo.info.pausedUntil, undefined);
+  const again = Conversation.restore(host, JSON.parse(JSON.stringify(conv.toStored())));
+  const b2 = [...again.agents.values()].find((a) => a.name === 'bravo')!;
+  assert.equal(b2.status, 'stopped');
+  assert.equal(b2.info.pausedUntil, undefined);
+  assert.notEqual(c.fn, null);
+  conv.shutdown();
+  assert.equal(c.fn, null, 'shutdown clears the timer');
+});
+
+test('run-time limit: only time spent running counts; past it the agent is stopped with a report', async () => {
+  const { conv, host, settings, block, byName, reports } = setup();
+  const { c, minutes, tickNow } = withClock(host);
+  settings.maxRunMinutes = 10;
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  minutes(30); // queued: does not count
+  tickNow();
+  assert.equal(bravo.live, true);
+  bravo.setStatus('running');
+  assert.notEqual(c.fn, null, 'the timer runs while a limit applies');
+  minutes(5);
+  limitTurn(conv, bravo, c.t + 20 * 60_000); // paused 20 minutes: does not count
+  minutes(21);
+  tickNow();
+  assert.equal(bravo.live, true);
+  bravo.setStatus('running');
+  // An approval card open for an hour does not count either.
+  let answer: (r: { behavior: 'allow'; updatedInput: Record<string, unknown> }) => void = () => {};
+  host.askPermission = () => new Promise((r) => (answer = r));
+  const card = conv.askPermission(bravo, 'Bash', {}, {} as never);
+  minutes(60);
+  tickNow();
+  assert.equal(bravo.live, true);
+  answer({ behavior: 'allow', updatedInput: {} });
+  await card;
+  await tick();
+  bravo.setStatus('running'); // by hand: the resume above left a start pending, which shows 'queued' here
+  minutes(4);
+  tickNow();
+  assert.equal(bravo.live, true, '9 minutes counted');
+  minutes(2);
+  tickNow();
+  assert.equal(bravo.status, 'stopped');
+  const r = reports('alpha', 'bravo');
+  assert.equal(r.length, 1);
+  assert.match((r[0]!.item as { text: string }).text, /Stopped after 10 minutes: the run-time limit set by the person\./);
+  conv.lead.setStatus('running');
+  minutes(60);
+  tickNow();
+  assert.equal(conv.lead.status, 'running', 'never the lead');
+});
+
+test('run-time limit: setting one applies to agents already running at the next tick', () => {
+  const { conv, host, settings, block, byName } = setup();
+  const { c, minutes, tickNow } = withClock(host);
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  assert.equal(c.fn, null, 'no limit, no timer');
+  byName('bravo').setStatus('running');
+  minutes(30);
+  settings.maxRunMinutes = 20;
+  conv.settingsChanged();
+  tickNow();
+  assert.equal(byName('bravo').status, 'stopped');
+});
+
+// ---- 0.1.4 review fixes ----
+
+test('usage limit: further limited turns in one window are one pause, even after init set it running; resume ignores status', async () => {
+  const { conv: first, host, items } = setup();
+  first.spawn(first.lead, 'A', 'task', undefined);
+  await tick();
+  // Restored, so it has no start pending: like a real agent whose process was closed at the limit.
+  const conv = Conversation.restore(host, JSON.parse(JSON.stringify(first.toStored())));
+  const { c, minutes, tickNow } = withClock(host);
+  const bravo = [...conv.agents.values()].find((a) => a.name === 'bravo')!;
+  bravo.deliver = () => {};
+  limitTurn(conv, bravo, c.t + 10 * 60_000);
+  for (let i = 0; i < 4; i++) limitTurn(conv, bravo, c.t + 10 * 60_000); // limitTurn sets 'running' first, as init would
+  assert.equal(bravo.status, 'waiting');
+  assert.equal(notices(items, 'bravo', /Paused at the usage limit/).length, 1, 'one pause');
+  bravo.setStatus('running'); // init arriving late
+  minutes(11);
+  tickNow();
+  assert.equal(bravo.info.pausedUntil, undefined);
+  assert.equal(notices(items, 'bravo', /usage limit has reset/).length, 1, 'resumed although it said running');
+});
+
+test('usage limit: agents\' messages to a paused agent are held and sent in order on resume; the person\'s go at once and count', () => {
+  const { conv, host, block, byName, items, inbound } = setup();
+  const { c, minutes, tickNow } = withClock(host);
+  block('opus');
+  block('sonnet');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  for (const t of ['S1', 'S2', 'S3']) conv.spawn(bravo, t, 'task', undefined);
+  const sent: unknown[] = [];
+  bravo.deliver = (m) => void sent.push(m);
+  limitTurn(conv, bravo, c.t + 10 * 60_000);
+  for (const n of ['charlie', 'delta', 'echo']) endTurn(conv, byName(n), { text: `report from ${n}` });
+  assert.equal(inbound('bravo', 'report').length, 3, 'the transcript shows them at once');
+  assert.equal(sent.length, 0, 'but nothing wakes bravo into the limit');
+  assert.equal(bravo.live, true);
+  conv.userSend('from the person', undefined, bravo.id);
+  assert.deepEqual(sent, ['from the person'], 'the person goes through at once');
+  limitTurn(conv, bravo, c.t + 10 * 60_000);
+  assert.equal(notices(items, 'bravo', /Paused at the usage limit/).length, 2, 'and that counts as a pause');
+  minutes(11);
+  tickNow();
+  assert.equal(sent.length, 5);
+  assert.match(String(sent[1]), /from="charlie"[\s\S]*report from charlie/);
+  assert.match(String(sent[3]), /from="echo"/);
+  assert.equal(sent[4], 'The usage limit has reset. Carry on from where you stopped.');
+});
+
+test('background: a sub-agent waiting only on background work is finished after 10 minutes; the lead is not', async () => {
+  const { conv, host, reports } = setup();
+  conv.spawn(conv.lead, 'Server', 'task', undefined);
+  await tick();
+  const again = Conversation.restore(host, JSON.parse(JSON.stringify(conv.toStored())));
+  const { minutes, tickNow } = withClock(host);
+  const bravo = [...again.agents.values()].find((a) => a.name === 'bravo')!;
+  Object.defineProperty(bravo, 'hasBackgroundWork', { get: () => true, configurable: true });
+  bravo.owesReport = true;
+  bravo.lastText = 'The dev server is up.';
+  endTurn(again, bravo, { text: 'The dev server is up.' });
+  assert.equal(bravo.status, 'waiting');
+  minutes(4);
+  assert.match(again.list(again.lead), /- bravo: Opus 5\.5, waiting on a background command for 4m/);
+  minutes(6);
+  tickNow();
+  assert.equal(bravo.status, 'done');
+  const r = reports('alpha', 'bravo');
+  assert.match((r[r.length - 1]!.item as { text: string }).text, /The dev server is up\.\n\nA background command was still running when Masthead closed this agent\./);
+
+  Object.defineProperty(again.lead, 'hasBackgroundWork', { get: () => true, configurable: true });
+  endTurn(again, again.lead);
+  minutes(30);
+  tickNow();
+  assert.equal(again.lead.status, 'waiting', 'the lead is exempt');
+});
+
+test('scheduler: a tier at 0 refuses a new request at once', async () => {
+  const sched = new Scheduler(() => 0);
+  await assert.rejects(sched.acquire('opus', 'x', 'o'), TierOff);
+  await sched.acquire('lead', 'l', 'o');
+});
+
+test('stop everything marks only agents that were working; a finished helper stays reusable', async () => {
+  const { conv, block } = setup();
+  conv.spawn(conv.lead, 'Done one', 'task', undefined);
+  await tick(); // bravo fails at once: finished
+  block('opus');
+  conv.spawn(conv.lead, 'Working', 'task', undefined);
+  conv.stopAll();
+  assert.match(conv.message(conv.lead, 'charlie', 'go on'), /^Error: the person stopped "charlie"/);
+  assert.match(conv.message(conv.lead, 'bravo', 'new job'), /^Delivered to "bravo"/);
+});
+
+test('stopping drops what is held for an agent, in Conversation and in Agent', () => {
+  const { conv, host, block, byName } = setup();
+  withClock(host);
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  const dropped: string[] = [];
+  (bravo as unknown as { dropHeld: () => void }).dropHeld = () => void dropped.push('bravo');
+  (conv.lead as unknown as { dropHeld: () => void }).dropHeld = () => void dropped.push('alpha');
+  conv.stopAll();
+  assert.deepEqual([...new Set(dropped)].sort(), ['alpha', 'bravo'], 'Agent.end() may drop them again; that is fine');
+});
+
+test('usage limit: no "carry on" for an agent already in a turn; the note says when background commands were stopped', () => {
+  const { conv, host, block, byName } = setup();
+  const { c, minutes, tickNow } = withClock(host);
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  conv.spawn(conv.lead, 'B', 'task', undefined);
+  const bravo = byName('bravo');
+  const charlie = byName('charlie');
+  const sent: Record<string, unknown[]> = { bravo: [], charlie: [] };
+  bravo.deliver = (m) => void sent.bravo!.push(m);
+  charlie.deliver = (m) => void sent.charlie!.push(m);
+  limitTurn(conv, bravo, c.t + 10 * 60_000);
+  agentLimitTurn(conv, charlie, { resetsAt: c.t + 10 * 60_000, backgroundStopped: true });
+  conv.userSend('go on', undefined, bravo.id);
+  bravo.setStatus('running'); // its turn is under way (busy: a start is pending in this fake setup)
+  minutes(11);
+  tickNow();
+  assert.equal(bravo.info.pausedUntil, undefined);
+  assert.deepEqual(sent.bravo, ['go on'], 'no extra turn for a note');
+  assert.deepEqual(sent.charlie, ['The usage limit has reset. Carry on from where you stopped. Background commands you had running were stopped.']);
+});
+
+function agentLimitTurn(conv: Conversation, agent: Agent, usageLimit: { resetsAt?: number; backgroundStopped?: boolean }) {
+  agent.setStatus('running');
+  conv.turnEnded(agent, { text: '', error: 'usage limit', interrupted: false, usageLimit } as Outcome);
+}

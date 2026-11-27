@@ -9,7 +9,7 @@
 | `DEFAULT_PORT` | `7717` |
 | `HOME` | the home folder (`os.homedir()`) |
 | `CONFIG_DIR` | `$XDG_CONFIG_HOME/masthead`, default `~/.config/masthead` |
-| `DATA_DIR` | `$XDG_DATA_HOME/masthead`, default `~/.local/share/masthead` |
+| `DATA_DIR` | `$XDG_DATA_HOME/masthead`, default `~/.local/share/masthead`. `main.ts` also passes it to `signInDir()` ([server/cli.ts](Source-Cli.md#signindirenv-datadir)): sign-in files go in `DATA_DIR/open` when `XDG_RUNTIME_DIR` is not set. |
 | `SETTINGS_FILE` | `CONFIG_DIR/settings.json` |
 | `CONVERSATIONS_DIR` | `DATA_DIR/conversations` |
 | `SECRET_FILE` | `DATA_DIR/secret`, the local secret (see `loadSecret()`) |

@@ -1,6 +1,6 @@
 # Installing (scripts and packaging)
 
-Files: `scripts/install.sh`, `scripts/uninstall.sh`, `packaging/masthead.desktop` and `packaging/masthead.svg`. They install Masthead 0.1.3 for the current user. Nothing needs root. Running `install.sh` again updates an existing installation. Everything on this page is read from the scripts, not run.
+Files: `scripts/install.sh`, `scripts/uninstall.sh`, `packaging/masthead.desktop` and `packaging/masthead.svg`. They install Masthead 0.1.4 for the current user. Nothing needs root. Running `install.sh` again updates an existing installation. Everything on this page is read from the scripts, not run.
 
 ## Where things go
 
@@ -15,6 +15,8 @@ Files: `scripts/install.sh`, `scripts/uninstall.sh`, `packaging/masthead.desktop
 Because the unit, desktop entry and icon follow `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, run `install.sh` from a shell where those are either unset or set to the folders you really use. A shell left with a test server's temporary XDG folders would install the unit there and bake those folders into it (see step 6).
 
 ## What `install.sh` does
+
+`install.sh` sources `scripts/path.sh` from the project folder, which defines `clean_path` (see step 9).
 
 Usage: `scripts/install.sh [--force]`. `--force` restarts even while agents are working. `-h` or `--help` prints the usage lines from the script's header and exits. Any other option is refused with exit code 2. The script runs with `set -euo pipefail`, so any failed command stops it.
 
@@ -51,6 +53,7 @@ Step by step:
    - **node_modules reuse.** If `~/.local/lib/masthead/node_modules` exists and the new lock file is byte-for-byte the installed one (`cmp -s`), it copies `node_modules` with hard links (`cp -al`), falling back to a full copy (`cp -a`) if hard links fail.
    - Otherwise it runs `npm ci --omit=dev --omit=optional` in the staged folder. The optional package holds a private copy of Claude Code; Masthead runs the one the person installed, as `AGENTS.md` requires.
    - Then it deletes any leftover `masthead.old`, renames the current `masthead` to `masthead.old` and `masthead.new` to `masthead`. The running server keeps its files until it is restarted.
+   - If renaming `masthead.new` to `masthead` fails, it tries to keep the installed command and service working, then exits 1 with a message saying where each copy is: with no previous installation, `Could not move the new copy into <lib> (there was no previous installation). The new copy is in <lib>.new.`; otherwise, if nothing is at `<lib>` and `masthead.old` moves back, `… The previous installation is back in place; the new copy is in <lib>.new.`; if that fails too (or something is already at `<lib>`), `… nor put the previous one back. The previous copy is in <lib>.old and the new one in <lib>.new.` (Read from the code; not verified by running.)
 7. **Quoting helpers.** Three shell functions make paths with spaces or odd characters safe in the generated files:
 
    | Function | Used for | What it escapes |
@@ -62,7 +65,7 @@ Step by step:
 8. **The `masthead` command.** It writes `~/.local/bin/masthead`, a two-line bash script: `exec <node> --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED <lib>/dist/server/main.js "$@"`. Both paths are quoted with `printf %q`. It is made executable.
 9. **The systemd user unit.** It writes `masthead.service`:
    - `ExecStart=` runs `node … main.js serve`, both paths through `exec_quote`. No port is given, so the service serves 7717 unless a `MASTHEAD_PORT` reaches it some other way.
-   - `PATH`: Node's folder, Claude Code's folder (if found), the `PATH` the installer ran with, then `~/.local/bin`, `/usr/local/bin`, `/usr/bin` and `/bin`. This lets the service find tools in `~/.npm-global`, `~/.bun` and the like.
+   - `PATH`: Node's folder, Claude Code's folder (if found), the `PATH` the installer ran with, then `~/.local/bin`, `/usr/local/bin`, `/usr/bin` and `/bin`. This lets the service find tools in `~/.npm-global`, `~/.bun` and the like. The list is then passed through `clean_path` (`scripts/path.sh`): empty entries and relative ones (anything not starting with `/`, such as `.` or `bin`) are dropped, and so are repeats, keeping the first place each folder appears. A relative entry would be looked up from wherever the service happens to run. `test/launcher.test.ts` runs `clean_path` through bash.
    - `MASTHEAD_CLAUDE` is set to the `claude` found in step 3, whenever one was found.
    - `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are set only if the installer had them set, so the service uses the same settings, conversations and secret as the `masthead` command.
    - All `Environment=` values go through `unit_quote`.
@@ -97,7 +100,7 @@ Like the installer, it finds the unit, desktop entry and icon through `XDG_CONFI
 
 - `After=network-online.target` normally has no effect in a user unit, because user units cannot wait for that system target. It does no harm.
 - The build step in the project folder uses a full `npm ci`, so the source checkout's `node_modules` normally includes the optional package. Only the installed copy omits it.
-- The installed launcher and unit fix the paths to Node and Claude Code, and the whole `PATH`, as found at install time. If any of them changes, run `install.sh` again. Any relative entry in the installer's `PATH` (such as `.`) is copied into the unit as well.
+- The installed launcher and unit fix the paths to Node and Claude Code, and the whole `PATH`, as found at install time. If any of them changes, run `install.sh` again. Relative and empty entries in the installer's `PATH` are left out of the unit.
 - The busy check only asks port 7717. A separate copy on another port is not checked. A copy on 7717 started without the service is not restarted. The service then exits with "Port 7717 is already in use" (`runServer` in `server/main.ts`), and `Restart=on-failure` retries it every 2 seconds until the old copy is stopped.
 - Anything on 7717 that does not answer as Masthead counts as "not busy".
 

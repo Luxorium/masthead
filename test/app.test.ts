@@ -1,13 +1,13 @@
 // App.handle: validation of browser messages, settings, approvals and folders. Everything is written
 // to a temporary folder; the person's settings and conversations are never touched. No agent starts.
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { App, type Client } from '../server/app.ts';
-import { agentEnv, defaultSettings, loadSecret, readSecret } from '../server/config.ts';
+import { agentEnv, defaultSettings, loadSecret, readSecret, sanitizeSettings } from '../server/config.ts';
 import { Store } from '../server/store.ts';
 import type { AgentInfo, ServerMsg, Settings } from '../shared/protocol.ts';
 
@@ -79,6 +79,21 @@ test('app: images are checked', () => {
   for (const bad of [{ mediaType: 'image/svg+xml', data: 'AAAA' }, { mediaType: 'image/png', data: 'not base64!' }, { mediaType: 'image/png', data: 5 }, null]) {
     assert.equal(errorOf(last({ t: 'send', convId: null, text: 'x', images: [bad] })).message, 'Unsupported image.');
   }
+  // Sizes are the decoded bytes, worked out from the base64 length.
+  const ofBytes = (n: number) => ({ mediaType: 'image/png', data: 'A'.repeat(Math.ceil(n / 3) * 4) });
+  assert.equal(errorOf(last({ t: 'send', convId: null, text: 'x', images: [ofBytes(5 * 1024 * 1024 + 3)] })).message, 'An image is larger than 5 MB.');
+  assert.equal(errorOf(last({ t: 'send', convId: null, text: 'x', images: Array(7).fill(ofBytes(4.5 * 1024 * 1024)) })).message, 'The images together are larger than 30 MB.');
+  const exact = { mediaType: 'image/png', data: 'A'.repeat((5 * 1024 * 1024 * 4) / 3 - ((5 * 1024 * 1024 * 4) / 3) % 4) };
+  assert.equal(errorOf(last({ t: 'send', convId: null, text: 'x', images: [exact] })).message, 'no claude here', 'just under 5 MB passes');
+  // Exactly 5 MB needs one padding character; counting it as data would make it 1 byte too large.
+  const atLimit = { mediaType: 'image/png', data: 'A'.repeat(6_990_508 - 4) + 'AAA=' };
+  assert.equal(errorOf(last({ t: 'send', convId: null, text: 'x', images: [atLimit] })).message, 'no claude here', 'exactly 5 MB passes');
+  const overLimit = { mediaType: 'image/png', data: 'A'.repeat(6_990_512 - 4) + 'AA==' };
+  assert.equal(errorOf(last({ t: 'send', convId: null, text: 'x', images: [overLimit] })).message, 'An image is larger than 5 MB.');
+  // Two padding characters are two bytes: counted as one, this exactly-5 MB image would be refused.
+  const twoPad = { mediaType: 'image/png', data: 'A'.repeat(6_990_510 - 2) + '==' };
+  assert.equal(errorOf(last({ t: 'send', convId: null, text: 'x', images: [twoPad] })).message, 'no claude here', "'==' counts as two bytes");
+  assert.equal(errorOf(last({ t: 'send', convId: null, text: 'x', images: Array(6).fill(ofBytes(5 * 1024 * 1024 - 2)) })).message, 'no claude here', 'six images just under 5 MB fit in 30 MB');
   // A valid image gets past the check and stops at the next one (no Claude Code here).
   assert.equal(errorOf(last({ t: 'send', convId: null, text: '', images: [img] })).message, 'no claude here');
 });
@@ -290,4 +305,16 @@ test('config: the secret is created once, private, and kept', () => {
   const replaced = loadSecret(file);
   assert.notEqual(replaced, s);
   assert.match(replaced, /^[0-9a-f]{64}$/);
+  // A valid secret that others can read (an old copy, a restore) is made private again, not replaced.
+  chmodSync(file, 0o644);
+  assert.equal(loadSecret(file), replaced);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+});
+
+test('config: maxRunMinutes is a whole number from 0 to a day, else unchanged', () => {
+  const base = { ...defaultSettings(), maxRunMinutes: 30 };
+  assert.equal(sanitizeSettings({ maxRunMinutes: -5 }, base).maxRunMinutes, 0);
+  assert.equal(sanitizeSettings({ maxRunMinutes: 99999 }, base).maxRunMinutes, 1440);
+  assert.equal(sanitizeSettings({ maxRunMinutes: 2.9 }, base).maxRunMinutes, 2);
+  assert.equal(sanitizeSettings({ maxRunMinutes: '45' }, base).maxRunMinutes, 30, 'a string keeps the base value');
 });

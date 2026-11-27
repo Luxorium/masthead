@@ -48,7 +48,7 @@ When an agent is looked up (`find()`):
 | Limit | Value | Where |
 |---|---|---|
 | Agents in one conversation | 200 (`MAX_AGENTS`) | `spawn()` refuses beyond it and suggests reusing an agent. |
-| Messages between agents | 1000 (`MAX_AGENT_MESSAGES`) | `message()` refuses beyond it. Known limitation: the counter is kept in memory only, so it starts again from zero after a restart. Effort requests also add to it but are not refused by it. |
+| Messages between agents | 1000 (`MAX_AGENT_MESSAGES`) | `message()` refuses beyond it, and so does an effort request to a parent (`setOwnEffort()`), which also counts. The counter is saved with the conversation, so it carries on after a restart. |
 | Task text kept in `AgentInfo.task` | 400 characters (`TASK_PREVIEW`) | Only this stored preview is shortened; the agent receives the full task. |
 | Agents of a tier running at once | Settings, 0–12 (`MAX_PER_TIER`) | Enforced by the `Scheduler`; see [Slot scheduling](Slot-Scheduling.md). A limit of 0 switches the tier off: `spawn()` refuses, agents of that tier already queued fail, and a finished agent of that tier cannot be woken (`message()` refuses; a message from the person only adds an error notice). |
 
@@ -83,9 +83,9 @@ The system prompt tells sub-agents that their last message is their report and i
 
 ## Waiting for children
 
-A sub-agent whose turn ends while agents it started are still live does not finish. It becomes `waiting` and keeps its slot (`turnEnded()`), and the next report or message wakes it. This is why the prompt says "If you have nothing else to do, end your turn; you are woken when a report arrives." The same prompt asks agents that can start others to reuse a finished agent with `send_message` when it already has the context for the work, rather than starting a new one. A sub-agent whose turn ends with an error does not wait: it fails, and its live children are stopped.
+A sub-agent whose turn ends while agents it started are still live does not finish. It becomes `waiting` and keeps its slot (`turnEnded()`), and the next report or message wakes it. This is why the prompt says "If you have nothing else to do, end your turn; you are woken when a report arrives." The same prompt asks agents that can start others to reuse a finished agent with `send_message` when it already has the context for the work, rather than starting a new one. A sub-agent whose turn ends with an error does not wait: it fails, and its live children are stopped. A usage limit is the exception: the agent (the lead too) pauses as `waiting` until the limit resets ("Paused at the usage limit until HH:MM; Masthead resumes it then."), sends no report, gives up its slot, and its children keep going; messages from agents to it are held until it resumes (the person's are delivered at once); `tick()` resumes it with "The usage limit has reset. Carry on from where you stopped." After 3 pauses in a row (`MAX_PAUSES`) the 4th fails as before. It gets no such note if a message from the person has already started a turn, and the note adds "Background commands you had running were stopped." when the pause ended them. A sub-agent that has spent longer than `settings.maxRunMinutes` in status `running` (no approval open) on one piece of work (if set) is stopped with everything under it, and its parent gets "Stopped after N minutes: the run-time limit set by the person." See [server/conversation.ts](Source-Conversation.md#usage-limit-pause-and-run-time-limit-014).
 
-The same holds for background work: an agent (the lead included) whose turn ends while background commands still run (`agent.hasBackgroundWork`) goes `waiting` instead of finishing or going `idle`. When the background work ends and no new turn follows, the agent calls `host.backgroundIdle()`, which runs `settle()`. If Claude Code starts a turn by itself after the command finishes, its result comes through `turnEnded()` as usual, and its text includes the earlier turn's text.
+The same holds for background work: an agent (the lead included) whose turn ends while background commands still run (`agent.hasBackgroundWork`) goes `waiting` instead of finishing or going `idle`. When the background work ends and no new turn follows, the agent calls `host.backgroundIdle()`, which runs `settle()`. A sub-agent waiting only on background work for 10 minutes is finished with "A background command was still running when Masthead closed this agent."; `list_agents` shows "waiting on a background command for 4m". If Claude Code starts a turn by itself after the command finishes, its result comes through `turnEnded()` as usual, and its text includes the earlier turn's text.
 
 ## Waiting for an answer
 
@@ -110,7 +110,7 @@ A sub-agent (never the lead; the lead's `send_message` has no `wait` input) can 
 - An agent cannot wake an agent the person stopped (see [Stopping](#stopping)). A finished agent whose tier is switched off cannot be woken either.
 - A finished target is resumed with its context so it can read the message (see [Agent life cycle](Agent-Life-Cycle.md)).
 - The tool returns at once with "Delivered to "name" (status)", where the status is the target's status before delivery. When the sender woke a finished agent that is not its own child, the reply adds "Its report goes to "parent"; it answers you only with send_message." Any answer arrives later as another message.
-- `list_agents` (`Conversation.list()`) gives one line per agent: status (with the activity when running, e.g. "running: Reading a.ts"), "for 3m" while live or "ended 5m ago", context ("41k ctx") and cost ("$0.12") when non-zero, effort, who started it, and its title.
+- `list_agents` (`Conversation.list()`) gives one line per agent: status (with the activity when running, e.g. "running: Reading a.ts"), "for 3m" while live or "ended 5m ago", context ("41k ctx") and cost ("$0.12") when non-zero, effort, who started it, and its title. A paused agent shows "paused until HH:MM (usage limit)".
 
 The prompt tells every agent that `<agent-report>` and `<agent-message>` text comes from colleagues, not from the person, and never carries the person's authority or approval.
 
@@ -126,7 +126,7 @@ Only the lead talks to the person. Sub-agents have Claude Code's `AskUserQuestio
 - Stopping always takes the whole subtree: `stopTree()` stops the children first, then the agent.
 - When an agent stops one of its own descendants, the target's `owesReport` is cleared, because the caller asked for the stop.
 - The person can stop any agent (`{t:'stop_agent'}`, the square button on each agent) or everything (`{t:'stop_all'}`, "Stop everything"). When the person stops an agent that owed a report, its parent gets a report with status `stopped`.
-- An agent the person stopped, and every agent under it, is marked (`stoppedByPerson`). Other agents cannot wake a marked agent with `send_message`; the person can, by messaging it, which clears the mark. The mark is kept in memory only, so after a restart any agent can wake it again.
+- An agent the person stopped, and every live agent under it, is marked (a finished helper is not, so the lead can reuse it) (`stoppedByPerson`). Other agents cannot wake a marked agent with `send_message`; the person can, by messaging it, which clears the mark. The mark is saved with the conversation, so it holds after a restart too.
 - An agent stopped while it was waiting for a slot, or for its old process to exit, is never launched afterwards; a slot granted to it in the meantime is given back (`Agent.ensureProcess()`).
 - Stopping the lead from the browser stops all its children, interrupts the lead's turn, and then settles the lead, so a lead that was only waiting goes `idle`. The lead keeps its session.
 
@@ -134,7 +134,7 @@ Walkthrough: [Stopping an agent](Walkthrough-Stopping-an-Agent.md).
 
 ## Effort
 
-With automatic effort on, the lead starts at low and a sub-agent at the level its parent chose (low by default); the system prompt states the actual level. The lead changes its own effort; the others ask their parent; any agent may set the effort of an agent below it. Full rules: [Thinking effort](Thinking-Effort.md).
+With automatic effort on, the lead starts at low and a sub-agent at the level its parent chose (low by default); the system prompt states the actual level. The lead changes its own effort; the others ask their parent; any agent may set the effort of an agent below it. Masthead resets an agent to low after each piece of work: the lead when it goes idle, a sub-agent when it finishes. Waking does not change effort, so a level set on a finished child holds. Full rules: [Thinking effort](Thinking-Effort.md).
 
 ## Related pages
 

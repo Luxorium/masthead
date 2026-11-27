@@ -34,6 +34,10 @@ A `StoredConversation` (in `server/store.ts`):
   - `sessionId`: the Claude Code session to resume, or null if it never started.
   - `owesReport`: whether it still owes its parent a report (not used when loading; see below).
   - `seed` (only present for an agent that never started): its task, so a later wake-up still has it.
+- `stoppedByPerson` (since 0.1.4): ids of agents the person stopped, which other agents may not wake.
+- `agentMessages` (since 0.1.4): how many messages agents have sent each other, counted against the limit of 1000.
+
+Both are optional, so files written before 0.1.4 still load (as no marks and a count of 0).
 
 It is written as compact JSON (no indentation).
 

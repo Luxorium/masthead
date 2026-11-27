@@ -35,6 +35,9 @@ interface PendingPermission {
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGES = 8;
+/** The same limits as the page's composer (web/src/lib/Composer.svelte), in decoded bytes. */
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+export const MAX_TOTAL_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_TEXT = 400_000;
 const SAVE_DELAY_MS = 400;
 
@@ -358,9 +361,15 @@ export class App implements ConversationHost {
   private checkImages(images: unknown): ImageAttachment[] {
     if (!Array.isArray(images)) return [];
     if (images.length > MAX_IMAGES) throw new Error(`At most ${MAX_IMAGES} images per message.`);
+    let total = 0;
     return images.map((img) => {
       const i = img as ImageAttachment;
       if (!i || !IMAGE_TYPES.has(i.mediaType) || typeof i.data !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(i.data)) throw new Error('Unsupported image.');
+      // Decoded size from the base64 length: 3 bytes per 4 characters, less the padding.
+      const bytes = Math.floor((i.data.length * 3) / 4) - (i.data.endsWith('==') ? 2 : i.data.endsWith('=') ? 1 : 0);
+      if (bytes > MAX_IMAGE_BYTES) throw new Error('An image is larger than 5 MB.');
+      total += bytes;
+      if (total > MAX_TOTAL_IMAGE_BYTES) throw new Error('The images together are larger than 30 MB.');
       return { mediaType: i.mediaType, data: i.data };
     });
   }

@@ -1,6 +1,6 @@
 # Building, testing and installing
 
-This page explains how Masthead 0.1.3 (`version` in `package.json`) is built, checked, tested and installed. It draws on `package.json`, the two tsconfig files, `vite.config.ts`, `svelte.config.js`, `test/`, `scripts/` and `AGENTS.md`. Each part has its own detailed page: [Build configuration](Source-Build-Config.md), [Tests](Source-Tests.md), and [Installing](Source-Install-Scripts.md).
+This page explains how Masthead 0.1.4 is built, checked, tested and installed. It draws on `package.json`, the two tsconfig files, `vite.config.ts`, `svelte.config.js`, `test/`, `scripts/` and `AGENTS.md`. Each part has its own detailed page: [Build configuration](Source-Build-Config.md), [Tests](Source-Tests.md), and [Installing](Source-Install-Scripts.md).
 
 ## Requirements
 
@@ -16,9 +16,9 @@ This page explains how Masthead 0.1.3 (`version` in `package.json`) is built, ch
 | `npm run build` | `build:server`, then `build:web` | Full build into `dist/`. |
 | `npm run build:server` | `tsc -p tsconfig.server.json` | Compiles `server/` and `shared/` into `dist/server/` and `dist/shared/` (target ES2023, `NodeNext` modules, `strict`, `noUncheckedIndexedAccess`). |
 | `npm run build:web` | `vite build` | Bundles the Svelte page from `web/` into `dist/web/` (`vite.config.ts`: `root: 'web'`, `outDir: '../dist/web'`, `emptyOutDir`, target ES2022). |
-| `npm run dev:web` | `vite` | Development server for the page on port 7718, with hot reload. It forwards `/ws` and `/api` to `127.0.0.1:7717` (`server.proxy` in `vite.config.ts`; both ports are fixed there). |
+| `npm run dev:web` | `vite` | Development server for the page on port `MASTHEAD_DEV_WEB_PORT` (default 7718), with hot reload. It forwards `/ws` and `/api` to `127.0.0.1:<MASTHEAD_PORT>` (default 7717; `server.proxy` in `vite.config.ts`). `strictPort` makes it stop rather than move to another port if that port is taken. |
 | `npm run check` | `tsc … --noEmit` and `svelte-check` | Type-checks the server (`tsconfig.server.json`) and the page with `svelte-check` (`tsconfig.web.json`: `web/src` and `shared/`, `noEmit`) without writing files. |
-| `npm test` | `node --import tsx --test test/*.test.ts` | The unit tests: six files, 77 tests, no Claude Code needed. All 77 passed on 2026-11-26. |
+| `npm test` | `node --import tsx --test test/*.test.ts` | The unit tests: six files, 87 tests, no Claude Code needed. All 87 passed on 2026-11-26. |
 | `npm run test:live` | `node --disable-warning=… --import tsx test/live.e2e.ts` | The live end-to-end run against the real Claude Code: five scenarios, 15 checks (spends usage). |
 | `npm start` | `node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED dist/server/main.js serve` | Runs the built server in the terminal, on 7717 unless `--port` or `MASTHEAD_PORT` says otherwise. |
 
@@ -48,17 +48,25 @@ dist/
 
 ```mermaid
 flowchart LR
-  B["Browser<br/>http://localhost:7718/?key=…"] --> V["Vite dev server :7718<br/>(npm run dev:web)"]
+  B["Browser<br/>http://localhost:7718/#key=…"] --> V["Vite dev server :7718<br/>(npm run dev:web)"]
   V -- "/ws, /api forwarded" --> M["Masthead server :7717<br/>MASTHEAD_DEV=1 npm start"]
 ```
 
 `README.md` describes this arrangement. How it works (read from the code, not run):
 
-- `runServer` in `server/main.ts` reads `MASTHEAD_DEV=1` and passes `http://localhost:7718` and `http://127.0.0.1:7718` to `serve()` as `extraOrigins`. `serve()` in `server/http.ts` then accepts those Origins and their Hosts. The secret is still required.
-- On start the server prints `Development page: http://localhost:7718/?key=<secret>`.
-- The page takes `?key=` from the address, keeps it in its own storage (`masthead.key`) and removes it from the address bar (`takeKey` in `web/src/lib/store.svelte.ts`). It sends the key as the `key.<secret>` subprotocol when it opens the socket. See [Security model](Security-Model.md).
+- `runServer` in `server/main.ts` reads `MASTHEAD_DEV=1` and passes `http://localhost:<dev port>` and `http://127.0.0.1:<dev port>` to `serve()` as `extraOrigins`. The dev port is `MASTHEAD_DEV_WEB_PORT` (`parseDevWebPort()` in `server/cli.ts`), 7718 by default; an invalid value exits 2. `serve()` in `server/http.ts` then accepts those Origins and their Hosts. The secret is still required.
+- On start the server prints, to its own terminal only, the `npm run dev:web` command with the matching `MASTHEAD_PORT` and `MASTHEAD_DEV_WEB_PORT`, and the page's address `http://localhost:<dev port>/#key=<secret>`.
+- The page takes `#key=` (or an older `?key=`) from the address, keeps it in its own storage (`masthead.key`) and removes it from the address bar (`takeKey` in `web/src/lib/store.svelte.ts`). It sends the key as the `key.<secret>` subprotocol when it opens the socket. See [Security model](Security-Model.md).
 
-Both ports are fixed: the Vite proxy always forwards to 7717, and the dev origins are always 7718. 7717 is also the installed service's port, so dev mode cannot run beside a running installed Masthead. Without its own `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, the dev server also uses the real settings, conversations and secret.
+By default the ports are 7717 and 7718, and 7717 is also the installed service's port. To run beside the installed service, give both commands other ports and their own folders, set per command (not exported):
+
+```sh
+T=$(mktemp -d)
+XDG_CONFIG_HOME=$T/config XDG_DATA_HOME=$T/data MASTHEAD_DEV=1 MASTHEAD_DEV_WEB_PORT=7720 npm start -- --port 7790
+XDG_CONFIG_HOME=$T/config XDG_DATA_HOME=$T/data MASTHEAD_PORT=7790 MASTHEAD_DEV_WEB_PORT=7720 npm run dev:web
+```
+
+Then open the address the server printed. Without its own `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, the dev server uses the real settings, conversations and secret. (Read from the code, not run.)
 
 ## Testing without touching real data
 

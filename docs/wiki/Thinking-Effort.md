@@ -21,13 +21,14 @@ Default ceilings (`defaultSettings()` in `server/config.ts`): lead `xhigh`, Opus
 
 ## Rules with automatic effort on
 
-1. **Agents start low unless their parent says otherwise.** The lead is created at `low` (`Conversation.create()`). A sub-agent starts at the `effort` argument its parent gave `spawn_agent`, or `low` if none, capped at its tier's ceiling (`spawn()`). So a parent can start a child above low without anyone's approval; that is one way the rule "agents higher up set the effort of those below" shows up. The system prompt tells each agent its real level ("You run at high thinking effort; …", `systemAppend()` gets `effort: info.effort` from `launch()`), so an agent started high knows that asking for medium would lower it.
+1. **Agents start low unless their parent says otherwise.** The lead is created at `low` (`Conversation.create()`). A sub-agent starts at the `effort` argument its parent gave `spawn_agent`, or `low` if none, capped at its tier's ceiling (`spawn()`). So a parent can start a child above low without anyone's approval; that is one way the rule "agents higher up set the effort of those below" shows up. The system prompt tells each agent its real level ("You run at high thinking effort. …", `systemAppend()` gets `effort: info.effort` from `launch()`), so an agent started high knows that asking for medium would lower it.
 2. **The lead changes its own effort.** `set_effort` from the lead applies at once (`setOwnEffort()`: no parent, so no approval step).
 3. **Any agent may lower its own effort** at once. The reply says which way it went and from where: "Effort lowered from medium to low, from your next step on."
 4. **Other agents must ask to raise it.** `set_effort` from a sub-agent with a higher level sends an *effort request* message to its parent and returns "Asked "bravo" to raise you from low to high. Keep working at low; if approved, the change applies by itself." The parent must be the lead or live, otherwise the request is refused.
 5. **Agents above can set anyone below.** `set_agent_effort` works on any descendant (checked with `isAncestor()`), not just direct children. It is how a parent approves a request, picks a different level, or changes effort as work changes. Only agents that can start others get this tool.
 6. **Ceilings always apply.** Both tools refuse a level above the target tier's ceiling ("The person sets that limit"); `set_effort`'s refusal also names the agent's current level.
-7. **Approval is silent.** `set_agent_effort` changes the level and adds a notice to the target's transcript ("Effort set to high by "bravo" (was low)."); it sends the target no message. A message would make the agent run one more turn, whose reply ("Noted") could become its report. The caller's reply says ""charlie" raised from low to high effort."
+7. **Effort goes back to low after each piece of work.** When the lead's turn ends and it goes `idle` (not `waiting`), `turnEnded()` calls `agent.setEffort('low')`. A sub-agent is set to low when it finishes (`finish()`). Nothing changes effort when an agent is woken, so a level its parent set with `set_agent_effort` while it was finished holds for its next piece of work. The prompt says so: "Masthead resets you to low after each piece of work."
+8. **Approval is silent.** `set_agent_effort` changes the level and adds a notice to the target's transcript ("Effort set to high by "bravo" (was low)."); it sends the target no message. A message would make the agent run one more turn, whose reply ("Noted") could become its report. The caller's reply says ""charlie" raised from low to high effort."
 
 ## How a change reaches Claude Code
 
@@ -59,9 +60,9 @@ Walkthrough with every function: [An effort request](Walkthrough-Effort-Request.
 
 ## Known limitations
 
-These are deliberate for 0.1.3, to be revisited in a later version:
+These are deliberate for 0.1.4, to be revisited in a later version:
 
-- **Effort does not drop back to low on its own.** Effort is part of `AgentInfo` and is saved, so it persists across turns and across a restart. Nothing resets an agent to low after a task; the prompt only asks agents to "go back down afterwards". Likewise, if automatic effort is turned off, `launch()` sets each agent's stored effort to its tier level, and turning it back on later only caps that level at the ceiling.
+- **Turning automatic effort off and on.** If automatic effort is turned off, `launch()` sets each agent's stored effort to its tier level, and turning it back on later only caps that level at the ceiling.
 - **A raised ceiling does not raise anyone.** When the person lowers a ceiling, `App.updateSettings()` calls `Conversation.settingsChanged()`, and `Agent.applySettings()` caps every running agent's effort at the new ceiling at once (through `setEffort()` and `applyFlagSettings`); agents without a process are capped at their next launch. Raising a ceiling only allows more: agents stay where they are until they ask, or are set, higher. Switching automatic effort on or off changes an agent's tools, so its process is relaunched with the same session before its next turn (see [Agent life cycle](Agent-Life-Cycle.md#10-settings-changed-while-an-agent-runs)).
 
 ## Related pages

@@ -11,6 +11,10 @@
     bypassPermissions: 'Bypass all checks',
   };
 
+  /** Choices for the longest run of a sub-agent, in minutes; 0 is no limit. */
+  const RUN_LIMITS = [0, 15, 30, 60, 120, 240];
+  const runLabel = (m: number) => (m === 0 ? 'No limit' : m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`);
+
   let open = $state(false);
   let gear = $state<HTMLButtonElement | null>(null);
   let panel = $state<HTMLDivElement | null>(null);
@@ -95,6 +99,13 @@
           <small>Reports show as one line in a chat until you open them.</small>
         </span>
       </label>
+      <label class="mode run">
+        <span>Longest run for a sub-agent</span>
+        <select value={s.maxRunMinutes ?? 0} onchange={(e) => store.updateSettings((n) => (n.maxRunMinutes = Number(e.currentTarget.value)))}>
+          {#each RUN_LIMITS.includes(s.maxRunMinutes ?? 0) ? RUN_LIMITS : [...RUN_LIMITS, s.maxRunMinutes].sort((a, b) => a - b) as m (m)}<option value={m}>{runLabel(m)}</option>{/each}
+        </select>
+        <small>A sub-agent still working after this long is stopped and its parent is told.</small>
+      </label>
       <p class="about">
         Masthead {store.app?.version ?? ''}<br />
         {#if store.app?.claude.path}
@@ -150,6 +161,14 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+  }
+  .run {
+    margin-top: 12px;
+  }
+  .run small {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
   }
   .mode span {
     font-size: 12px;

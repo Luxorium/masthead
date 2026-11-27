@@ -39,7 +39,9 @@ no root. Run it again to update; if agents are working it asks before restarting
 `scripts/uninstall.sh` removes it and keeps your conversations.
 
 `masthead` opens the app in your browser at `http://127.0.0.1:7717` and signs that browser in (see
-Security). A tab opened some other way asks you to open it with `masthead` once.
+Security). A tab opened some other way asks you to open it with `masthead` once. If your browser is
+a snap or flatpak that cannot open the small sign-in file `masthead` hands it, run
+`masthead --no-browser` in a terminal and open the address it prints.
 
 | Command | What it does |
 |---|---|
@@ -50,7 +52,8 @@ Security). A tab opened some other way asks you to open it with `masthead` once.
 
 `--port N` or `MASTHEAD_PORT` changes the port. The installed service always serves 7717; on any
 other port `masthead` starts and stops a separate copy of its own. That copy reads its secret from
-its own data folder, so stop it with the same `XDG_DATA_HOME` it was started with.
+its own data folder, so open and stop it with the same `XDG_DATA_HOME` it was started with;
+`masthead` says so if they differ.
 
 ## Using it
 
@@ -91,7 +94,10 @@ and only Masthead's own page may open the live connection.
 
 On top of that, the live connection and `masthead stop` need a secret. It is created once in
 `~/.local/share/masthead/secret`, which only you can read, so other users on the machine cannot
-drive Masthead. `masthead` opens the page with the secret in the address; the page keeps it for that
+drive Masthead. `masthead` signs the browser in without putting the secret on any command line: it
+writes a page only you can read (in `$XDG_RUNTIME_DIR/masthead`, else `~/.local/share/masthead/open`)
+that forwards to `http://127.0.0.1:7717/#key=…`, opens that file, and deletes it a minute later. The
+key is in the part after `#`, which a browser never sends to a server. The page keeps it for that
 address, removes it from the address bar and sends it when it connects. Any program running as you
 can still read the secret, as it could run `claude` itself.
 
@@ -112,6 +118,10 @@ npm run test:live    # end-to-end against the real Claude Code, using Haiku for 
 ```
 
 `npm run dev:web` serves the page with hot reload on port 7718; start the server with
-`MASTHEAD_DEV=1 npm start` beside it. The server prints the address of the dev page with its key. The design of the code is described in `docs/wiki/`.
+`MASTHEAD_DEV=1 npm start` beside it. The server prints the address of the dev page with its key.
+To run beside an installed Masthead, pick other ports and folders for both:
+`MASTHEAD_DEV=1 MASTHEAD_DEV_WEB_PORT=7720 npm start -- --port 7790` and
+`MASTHEAD_PORT=7790 MASTHEAD_DEV_WEB_PORT=7720 npm run dev:web` (plus your own `XDG_CONFIG_HOME` and
+`XDG_DATA_HOME` for the server). The design of the code is described in `docs/wiki/`.
 
 Masthead is an independent project. It is not made or endorsed by Anthropic.

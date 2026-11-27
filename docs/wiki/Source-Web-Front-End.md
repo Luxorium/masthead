@@ -2,14 +2,14 @@
 
 The page you use in the browser. It is a **Svelte 5** app in `web/`, built by Vite into `dist/web/` and served by the Masthead server. **Svelte** is a framework that compiles components (`.svelte` files holding markup, script and style together) into plain JavaScript. Svelte 5 uses **runes** to mark reactive state: `$state` (a value the page redraws when it changes), `$derived` (a value computed from others) and `$effect` (code that reruns when what it reads changes).
 
-The page holds no authority. Everything it shows comes from the server over one WebSocket, and everything it does is a protocol message ([Browser/server protocol](Browser-Server-Protocol.md)). This page describes version 0.1.3.
+The page holds no authority. Everything it shows comes from the server over one WebSocket, and everything it does is a protocol message ([Browser/server protocol](Browser-Server-Protocol.md)). This page describes version 0.1.4.
 
 ## Signing in
 
-The page itself holds no secret and is served to anyone who may reach the server; the socket is what needs a key. `masthead` opens `http://127.0.0.1:PORT/?key=<secret>`. On load the store saves that key in `localStorage` under `masthead.key` and removes it from the address bar with `history.replaceState`, so it is not left in history or bookmarks. The socket is then opened with the subprotocols `masthead` and `key.<secret>`; the server checks the key and answers with plain `masthead`.
+The page itself holds no secret and is served to anyone who may reach the server; the socket is what needs a key. `masthead` opens `http://127.0.0.1:PORT/#key=<secret>`: the key is in the URL fragment, which the browser never sends to the server. The page also accepts `?key=<secret>` from older launchers. On load the store takes the key out of the address bar at once with `history.replaceState` (from the query and from the fragment; any other part of the fragment is kept), so it is not left in history or bookmarks. A key from the address is only a **candidate**: it replaces the key stored in `localStorage` under `masthead.key` only once a socket opened with it has been accepted. If the server refuses it and a key is already stored, the page forgets the candidate and connects with the stored key, without showing the sign-in page, so a link to `…/#key=junk` cannot sign a browser out. While the server does not answer at all, the candidate is kept. Pasting the sign-in address into an open tab changes only the fragment; the `hashchange` handler then takes the key the same way and reconnects. The socket is then opened with the subprotocols `masthead` and `key.<secret>`; the server checks the key and answers with plain `masthead`.
 
 - **No stored key:** the page does not try to connect. It shows a full-page message: "Open Masthead with the `masthead` command (or its launcher entry) to sign this browser in."
-- **Refused:** if the socket closes three times in a row without ever opening, the same message appears with a note that a key from an earlier start no longer works, and a **Try again** button. A drop after a socket did open keeps the normal reconnect.
+- **Refused:** when a socket closes before it opened, the page asks `/api/health` (which needs no key) whether the server is up. Only if it answers does the close count as a refusal; after three in a row the same message appears with "Masthead did not accept this browser's key. Open it with the `masthead` command to sign in again." and a **Try again** button. While the server does not answer (a restart or update in progress), the page keeps reconnecting with the normal back-off for as long as it takes, showing the "Reconnecting…" banner. A drop after a socket did open keeps the normal reconnect. (A real restart was not re-tested in a browser for 0.1.4.)
 
 ## Files
 
@@ -56,7 +56,7 @@ It does not connect to the server. `App.svelte` does that in `onMount` by callin
 
 ### Signed-out screen
 
-If `store.signedOut` is set, `App.svelte` shows only a centred box and none of the layout below. The box has the heading "Masthead" and the line asking the person to open Masthead with the `masthead` command. When `store.signedOut` is `'refused'` it adds the note about an old key and a **Try again** button that calls `store.retryConnect()`. See [Signing in](#signing-in).
+If `store.signedOut` is set, `App.svelte` shows only a centred box and none of the layout below. The box has the heading "Masthead" and the line asking the person to open Masthead with the `masthead` command. When `store.signedOut` is `'refused'` it adds the note that the key was not accepted and a **Try again** button that calls `store.retryConnect()`. See [Signing in](#signing-in).
 
 ### Signed-in layout
 
@@ -76,7 +76,7 @@ flowchart LR
 ```
 
 - **Grid:** `.shell` is a CSS grid of three columns: sidebar 264 px, main area `minmax(0, 1fr)`, team panel 316 px. The classes `no-sidebar` and `no-panel` drop a column. On mount, the panel starts hidden below 1100 px of window width and the sidebar below 760 px (checked once, not on resize). Below 900 px the grid has one column and both side columns (`aside`) become fixed overlays with a shadow, the team panel on the right. Hiding the sidebar shows a ☰ button in the header; the ◧ button toggles the panel. (Layout not re-checked in a browser for 0.1.3.)
-- **`onMount`** calls `store.connect()` and listens for `hashchange`: when the hash is `#/c/<id>` for a known conversation other than the open one, it opens it, so the browser's back and forward buttons can switch conversations. The listener is removed when the component goes away.
+- **`onMount`** calls `store.connect()` and listens for `hashchange`: it first passes the address to `store.keyFromAddress()` (a pasted sign-in address), then, when the hash is `#/c/<id>` for a known conversation other than the open one, it opens it, so the browser's back and forward buttons can switch conversations. The listener is removed when the component goes away.
 - **`$effect`** keeps the document title as "<conversation title> · Masthead", or "Masthead" with none open.
 - **Header**, left to right: ☰ (only when the sidebar is hidden); the title button and the working folder (`shortPath`, full path in its tooltip), or "New conversation"; the **Chat / Team map** tabs (`role="tablist"`, only with a conversation open), the map tab carrying `store.liveCount` live sub-agents as a badge; the settings gear; the panel toggle.
 - **Renaming:** clicking the title turns it into a text box (`autofocus`, at most 120 characters). Enter or leaving the box calls `finishRename(true)`, which sends `{t:'rename'}` only if the trimmed text is non-empty and different; Escape calls `finishRename(false)`. `finishRename` returns at once when `renaming` is already false, because removing the box fires a blur that would otherwise save after Escape.
@@ -87,7 +87,7 @@ flowchart LR
 - **Banners:**
   - Claude Code was not found (`AppState.claude.error`), in red;
   - the connection was lost ("Lost the connection to Masthead. Reconnecting…"), shown only once a `state` has been received (`!store.connected && store.app`);
-  - a usage limit is near ("You are close to your Claude usage limit.") or reached (in red), with "Resets <weekday, time>" from `resetsAt` (seconds) and a **Dismiss** button that clears `store.rateLimit` until the next notice. The store points it at the worst usage window it knows of (any `rejected`, else any `allowed_warning`), not whichever notice arrived last.
+  - a usage limit is near ("You are close to your Claude usage limit.") or reached (in red), with "Resets <weekday, time>" from `resetsAt` (seconds) and a **Dismiss** button (`store.dismissLimit()`). `store.rateLimit` is derived from `store.usage`, so the banner is right straight after a page load as well as after a live notice: it is the worst usage window known (any `rejected`, else any `allowed_warning`). Dismiss hides it until that worst notice changes (its window, status or reset time).
 - A **toast** (`role="alert"`) at the bottom shows `store.error`; the store clears it after 8 seconds.
 
 ## Rendering Markdown safely (`markdown.ts`)

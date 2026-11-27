@@ -15,9 +15,9 @@ The settings sidebar sets, for each of the Opus, Sonnet and Haiku tiers, how man
 - An agent asks for a slot every time it needs a process: when it starts, and again when it is resumed after finishing.
 - An agent that is `waiting` for its children **keeps its slot**: it is still part of the running team, and its process stays open.
 - The slot is given back when the agent finishes, fails, is stopped, or its process is lost (`Agent.end()` and `Conversation.processLost()` call `release()`).
-- A tier limit of 0 means agents of that tier cannot be started at all (`spawn()` refuses before reaching the scheduler), and a finished one cannot be woken (`Conversation.message()` refuses).
+- A tier limit of 0 means agents of that tier cannot be started at all (`spawn()` refuses before reaching the scheduler), and a finished one cannot be woken (`Conversation.message()` refuses). The scheduler also refuses at once: `acquire()` rejects with `TierOff` on a tier at 0, so any other start (a paused agent resuming, say) fails with a report instead of queuing for ever.
 - Setting a limit to 0 while agents of that tier are queued refuses them: `limitsChanged()` rejects each waiter with `TierOff`. `ensureProcess()` passes that to `Conversation.processLost()`, so the agent fails with "This tier was switched off in the settings while the agent was waiting to start." and its parent gets the usual failure report (or is settled if no report was owed). Nobody is left waiting for ever.
-- Otherwise, lowering a limit does not stop agents already running; it only affects who starts next (a known limitation, deliberate in 0.1.3, and checked by a unit test). Raising it starts queued agents at once (`limitsChanged()`).
+- Otherwise, lowering a limit does not stop agents already running; it only affects who starts next (a known limitation, deliberate, and checked by a unit test). Raising it starts queued agents at once (`limitsChanged()`).
 
 ## Fair queueing
 
@@ -27,7 +27,9 @@ When a slot frees up, the scheduler does not simply take the oldest request. It 
 flowchart TD
   A["acquire(tier, id, owner)"] --> B{"already holds<br/>a slot?"}
   B -- yes --> G["resolve at once"]
-  B -- no --> C{"running < limit<br/>AND queue empty?"}
+  B -- no --> O{"limit 0?"}
+  O -- yes --> OR["reject (TierOff)"]
+  O -- no --> C{"running < limit<br/>AND queue empty?"}
   C -- yes --> D["take slot,<br/>resolve at once"]
   C -- no --> E["push waiter onto queue,<br/>then pump()"]
   R["release(tier, id)"] --> P

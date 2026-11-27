@@ -46,7 +46,8 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, col
 const errors = [];
 let approver = null;
 page.on('pageerror', (e) => errors.push(String(e)));
-page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+// The sign-in checks are refused on purpose; the browser logs each refused socket as an error.
+page.on('console', (m) => m.type() === 'error' && !/WebSocket connection .* 403/.test(m.text()) && errors.push(m.text()));
 
 const SIGN_IN = 'to sign this browser in';
 
@@ -61,12 +62,39 @@ try {
     await p.goto(`${base}?key=not-the-key`);
     await p.waitForSelector('button:has-text("Try again")', { timeout: 15_000 });
     check('a wrong key shows the sign-in message with Try again', (await p.locator(`text=${SIGN_IN}`).count()) === 1);
+    // Another tab signs this browser in with the right key; Try again picks it up and connects.
+    await p.evaluate((k) => localStorage.setItem('masthead.key', k), target.searchParams.get('key'));
+    await p.getByRole('button', { name: 'Try again' }).click();
+    await p.waitForSelector('text=What are we working on?', { timeout: 15_000 }).catch(() => {});
+    check('Try again connects once the right key is stored', (await p.locator('text=What are we working on?').count()) === 1);
+    await ctx.close();
+  }
+  // Sign-in with the key in the fragment, as `masthead` opens it: it works and leaves the address.
+  {
+    const ctx = await browser.newContext();
+    const p = await ctx.newPage();
+    await p.goto(`${base}#key=${encodeURIComponent(target.searchParams.get('key'))}`);
+    await p.waitForSelector('text=What are we working on?', { timeout: 15_000 }).catch(() => {});
+    const loaded = (await p.locator('text=What are we working on?').count()) === 1;
+    check('a key in the fragment works and leaves the address bar', loaded && !p.url().includes('key='));
     await ctx.close();
   }
 
   await page.goto(url);
   await page.waitForSelector('text=What are we working on?');
   check('the right key works and leaves the address bar', !new URL(page.url()).searchParams.has('key'));
+  // A link with a wrong key must not sign a signed-in browser out: opened fresh, and pasted into the open tab.
+  const signedIn = async () =>
+    (await page.locator('text=What are we working on?').count()) === 1 && (await page.locator(`text=${SIGN_IN}`).count()) === 0 && !page.url().includes('key=');
+  await page.goto('about:blank');
+  await page.goto(`${base}#key=not-the-key`);
+  await page.waitForTimeout(1500);
+  await page.waitForSelector('text=What are we working on?', { timeout: 15_000 }).catch(() => {});
+  check('a wrong key in a link does not sign the browser out', await signedIn());
+  await page.evaluate(() => (location.hash = '#key=still-not-the-key'));
+  await page.waitForTimeout(1500);
+  await page.waitForSelector('text=What are we working on?', { timeout: 15_000 }).catch(() => {});
+  check('a wrong key pasted into the open tab is taken and refused, and it stays signed in', await signedIn());
   await page.screenshot({ path: `${shots}/1-new-${scheme}.png` });
   check('new conversation screen renders', (await page.locator('aside.right h2').first().textContent())?.trim() === 'Team');
 
@@ -99,11 +127,13 @@ try {
   await gear.click();
   const fold = menu.getByLabel(/Fold agent reports/);
   if (!(await fold.isChecked())) await fold.check();
+  await menu.getByLabel(/Longest run for a sub-agent/).selectOption('30');
   await page.waitForTimeout(500);
   await page.reload();
   await page.waitForSelector('text=What are we working on?');
   await gear.click();
   check('"Fold agent reports" persists across a reload', await menu.getByLabel(/Fold agent reports/).isChecked());
+  check('"Longest run for a sub-agent" persists across a reload', (await menu.getByLabel(/Longest run for a sub-agent/).inputValue()) === '30');
   await page.mouse.click(700, 300);
   await menu.waitFor({ state: 'detached' });
 
@@ -146,13 +176,20 @@ try {
   await page.screenshot({ path: `${shots}/2-working-${scheme}.png` });
   await page.getByRole('tab', { name: /Team map/ }).click();
   await page.waitForSelector('.map .card >> text=helper job');
-  check('the map shows three levels', (await page.locator('.map .card').count()) >= 4);
+  // Lead > shell job > helper job: a card three levels deep in the tree.
+  check('the map shows three levels', (await page.locator('.map .tree.root > li > ul > li > ul > li > .card', { hasText: 'helper job' }).count()) === 1);
   const names = await page.locator('.map .card .name').allTextContents();
   check('agents are named Alpha, Bravo, Charlie, Delta', ['Alpha', 'Bravo', 'Charlie', 'Delta'].every((n) => names.includes(n)));
   await page.locator('.map .card.tier-sonnet', { hasText: 'helper job' }).first().hover();
   await page.waitForSelector('.map .preview');
+  // Real content, not "Loading…": at least one chat line, or "Nothing yet.".
+  await page.waitForSelector('.map .preview .p-line, .map .preview .p-empty:has-text("Nothing yet")', { timeout: 10_000 }).catch(() => {});
   await page.screenshot({ path: `${shots}/3-map-${scheme}.png` });
-  check('hovering an agent previews its chat', (await page.locator('.map .preview .p-task').count()) === 1);
+  check(
+    'hovering an agent previews its chat',
+    (await page.locator('.map .preview .p-task').count()) === 1 &&
+      (await page.locator('.map .preview .p-line, .map .preview .p-empty:has-text("Nothing yet")').count()) >= 1,
+  );
   await page.mouse.move(5, 5);
 
   // Stop: the ■ on a busy agent's map card stops it.
@@ -172,7 +209,13 @@ try {
   await page.waitForSelector('.inbound.task');
   await page.screenshot({ path: `${shots}/4-agent-${scheme}.png` });
   check('a sub-agent transcript opens with its task', (await page.locator('.inbound.task').count()) === 1);
-  await page.locator('.crumbs .back').click();
+  // The message box says who it is pointed at, and Back returns it to the lead.
+  const targetLine = (await page.locator('.addressee .to').textContent().catch(() => '')) ?? '';
+  const placeholderText = (await page.locator('textarea').getAttribute('placeholder')) ?? '';
+  check('the composer names the sub-agent it is pointed at', /^To \S/.test(targetLine.trim()) && placeholderText.includes('not Alpha'));
+  await page.locator('.addressee .back', { hasText: 'Back to Alpha' }).click();
+  await page.waitForFunction(() => !document.querySelector('.crumbs'), null, { timeout: 5000 }).catch(() => {});
+  check('Back returns the composer to the lead', (await page.locator('.addressee').count()) === 0 && (await page.locator('.crumbs').count()) === 0);
 
   // Wait for all three reports and a table written after the last of them (the lead may draw interim tables).
   await page.waitForFunction(

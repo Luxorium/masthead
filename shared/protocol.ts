@@ -1,6 +1,6 @@
 // Types shared by the server and the browser. Nothing in here may import Node or DOM APIs.
 
-export const VERSION = '0.1.3';
+export const VERSION = '0.1.4';
 
 /** The four levels of the team. `lead` is the agent the person talks to. */
 export type Tier = 'lead' | 'opus' | 'sonnet' | 'haiku';
@@ -113,6 +113,8 @@ export interface Settings {
   leanOpus: boolean;
   /** Reports from agents are shown folded shut in a transcript until the person opens them. */
   collapseReports: boolean;
+  /** The longest a sub-agent may stay live on one piece of work, in minutes. 0 means no limit. */
+  maxRunMinutes: number;
   /** Folder a new conversation starts in. */
   defaultCwd: string;
 }
@@ -161,6 +163,8 @@ export interface AgentInfo {
   error?: string;
   /** The agent it asked a question of and is waiting to hear from, by name. */
   waitingFor?: string;
+  /** Paused at a usage limit until about this time (ms since 1970); it carries on by itself then. */
+  pausedUntil?: number;
 }
 
 interface ItemBase {
@@ -250,6 +254,9 @@ export interface RateLimitNotice {
   resetsAt?: number;
 }
 
+/** A change to the settings: only the fields that changed. The server merges it over the current ones. */
+export type SettingsPatch = Partial<Omit<Settings, 'tiers'>> & { tiers?: Partial<Record<Tier, Partial<TierSettings>>> };
+
 export interface AppState {
   version: string;
   settings: Settings;
@@ -290,7 +297,7 @@ export type ClientMsg =
       answers?: Record<string, string>;
       message?: string;
     }
-  | { t: 'settings'; settings: Settings }
+  | { t: 'settings'; settings: SettingsPatch }
   | { t: 'rename'; convId: string; title: string }
   | { t: 'delete'; convId: string }
   | { t: 'dirs'; path: string };

@@ -50,7 +50,7 @@ test('scheduler: tiers are limited separately and the lead is never limited', as
   await tick();
   assert.deepEqual(opus.started, ['o1']);
   assert.deepEqual(lead.started, ['l1', 'l2']);
-  assert.deepEqual(sonnet.started, [], 'a tier set to 0 starts nothing');
+  assert.deepEqual(sonnet.started, ['s1:error'], 'a tier set to 0 refuses at once');
 });
 
 test('scheduler: a freed slot goes to the parent with the fewest running agents', async () => {

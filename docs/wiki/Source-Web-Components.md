@@ -20,7 +20,7 @@ Agent names are always shown through `displayName()` from `shared/protocol.ts`: 
 | `FolderPicker` | `Composer` | `onclose` | While the Folder chip is open on a new conversation. |
 | `StopControl` | `TeamPanel` and `TeamMap` | `agent`, `placement` | For each live sub-agent. |
 
-`App.svelte` also draws the parts that are not components: the signed-out page (`store.signedOut`, with **Try again** calling `store.retryConnect()`), the Chat / Team map tabs (setting `store.view`, with `store.liveCount` as a badge), the banners (Claude Code error, lost connection, usage limit from `store.rateLimit` with Dismiss), the breadcrumb of `store.pathTo()` with "Back to Alpha" when a sub-agent's chat is open, and the error toast (`store.error`).
+`App.svelte` also draws the parts that are not components: the signed-out page (`store.signedOut`, with **Try again** calling `store.retryConnect()`), the Chat / Team map tabs (setting `store.view`, with `store.liveCount` as a badge), the banners (Claude Code error, lost connection, usage limit from `store.rateLimit` with Dismiss calling `store.dismissLimit()`), the breadcrumb of `store.pathTo()` with "Back to Alpha" when a sub-agent's chat is open, and the error toast (`store.error`).
 
 ## Sidebar.svelte
 
@@ -86,7 +86,7 @@ It has:
 - **Waiting hint (0.1.2):** when the open sub-agent is waiting for an answer (`status: 'waiting'` with `waitingFor`), a quiet line above the box reads "Bravo is waiting for an answer from Alpha. What you send here reaches it as that answer." On the server, a message the person sends to an agent ends that agent's wait (`clearWait` in `Conversation.userSend`).
 - **Placeholder** text that says where the message goes:
   - "Ask for anything" on a new conversation;
-  - "Message Bravo directly" when a sub-agent's chat is open;
+  - "Message Bravo directly, not Alpha" when a sub-agent's chat is open;
   - "Add to what Alpha is doing" while the lead is running;
   - otherwise "Reply to Alpha".
 - **Images:** a + button, paste, or drag and drop. Only PNG, JPEG, GIF and WebP are accepted: at most 5 MB each, 8 per message and 30 MB in total (base64 adds a third, which keeps a message under the server's 48 MB socket limit). Both limits are checked again after each file is read, since another paste may have added images meanwhile. Each has a thumbnail and a remove button. They are read as base64 and sent as `ImageAttachment`s.
@@ -96,13 +96,14 @@ It has:
   - in an existing conversation, its working folder, shown plainly (not clickable);
   - while agents are live, **Stop everything** (`{t:'stop_all'}`);
   - on the right, the model and effort of the agent being addressed (with "· auto" for the lead under automatic effort) and the permission mode in short words ("Claude settings", "Ask first", "Accept edits", "Auto", "Bypass"). Before the lead exists, its effort shows as Low under automatic effort, or else the configured lead effort.
+- **Who it is pointed at:** when the open agent is not the lead, a line above the box reads "To <b>India</b> · Sonnet" (its name and the first word of its model's label, in its tier colour), with a **Back to Alpha** button on the right that calls `store.viewOf(lead.id)`. The box's border and a faint ring take the tier colour (the `tier-<tier>` class sets `--tier`), and its accessible label becomes "Message to India". Added in 0.1.4 after the person typed to a sub-agent believing it was the lead. In the lead's chat the box looks as before.
 - **Drafts:** the text and images live in `store.composer`, one draft per conversation and agent. `App.svelte` rebuilds the component in a `{#key}` block when either changes, and the box takes focus then.
 - **Sending:** the box empties at once, but the store keeps a copy until the server accepts the message, and puts it back if the server refuses it or the connection drops first (unless something new has been typed). If the socket is not open, nothing is sent and the box is kept.
 
 Internals:
 
 - **`resize()`** sets the box's height to its content, capped at 260 px; an effect runs it on every text change. Another effect focuses the box on mount.
-- **`addFiles(files)`** goes file by file: a wrong type is refused and the next file tried; over 5 MB, refused; at 8 images the whole loop stops (`break`); over 30 MB in total, that file is refused. The file is read with `FileReader` as a data URL and only the base64 part kept. After the read the count and total are checked again. Each refusal goes to `store.fail()`. Each image keeps an object URL for its thumbnail; `removeImage()` revokes it.
+- **`addFiles(files)`** goes file by file: a wrong type is refused and the next file tried; over 5 MB, refused (a pasted image with no file name is called "That image"); at 8 images the whole loop stops (`break`); over 30 MB in total, that file is refused. The file is read with `FileReader` as a data URL and only the base64 part kept. After the read the count and total are checked again. Each refusal goes to `store.fail()`. Each image keeps an object URL for its thumbnail; `removeImage()` revokes it.
 - **Paste** takes only clipboard files whose type starts with `image/`, and only then blocks the normal paste. **Drop** passes every file to `addFiles`, which refuses non-images.
 - **Accessibility:** the box sits in `role="group"` labelled "Message"; buttons are labelled "Attach images", "Send", "Stop this turn" and "Remove image"; thumbnails use the file name as `alt`. The drag highlight and the growing box were not checked in a browser.
 
@@ -138,7 +139,7 @@ Every button answers through `store.answer(requestId, decision, answers?)`, whic
 - **Focus:** a new card takes focus so the keyboard can reach it, unless the person is typing: a key pressed in the last 1.5 seconds, text in the field they are in, or focus already on another card. Focus goes to the card itself (outlined), not to Allow, so a stray Enter answers nothing.
 
 - **Permission card:** the agent's name and Claude Code's title, or else a fixed phrase for common tools ("wants to run a command", "wants to write a file", "wants to edit a file", "wants to edit a notebook", "wants to read a file", "wants to fetch a web page", "wants to search the web"), or "wants to use <tool>" for any other (an MCP tool's `mcp__` prefix removed and `__` shown as " · "), with the target from `toolLine()` underneath when there is no title. A shell command is shown in full; other input sits behind "Show details". Then Claude Code's description, and the buttons Deny / Always allow (only if `canAlways`) / Allow.
-- **Question card:** "<Agent> asks", then option buttons for each question (one choice, or several; keyed by position, so repeated labels do not break the list), plus a "Something else…" field. Picking a single-choice option replaces the earlier pick and clears that field; typing in the field clears a single-choice pick, so the two never both count. Multi-select options toggle. **Answer** is disabled until every question has a pick or typed text; it sends an `answers` object keyed by each question's text, with the choices and typed text joined with ", ". **Skip** sends `deny`.
+- **Question card:** "<Agent> asks", then option buttons for each question (one choice, or several; keyed by position, so repeated labels do not break the list), plus a "Something else…" field. Picking a single-choice option replaces the earlier pick and clears that field; typing in the field clears a single-choice pick, so the two never both count. Multi-select options toggle. **Answer** is disabled until every question has a pick or typed text; it sends an `answers` object keyed by each question's text, with the choices and typed text joined with ", ". The text is the key because that is Claude Code's contract for `AskUserQuestion` (`sdk-tools.d.ts`: "question text -> answer string"); the page's own state is kept by position. If two questions have the same text, they share one key: both answers are kept, in order, joined with " | ". **Skip** sends `deny`.
 
 Cards appear above the message box in the chat view, and in a dock at the bottom of the team map view. See [Permissions and questions](Permissions-and-Questions.md).
 
@@ -150,10 +151,10 @@ The right column: the tier limits, usage, and an overview of the open conversati
 
 - **Team:**
   - One block per tier, headed by `modelLabel()` of its model and "Started by …".
-  - For Opus, Sonnet and Haiku, an "At once" stepper from 0 ("Off") to 12, with "· N now" when agents of that tier are running or waiting. That count covers only the open conversation, while the limit is app-wide.
+  - For Opus, Sonnet and Haiku, an "At once" stepper from 0 ("Off") to 12, with "· N now" when agents of that tier are running or waiting, and "· N queued" (muted) when some wait for a free slot, e.g. "2 now · 1 queued". That count covers only the open conversation, while the limit is app-wide.
   - For every tier, an effort selector labelled "Effort up to" (automatic effort) or "Effort".
 - A warning line when permissions are set to bypass.
-- Every change goes through `store.updateSettings()`, which sends the whole settings object.
+- Every change goes through `store.updateSettings()`, which sends only the changed fields.
 - **Usage:** always shown. One row per usage window in `store.usage`, in a fixed order, named for Claude Code's `rateLimitType`: "Current session (5 hours)" (`five_hour`), "Weekly, all models" (`seven_day`), "Weekly, Opus", "Weekly, Sonnet", "Weekly, with extra usage", "Extra usage"; unknown types show their own name. Each has "N% used" and a bar when `utilization` is reported (the bar turns amber unless the status is `allowed`), "limit reached" when rejected, and "Resets <time>" from `resetsAt`. `sdk.d.ts` does not give the scale of `utilization`, so a value of 1 or less is read as a fraction. Before any notice: "No usage reported yet; it appears once an agent has run."
 - **Context:** a bar showing the lead's context use (`usage.context / usage.contextMax`) and the total output of all agents.
 - **Agents:** while only the lead exists, "Only the lead so far…". Otherwise the lead and an indented tree of every agent (a recursive `branch` snippet over `store.childrenOf()`), each with:
@@ -180,7 +181,7 @@ Internals:
 
 The ⚙ button at the top right of the header and the popup it opens. Rendered by `App.svelte` in the header; no props. State: `open`, plus the `gear` and `panel` elements for focus and outside clicks. It reads `store.settings` (the popup is drawn only once settings have arrived), `store.app.version`, `store.app.claude` and `store.app.home`.
 
-Every control changes one field of the settings through `store.updateSettings(change)`. That clones the current settings, applies the change, sets `store.settings` at once and sends the whole object as `{t:'settings', settings}`. The server answers with a `settings` message to every tab (not verified by running). There is no Save button; each change is saved as it is made.
+Every control changes one field of the settings through `store.updateSettings(change)`. That clones the current settings, applies the change, sets `store.settings` at once and sends only the changed fields as `{t:'settings', settings: patch}`, which the server merges. The server answers with a `settings` message to every tab (not verified by running). There is no Save button; each change is saved as it is made.
 
 | Control | Setting | What it means (the control's own text) |
 |---|---|---|
@@ -189,6 +190,7 @@ Every control changes one field of the settings through `store.updateSettings(ch
 | **Lean Opus** | `leanOpus` | "Opus agents skip your connected services too." |
 | **Lean Sonnet and Haiku** | `leanSubagents` | "They skip your connected services, which keeps their context small." |
 | **Fold agent reports** | `collapseReports` | "Reports show as one line in a chat until you open them." Read by `Transcript.startsOpen()`; it changes only how reports first appear, not reports already opened or closed on the page. |
+| **Longest run for a sub-agent** (0.1.4) | `maxRunMinutes` | A select: No limit (0), 15 minutes, 30 minutes, 1 hour, 2 hours, 4 hours (`RUN_LIMITS`); a value set some other way is added to the list so it still shows. Help: "A sub-agent still working after this long is stopped and its parent is told." The server clamps it to 0–1440 and does the stopping. |
 
 Below the controls: the Masthead version, and Claude Code's version and path (shortened with `~`), or "Claude Code not found" with the reason.
 
@@ -200,11 +202,11 @@ Internals: `toggle()` flips `open` and, when opening, waits a `tick()` and focus
 
 The ■ that stops a live sub-agent and everything under it. Added in 0.1.2; before that the team panel and the team map each drew their own ■ button. Both now render this one component, so the two cannot drift.
 
-- **Props:** `agent` (an `AgentInfo`) and `placement`: `'row'` sits in the team panel's flex row; `'map'` is absolutely placed in the card's bottom-right corner.
+- **Props:** `agent` (an `AgentInfo`) and `placement`: `'row'` sits in the team panel's flex row; `'map'` is a 24 px square absolutely placed in the card's bottom-right corner, where the word **Stop** floats above the button on hover instead of beside it. The map card gives its meta and status lines 26 px of right padding while the button is shown (`stoppable` class), so the button never covers the elapsed time or the activity.
 - **State:** none.
 - **Store:** reads `store.convId`. Pressing it sends `{t:'stop_agent', convId, agentId}` through `store.send()`, and nothing when no conversation is open. The server's `Conversation.stopAgent()` stops that agent and its whole subtree.
 - **Who shows it:** the parents decide. Both render it only while the agent is queued, running or waiting; the team map also checks it is not the lead, and the panel never draws it on the lead's row. So the button never stops the lead.
-- **Why it is "safe":** it asks for no confirmation. Instead it is hard to press by mistake for what it is: the square is in the normal text colour at 80 % opacity (it was muted and smaller in 0.1.1), and on hover or keyboard focus it turns red and shows the word **Stop** beside it, so the square is never a mystery. That hover background is opaque, so the word does not sit on top of the card's text. Title "Stop this agent and everything under it"; accessible name "Stop <Name>". In the map it sits outside the card's open button, so pressing it does not also open the chat.
+- **Why it is "safe":** it asks for no confirmation. Instead it is hard to press by mistake for what it is: the square (14 px since 0.1.4) is in the normal text colour at 80 % opacity (it was muted and smaller in 0.1.1), and on hover or keyboard focus it turns red and shows the word **Stop** beside it, so the square is never a mystery. That hover background is opaque, so the word does not sit on top of the card's text. Title "Stop this agent and everything under it"; accessible name "Stop <Name>". In the map it sits outside the card's open button, so pressing it does not also open the chat.
 
 ## TeamMap.svelte
 
@@ -212,7 +214,7 @@ The "Team map" tab: the whole team as a tree, built recursively with a Svelte sn
 
 - its status dot, its name ("Bravo") and a model badge;
 - its title (for the lead, "The one you talk to");
-- what it is doing, from `statusWords()`: the activity line while running, "Waiting for an answer from …", "Failed: …" with the error, or the status words;
+- what it is doing, from `statusWords()`: the activity line while running, "Waiting for an answer from …", "Failed: …" or "Stopped · …" with a short reason, or the status words;
 - its effort, context size and, for sub-agents, the time since it started (ticking every second until it ends; then the time it ran, from `endedAt`).
 
 Live sub-agents have the shared stop button in the card's corner. Clicking a card opens that agent's chat (`store.viewOf()`).
@@ -232,7 +234,7 @@ Internals:
 - **`enter(id)`** (mouse enter on the card, or focus on its button) restarts a 220 ms timer. When it fires it calls `forget()`, sets `previewId`, and if `store.items` has no transcript for that agent, records it in `fetchedFor` and calls `store.loadItems()` (which sends `{t:'items'}`).
 - **`leave()`** (mouse leave, or blur) cancels the timer, hides the preview and calls `forget()`.
 - **`forget()`** calls `store.dropItems(fetchedFor)`. The store keeps the transcript if that agent is the one being viewed, so clicking a card does not lose it.
-- **`previewLines(a)`** returns null ("Loading…") until the transcript is there. It looks at the last 14 items, skips thinking and task items, shortens each with `flat()` (160 characters for the person's messages, 220 for text, 110 for tool lines, 140 for inbound, 120 for notices) and keeps the last six. With no lines and no draft it shows "Nothing yet.". The draft line is the last 220 characters of `store.drafts[a.id]`.
+- **`previewLines(a)`** returns null ("Loading…") until the transcript is there. It looks at the last 14 items, skips thinking and task items, shortens each with `flat()` (160 characters for the person's messages, 220 for text, 110 for tool lines, 140 for inbound, 120 for notices) and keeps the last six. With no lines and no draft it shows "Nothing yet.". The draft line is the last 220 characters of `store.drafts[a.id]` under the agent's name when it is text, or a muted "Thinking… <last 160 characters>" when it is a thinking draft. A transcript fetched for a preview that closed before the reply came is dropped by the store when the reply arrives.
 - **Accessibility:** each card's button is labelled "Open <Name>'s chat"; the preview is `role="tooltip"`. The tree layout and preview position were not checked in a browser.
 
 ## statusWords() and STATUS_LABEL
@@ -241,9 +243,11 @@ Not a component, but every component that says what an agent is doing uses it. `
 
 | Agent | Words |
 |---|---|
+| `pausedUntil` set (0.1.4) | "Paused until 11:00 · usage limit" (local time of `pausedUntil`, whatever the status); the transcript's status line shows the same, with a queued-style dot |
 | `waiting` with `waitingFor` | "Waiting for an answer from Alpha" |
 | `running` | its `activity`, or "Working" |
-| `failed` | "Failed: <error>", or "Failed" |
+| `failed` | "Failed: <reason>", or "Failed" |
+| `stopped` with an `error` | "Stopped · <reason>", e.g. "Stopped · run-time limit", "Stopped · by you" (`shortReason()`) |
 | anything else | `STATUS_LABEL`: Queued, Waiting, Idle, Done, Stopped |
 
 The team panel, the team map and the transcript's status line all use it, so a new sub-state of a status needs one new line here only. In 0.1.1 `STATUS_LABEL.waiting` was "Waiting on its agents"; it is now plain "Waiting", because an agent also waits on a command it left running in the background. `waitingFor` (added to `AgentInfo` in 0.1.2) is the name of the agent a sub-agent asked a question of with `send_message` and `wait: true`. The server sets it only when that is the agent's parent or the lead, and clears it when the answer comes, including when the person messages the waiting agent directly.

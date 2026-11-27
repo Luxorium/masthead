@@ -1,6 +1,6 @@
 # Walkthrough: sending a message
 
-This follows the person typing a message to the lead (`alpha`), from the browser to Claude Code and back to the screen. It describes version 0.1.3.
+This follows the person typing a message to the lead (`alpha`), from the browser to Claude Code and back to the screen. It describes version 0.1.4.
 
 ## In the page
 

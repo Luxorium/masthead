@@ -15,6 +15,8 @@ for arg in "$@"; do
 done
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/path.sh
+. "$here/scripts/path.sh"
 lib="${HOME}/.local/lib/masthead"
 bin="${HOME}/.local/bin"
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -84,7 +86,17 @@ else
 fi
 rm -rf "${lib:?}.old"
 if [ -d "$lib" ]; then mv "$lib" "$lib.old"; fi
-mv "$stage" "$lib"
+if ! mv "$stage" "$lib"; then
+  # Put the previous copy back so the installed command and service keep working.
+  if [ ! -d "$lib.old" ]; then
+    echo "Could not move the new copy into $lib (there was no previous installation). The new copy is in $stage." >&2
+  elif [ ! -e "$lib" ] && mv "$lib.old" "$lib"; then
+    echo "Could not move the new copy into $lib. The previous installation is back in place; the new copy is in $stage." >&2
+  else
+    echo "Could not move the new copy into $lib, nor put the previous one back. The previous copy is in $lib.old and the new one in $stage." >&2
+  fi
+  exit 1
+fi
 
 # Quoting for the generated files, so paths with spaces or odd characters still work.
 unit_quote() { # one systemd unit word: backslash and double quote escaped, % doubled
@@ -109,6 +121,7 @@ chmod +x "$bin/masthead"
 unit_path="$(dirname "$node_bin")"
 [ -n "$claude_bin" ] && unit_path="$unit_path:$(dirname "$claude_bin")"
 unit_path="$unit_path:$PATH:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+unit_path="$(clean_path "$unit_path")"
 unit_env="Environment=$(unit_quote "PATH=$unit_path")"
 [ -n "$claude_bin" ] && unit_env="$unit_env"$'\n'"Environment=$(unit_quote "MASTHEAD_CLAUDE=$claude_bin")"
 # Settings, conversations and the local secret must be where the `masthead` command looks for them.

@@ -6,6 +6,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { VERSION, type ServerMsg } from '../shared/protocol.js';
 import type { App, Client } from './app.js';
+import { NONCE_FORMAT, proofOf } from './config.js';
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -48,6 +49,15 @@ function secretOk(secret: string, given: unknown): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** The request's path, or null when its target cannot be parsed (a malformed request line). */
+function pathOf(req: IncomingMessage): URL | null {
+  try {
+    return new URL(req.url ?? '/', 'http://x');
+  } catch {
+    return null;
+  }
+}
+
 /** The secret offered as a `key.<secret>` subprotocol, if any. */
 function offeredKey(req: IncomingMessage): string | undefined {
   const offered = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((p) => p.trim());
@@ -59,8 +69,8 @@ function offeredKey(req: IncomingMessage): string | undefined {
  * requests a web page elsewhere could trick a browser into making: the Host header must name this
  * server (which defeats DNS rebinding) and a socket must be opened by Masthead's own page. On top of
  * that the socket and shutdown need the local secret, which other users on the machine cannot read.
- * `masthead` opens the page with `?key=<secret>`; the page keeps it (per origin) and offers it as a
- * subprotocol when it opens the socket. The page itself holds no secret and is served to anyone.
+ * `masthead` opens the page with `#key=<secret>` (the fragment is never sent here); the page keeps it
+ * (per origin) and offers it as a subprotocol when it opens the socket. The page itself holds no secret and is served to anyone.
  */
 export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
   const hosts = new Set<string>();
@@ -69,11 +79,23 @@ export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
 
   const hostOk = (req: IncomingMessage) => hosts.has(req.headers.host ?? '');
 
-  const server = createServer((req, res) => {
+  /** The port actually listened on (known once listening; `opts.port` may be 0). */
+  let boundPort = opts.port;
+
+  const handleRequest = (req: IncomingMessage, res: ServerResponse): void => {
     if (!hostOk(req)) return void send(res, 403, 'Forbidden');
-    const url = new URL(req.url ?? '/', 'http://x');
+    const url = pathOf(req);
+    if (!url) return void send(res, 400, 'Bad request');
     if (url.pathname === '/api/health') {
       return void sendJson(res, 200, { name: 'masthead', version: VERSION, pid: process.pid, busy: app.workingCount() });
+    }
+    if (url.pathname === '/api/proof') {
+      // Lets `masthead` check that this server knows its secret before sending it the secret: the answer
+      // is an HMAC of the launcher's nonce (see proofOf), which reveals nothing. No secret is needed to ask.
+      if (req.method !== 'GET') return void send(res, 405, 'Method not allowed');
+      const nonce = url.searchParams.get('nonce') ?? '';
+      if (!NONCE_FORMAT.test(nonce)) return void send(res, 400, 'Bad request');
+      return void sendJson(res, 200, { name: 'masthead', proof: proofOf(opts.secret, boundPort, nonce) });
     }
     if (url.pathname === '/api/shutdown') {
       // A custom header cannot be sent cross-site without a preflight this server never grants.
@@ -85,18 +107,39 @@ export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return void send(res, 405, 'Method not allowed');
     serveStatic(webRoot, url.pathname, req, res);
+  };
+
+  const server = createServer((req, res) => {
+    // Nothing a request carries may stop the server: anything unexpected is a 500 for that request.
+    try {
+      handleRequest(req, res);
+    } catch (e) {
+      console.error(`Masthead could not answer ${req.method ?? '?'} request: ${(e as Error)?.message ?? String(e)}`);
+      if (!res.headersSent) send(res, 500, 'Internal error');
+      else res.destroy();
+    }
   });
 
   // The key was checked before the upgrade; the answer names only the plain subprotocol.
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD, handleProtocols: () => PROTOCOL });
   server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url ?? '/', 'http://x');
-    if (url.pathname !== '/ws' || !hostOk(req) || !origins.has(req.headers.origin ?? '') || !secretOk(opts.secret, offeredKey(req))) {
-      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    try {
+      const url = pathOf(req);
+      if (!url) {
+        socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      if (url.pathname !== '/ws' || !hostOk(req) || !origins.has(req.headers.origin ?? '') || !secretOk(opts.secret, offeredKey(req))) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => attach(app, ws));
+    } catch (e) {
+      console.error(`Masthead could not answer a socket upgrade: ${(e as Error)?.message ?? String(e)}`);
       socket.destroy();
-      return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => attach(app, ws));
   });
 
   return new Promise((resolveServer, reject) => {
@@ -104,6 +147,7 @@ export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
     server.listen(opts.port, '127.0.0.1', () => {
       server.off('error', reject);
       const port = (server.address() as AddressInfo).port;
+      boundPort = port;
       hosts.add(`127.0.0.1:${port}`).add(`localhost:${port}`);
       // In development the page is served by another local server that forwards requests here.
       for (const origin of opts.extraOrigins ?? []) hosts.add(new URL(origin).host);

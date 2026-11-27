@@ -8,7 +8,7 @@
 
 ## Constants
 
-`IMAGE_TYPES` (PNG, JPEG, GIF, WebP), `MAX_IMAGES = 8`, `MAX_TEXT = 400_000` characters, `SAVE_DELAY_MS = 400`.
+`IMAGE_TYPES` (PNG, JPEG, GIF, WebP), `MAX_IMAGES = 8`, the exported `MAX_IMAGE_BYTES` (5 MiB) and `MAX_TOTAL_IMAGE_BYTES` (30 MiB), the same limits as the page's composer (`web/src/lib/Composer.svelte`), `MAX_TEXT = 400_000` characters, `SAVE_DELAY_MS = 400`.
 
 ## Construction
 
@@ -55,7 +55,7 @@ One `switch` on `msg.t`. Every case is described on [Browser/server protocol](Br
 ## Validation helpers
 
 - `answerPermission(msg)`: settles a pending request from `{t:'permission'}`; unknown ids are ignored (another tab may have answered). Deny, question answers (only string values kept) and "always" (the SDK's suggested rules passed as `updatedPermissions`) are described on [Permissions and questions](Permissions-and-Questions.md).
-- `checkImages(images)`: not an array → none; more than 8 → error; each must have an allowed type and base64 characters only. Returns clean copies.
+- `checkImages(images)`: not an array → none; more than 8 → error; each must have an allowed type and base64 characters only. The decoded size is worked out from the base64 length (3 bytes per 4 characters, less 1 or 2 for `=` padding); an image over 5 MiB gives "An image is larger than 5 MB." and a running total over 30 MiB gives "The images together are larger than 30 MB." (tested in `test/app.test.ts`, padding included). Returns clean copies.
 - `checkDir(path)`: expands a leading `~`, resolves to an absolute path, and checks it is a folder; otherwise "… is not a folder."
 - `listDirs(path)`: non-hidden sub-folders (and symbolic links to folders) sorted by name, plus the parent path (null at `/`); a read error is returned in `error` rather than thrown.
 - `isDir(path)`: true if the path is a folder, following links.

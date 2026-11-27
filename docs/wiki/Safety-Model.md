@@ -2,7 +2,7 @@
 
 Masthead runs many Claude Code sessions at once, and each one can run commands and change files as the person. This page explains what the code does to keep that team bounded, visible and stoppable, and what it does not do. It is about the agents. Who may reach the server at all is covered in [Security model](Security-Model.md).
 
-Every statement below was read from the code at 0.1.3 and names the file and function. Unless a line says otherwise, it was **not** checked by running Masthead. The unit tests that cover a rule are listed in [Tests](Source-Tests.md).
+Every statement below was read from the code at 0.1.4 and names the file and function. Unless a line says otherwise, it was **not** checked by running Masthead. The unit tests that cover a rule are listed in [Tests](Source-Tests.md).
 
 ## 1. Fixed tiers: who may start whom
 
@@ -84,7 +84,7 @@ A request that is never answered waits for ever: there is no timeout in `askPerm
 
 `Agent.end()` cancels a queued slot request and bumps a generation counter, so a start that was already waiting for a slot does not launch afterwards (the "ghost agent" fix; `test/agent.test.ts`).
 
-**The person's stop sticks.** `markStoppedByPerson()` records every sub-agent the person stopped. `Conversation.message()` then refuses "the person stopped X; only they can wake it" when another agent tries to wake one. The person can still wake it by messaging it (`userSend()` clears the mark). The mark is kept in memory only, so after a restart any agent can wake those agents again.
+**The person's stop sticks.** `markStoppedByPerson()` records every sub-agent the person stopped. `Conversation.message()` then refuses "the person stopped X; only they can wake it" when another agent tries to wake one. The person can still wake it by messaging it (`userSend()` clears the mark). The marks are saved with the conversation (`toStored()`, `restore()`), so they hold after a restart.
 
 ## 7. Effort
 
@@ -92,6 +92,7 @@ A request that is never answered waits for ever: there is no timeout in `askPerm
 - **The lead** may raise or lower its own effort up to its ceiling without asking (`setOwnEffort()` when there is no parent).
 - **Any other agent** may lower its own effort at once. Raising it sends an effort request to its parent as a message, and the agent keeps working at its current level. A request to a parent that is no longer running is refused.
 - **An agent may set the effort of any agent below it** (`setAgentEffort()`, `isAncestor()`), never above the target tier's ceiling. This is not sent as a message, so it costs the target no extra turn.
+- Masthead resets effort to low after each piece of work: the lead when its turn ends and it goes idle (`turnEnded()`), a sub-agent when it finishes (`finish()`).
 - `launch()` caps the effort again at every process start, so a lowered ceiling also applies after a resume. `Agent.applySettings()` (via `Conversation.settingsChanged()`) applies setting changes to running agents where it can.
 - There is no `max` level (`EFFORTS` in `shared/protocol.ts`; `AGENTS.md` rule).
 
@@ -107,13 +108,15 @@ A request that is never answered waits for ever: there is no timeout in `askPerm
 | Cap | Value | Where |
 |---|---|---|
 | Agents per conversation | 200 | `MAX_AGENTS`, `Conversation.spawn()` |
-| Messages between agents per conversation | 1000 | `MAX_AGENT_MESSAGES`, `Conversation.message()`. Effort requests add to the count but are not refused at the cap (`setOwnEffort()`). The counter is in memory and starts again from 0 after a restart. |
+| Messages between agents per conversation | 1000 | `MAX_AGENT_MESSAGES`, `Conversation.message()`. Effort requests count too and are refused at the cap (`setOwnEffort()`). The counter is saved with the conversation and carries on after a restart. |
 | `send_message` text | 20,000 characters | zod schema, `teamTools()` |
 | `spawn_agent` task / title | 60,000 / 60 characters | zod schema; the title is also trimmed to 60 in `spawn()` |
 | Agent names in tools | 80 characters | zod schema |
 | Effort reason | 500 characters | zod schema |
+| Run time of a sub-agent on one piece of work | `maxRunMinutes`, 0 (off) to 1440 | `tick()` every 30 s (`TICK_MS`); time paused is not counted |
+| Usage-limit pauses in a row | 3 | `MAX_PAUSES`, `pause()`; the 4th fails |
 | The person's message | 400,000 characters | `MAX_TEXT`, `App.dispatch()` `send` |
-| Images per message | 8; PNG, JPEG, GIF or WebP; base64 characters only | `MAX_IMAGES`, `App.checkImages()`. There is no size limit per image. |
+| Images per message | 8; PNG, JPEG, GIF or WebP; base64 characters only | `MAX_IMAGES`, `App.checkImages()`; at most 5 MB per image and 30 MB in total. |
 | One socket message | 48 MiB | `MAX_WS_PAYLOAD`, `server/http.ts`. A larger message closes the socket. |
 
 ## 10. Agent-written text in the page
@@ -143,7 +146,7 @@ So an agent cannot draw a fake "Allow" button over the page or run script. Every
   - agents that were working come back as `stopped` with that error, and the lead becomes `idle`;
   - nobody owes a report;
   - the lead's transcript gets a notice naming the stopped agents, and the lead is told about them, once, with the person's next message (`restartNote()`, `userSend()`). A stopped agent resumes only when messaged.
-  - Waits, the "stopped by the person" marks and the message counter are memory only and start empty.
+  - The "stopped by the person" marks and the message counter are restored from the saved file; waits are memory only and start empty (the waiting agents were stopped anyway).
 
 ## 12. Credentials and the environment
 
@@ -170,21 +173,20 @@ What the code does to keep a team moving:
 Where a team can still hang:
 
 - An agent waiting for **the lead** keeps waiting until the lead or the person answers. This is deliberate, because the person can answer it directly.
-- A **background command that never ends** keeps its agent `waiting`, holding its slot, until someone stops it.
+- A **background command that never ends** keeps the lead `waiting` until someone stops it. A sub-agent waiting only on background work is finished after 10 minutes (`BACKGROUND_WAIT_MS`) with "A background command was still running when Masthead closed this agent."
 - An **approval nobody answers** pauses the agent with no time limit (section 5).
 - A **foreground command that hangs** is bounded only by Claude Code's own tool timeouts, not by Masthead.
-- A parent waits as long as its children run. Nothing limits run time.
+- A parent waits as long as its children run, unless the person sets a run-time limit (`settings.maxRunMinutes`, 0 = off): `tick()` then stops any sub-agent that has spent longer than that `running` on one piece of work (queued, waiting, paused and approval time do not count), with everything under it, and tells its parent "Stopped after N minutes: the run-time limit set by the person." The lead is never stopped this way.
+- At a **usage limit** an agent pauses as `waiting` until the reset time (or 15 minutes if unknown) releasing its slot, and is resumed by `tick()`; messages from agents are held until then; at most 3 pauses in a row (`MAX_PAUSES`), then it fails.
 
 ## What this does not protect against
 
 - **An approved action can do anything the person can.** Once a command or edit is allowed, by a card, a saved "always" rule, the person's own Claude Code rules or `bypassPermissions`, Masthead does not limit it. There is no sandbox.
 - **Prompt injection.** Text an agent reads (web pages, files, tool output, another agent's report) can steer it within its permissions: run allowed commands, edit files in reach, or send misleading messages to other agents. The envelope rule is an instruction to the model, not an enforcement.
 - **Agents misleading each other or the person.** A report can be wrong or invented. The prompt says to check what comes back; code cannot.
-- **Run time and spend.** Masthead has no time limit and no cost limit. The per-tier limits bound how many agents run at once, not how long they run or what they spend. Usage-limit notices are shown (`App.rateLimit()`), but nothing pauses at a limit.
-- **Background commands that never end**, and **approvals or questions to the lead that are never answered**, keep agents waiting and holding slots (section 13).
+- **Spend.** Masthead has no cost limit. Run time is limited only if the person sets `maxRunMinutes` (sub-agents only; the lead is never stopped). Usage-limit notices are shown (`App.rateLimit()`), and an agent that hits a usage limit pauses and resumes when it resets, rather than failing (up to 3 times in a row).
+- **Background commands that never end** keep the lead waiting (sub-agents are closed after 10 minutes), and **approvals or questions to the lead that are never answered** keep agents waiting and holding slots (section 13).
 - **The person's skills and connectors.** The lead, and any agent with lean mode off, loads every connector the person has. Skills are not filtered.
-- **Limits that live in memory.** After a restart, other agents can wake agents the person stopped, and the inter-agent message counter starts again from 0.
-- **Large images.** Only the count, type and characters are checked. An image can be as large as the 48 MiB socket limit allows, and it is passed to Claude Code as it is.
 
 ## Related pages
 

@@ -47,7 +47,7 @@ class FakeProcess {
       interrupt: async () => {},
       applyFlagSettings: async (f: Record<string, unknown>) => void self.flags.push(f),
       setModel: async (model?: string) => void self.models.push(model),
-      getContextUsage: async () => ({ totalTokens: 0, maxTokens: 1 }),
+      getContextUsage: async () => ({ totalTokens: 1234, maxTokens: 200_000 }),
     } as unknown as Query;
   }
 
@@ -82,6 +82,7 @@ function fakeHost(scheduler: Scheduler, settings: () => Settings = defaultSettin
   const idle: string[] = [];
   const turns: TurnOutcome[] = [];
   const lost: string[] = [];
+  const limits: Array<{ resetsAt?: number } | undefined> = [];
   const items: Item[] = [];
   const host: AgentHost = {
     cwd: '/tmp',
@@ -97,8 +98,9 @@ function fakeHost(scheduler: Scheduler, settings: () => Settings = defaultSettin
     askPermission: async () => ({ behavior: 'allow', updatedInput: {} }),
     turnEnded: (_a, outcome) => void turns.push(outcome),
     backgroundIdle: (a) => void idle.push(a.name),
-    processLost: (a, message) => {
+    processLost: (a, message, usageLimit) => {
       lost.push(message);
+      limits.push(usageLimit);
       scheduler.release(a.tier, a.id);
     },
     query: (({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => {
@@ -107,7 +109,7 @@ function fakeHost(scheduler: Scheduler, settings: () => Settings = defaultSettin
       return p.q;
     }) as unknown as AgentHost['query'],
   };
-  return { host, processes, turns, lost, items, idle };
+  return { host, processes, turns, lost, items, idle, limits };
 }
 
 function info(name: string, tier: Tier = 'sonnet'): AgentInfo {
@@ -400,4 +402,234 @@ test('agent: a change to automatic effort relaunches the process before its next
   assert.deepEqual(processes[1]!.received.map((m) => m.message.content), ['next job']);
   assert.equal(sched.running('sonnet'), 1);
   assert.equal(a.status, 'running');
+});
+
+test('agent: a sub-agent reads its real context size when a turn ends', async () => {
+  const sched = new Scheduler(() => 1);
+  const { host, processes } = fakeHost(sched);
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  p.init();
+  p.result('Done.', p.uuids);
+  await ticks();
+  assert.equal(a.info.usage.contextMax, 200_000);
+  assert.equal(a.info.usage.context, 1234);
+});
+
+const rejected = (resetsAt: number) => ({
+  type: 'rate_limit_event',
+  rate_limit_info: { status: 'rejected', resetsAt, rateLimitType: 'five_hour', unifiedWindows: { five_hour: { utilization: 1, resetsAt, status: 'rejected' } } },
+});
+const limitTurn = (p: FakeProcess, uuids: string[]) => {
+  p.say({ type: 'assistant', error: 'rate_limit', message: { content: [{ type: 'text', text: "You've hit your limit" }] } });
+  p.say({ type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit", total_cost_usd: 0, user_message_uuids: uuids });
+};
+
+test('agent: a usage-limit turn is reported at once, closes the process, and holds only unconsumed messages', async () => {
+  const sched = new Scheduler(() => 1);
+  const { host, processes, turns } = fakeHost(sched);
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'the task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  p.init('session-1');
+  a.deliver('a queued note');
+  await ticks();
+  const [task] = p.uuids;
+  p.tasks('b1');
+  p.say(rejected(1_796_144_400));
+  limitTurn(p, [task!]);
+  await ticks();
+  assert.equal(turns.length, 1, 'reported although the note is still queued');
+  assert.deepEqual(turns[0]!.usageLimit, { resetsAt: 1_796_144_400_000, backgroundStopped: true });
+  assert.equal(a.busy, false, 'held messages do not count as busy');
+  assert.equal(a.hasProcess, false, 'the process is closed at the limit');
+  // Resuming starts a new process on the same session: the note (never consumed) goes first, then the
+  // new message. The task was consumed by the failed turn and is already in the session.
+  a.deliver('carry on');
+  await ticks();
+  assert.equal(processes.length, 2);
+  assert.equal(processes[1]!.options.resume, 'session-1');
+  assert.deepEqual(processes[1]!.received.map((m) => m.message.content), ['a queued note', 'carry on']);
+  assert.equal(a.busy, true);
+});
+
+test('agent: turns already on their way at the limit do not mark a paused agent running, and are reported', async () => {
+  const sched = new Scheduler(() => 1);
+  const { host, processes, turns } = fakeHost(sched);
+  // Act as the conversation does: pause the agent when a turn reports the usage limit.
+  host.turnEnded = (ag, outcome) => {
+    turns.push(outcome);
+    if (outcome.usageLimit) {
+      ag.info.pausedUntil = outcome.usageLimit.resetsAt ?? 1;
+      ag.setStatus('waiting');
+    }
+  };
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'the task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  p.init();
+  a.deliver('a queued note');
+  await ticks();
+  const [task, note] = p.uuids;
+  p.say(rejected(100));
+  limitTurn(p, [task!]);
+  // Already written by Claude Code before the close: the queued note's turn, and a self-started one.
+  p.init();
+  limitTurn(p, [note!]);
+  p.init();
+  p.say({ type: 'result', subtype: 'success', is_error: false, result: 'self-started', total_cost_usd: 0 });
+  await ticks();
+  assert.equal(a.status, 'waiting');
+  assert.equal(turns.length, 3);
+  assert.ok(turns.every((t) => t.usageLimit), 'every limited turn carries usageLimit');
+});
+
+test('agent: with settings stale and background work running, a message goes into the live process', async () => {
+  let settings = defaultSettings();
+  const sched = new Scheduler(() => 1);
+  const { host, processes, turns } = fakeHost(sched, () => settings);
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  p.init();
+  p.tasks('b1');
+  p.result('Started.', [p.uuids[0]!]);
+  await ticks();
+  settings = { ...settings, autoEffort: false };
+  a.applySettings(settings);
+  a.deliver('status?');
+  await ticks();
+  assert.equal(processes.length, 1, 'no relaunch while background work runs');
+  assert.equal(p.received.length, 2);
+  p.result('Still running.', [p.uuids[1]!]);
+  await ticks();
+  assert.equal(a.busy, false);
+  assert.equal(turns.length, 2);
+});
+
+test('agent: the text of a long run keeps only the newest turns', async () => {
+  const sched = new Scheduler(() => 1);
+  const { host, processes, turns } = fakeHost(sched);
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  p.init();
+  p.tasks('b1');
+  p.result('turn 0', [p.uuids[0]!]);
+  for (let i = 1; i < 12; i++) {
+    p.init();
+    p.say({ type: 'result', subtype: 'success', is_error: false, result: `turn ${i}`, total_cost_usd: 0 });
+  }
+  p.tasks();
+  p.init();
+  p.say({ type: 'result', subtype: 'success', is_error: false, result: 'x'.repeat(70_000), total_cost_usd: 0 });
+  await ticks();
+  const last = turns[turns.length - 1]!.text;
+  assert.ok(last.startsWith('(earlier text not shown)'));
+  assert.ok(!last.includes('turn 0'));
+  assert.ok(last.length < 71_000, 'older texts are dropped once the total is too long');
+});
+
+test('agent: an ordinary error is not a usage limit, and end() drops held messages', async () => {
+  const sched = new Scheduler(() => 4);
+  const { host, processes, turns } = fakeHost(sched);
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  p.init();
+  // A 429 without a rejected rate_limit_event (a busy API, not the person's limit).
+  limitTurn(p, [p.uuids[0]!]);
+  await ticks();
+  assert.equal(turns[0]!.usageLimit, undefined);
+  assert.ok(turns[0]!.error);
+
+  const b = new Agent(info('charlie'), host, { owesReport: true, seed: 'task b' });
+  b.start();
+  await ticks();
+  const q = processes[1]!;
+  q.init();
+  q.say(rejected(100));
+  limitTurn(q, [q.uuids[0]!]);
+  await ticks();
+  assert.ok(turns[1]!.usageLimit);
+  b.end('stopped');
+  b.deliver('after a stop');
+  await ticks();
+  assert.deepEqual(processes[2]!.received.map((m) => m.message.content), ['after a stop']);
+});
+
+test('agent: a process lost at the usage limit says so and keeps its messages', async () => {
+  const sched = new Scheduler(() => 1);
+  const { host, processes, lost, limits } = fakeHost(sched);
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'the task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  p.init();
+  p.say(rejected(50));
+  p.say({ type: 'assistant', error: 'rate_limit', message: { content: [] } });
+  await ticks();
+  p.fail('Claude Code process exited with code 1');
+  await ticks();
+  assert.equal(lost.length, 1);
+  assert.deepEqual(limits[0], { resetsAt: 50_000 });
+  assert.equal(a.busy, false);
+  a.deliver('carry on');
+  await ticks();
+  assert.deepEqual(processes[1]!.received.map((m) => m.message.content), ['the task', 'carry on']);
+});
+
+test('agent: messages delivered from inside a usage-limit turnEnded reach a new process, or are dropped by end()', async () => {
+  const sched = new Scheduler(() => 1);
+  const { host, processes, turns } = fakeHost(sched);
+  // As the conversation does when it gives up pausing: flush the held messages at once.
+  host.turnEnded = (ag, outcome) => {
+    turns.push(outcome);
+    if (outcome.usageLimit) ag.deliver('the limit was reached again');
+  };
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'the task' });
+  a.start();
+  await ticks();
+  const p = processes[0]!;
+  p.init('session-1');
+  a.deliver('a queued note');
+  await ticks();
+  p.say(rejected(100));
+  limitTurn(p, [p.uuids[0]!]);
+  await ticks();
+  assert.equal(p.received.length, 2, 'nothing more went into the closed process');
+  assert.equal(processes.length, 2);
+  assert.deepEqual(processes[1]!.received.map((m) => m.message.content), ['a queued note', 'the limit was reached again']);
+  assert.equal(processes[1]!.options.resume, 'session-1');
+
+  // The fourth stop in a row: the conversation fails the agent instead.
+  const b = new Agent(info('charlie'), host, { owesReport: true, seed: 'task b' });
+  host.turnEnded = (ag, outcome) => {
+    turns.push(outcome);
+    if (outcome.usageLimit) ag.end('failed', 'usage limit');
+  };
+  a.end('done');
+  await ticks();
+  b.start();
+  b.deliver('note b');
+  await ticks();
+  const q = processes[2]!;
+  q.init();
+  q.say(rejected(100));
+  limitTurn(q, [q.uuids[0]!]);
+  await ticks();
+  assert.equal(b.status, 'failed');
+  assert.equal(b.busy, false);
+  assert.equal(b.hasProcess, false);
+  assert.equal(processes.length, 3, 'no process started for dropped messages');
+  b.deliver('later');
+  await ticks();
+  assert.deepEqual(processes[3]!.received.map((m) => m.message.content), ['later'], 'held messages were dropped by end()');
 });
