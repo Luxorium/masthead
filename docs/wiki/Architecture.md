@@ -110,7 +110,9 @@ The agents are told the rules in their system prompt (`server/prompts.ts`), but 
 
 - An agent only gets the tools its tier allows (`teamTools()`): Haiku gets no `spawn_agent`; only agents that can start others get `stop_agent` and `set_agent_effort`; nobody gets the effort tools when automatic effort is off.
 - Every tool call is checked again in `Conversation` (`spawn`, `stop`, `setOwnEffort`, `setAgentEffort`): tier, ancestry, limits and effort ceilings.
-- Claude Code's own sub-agent and team tools (`Agent`, `Task`, `SendMessage`, …) are disallowed for every agent so they cannot bypass Masthead's team (`DISALLOWED` in `server/agent.ts`).
+- Claude Code's own sub-agent and team tools (`Agent`, `Task`, `SendMessage`, …) and its ways to start work later or elsewhere (`CronCreate`, `RemoteTrigger`, `SendToProject`, `PushNotification`, …) are disallowed for every agent so they cannot bypass Masthead's team (`DISALLOWED` in `server/agent.ts`).
+- Agents cannot wake an agent the person stopped, and nobody can wake an agent whose tier is set to 0 (`Conversation.message()` and `userSend()`).
+- The socket only accepts a browser that presents the local secret (see [Security model](Security-Model.md)).
 - The slot limits are enforced by the `Scheduler` before a process is started.
 
 ## Related pages

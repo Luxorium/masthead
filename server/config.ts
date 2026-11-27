@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import {
@@ -19,6 +20,8 @@ export const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME || join(HOME, '.confi
 export const DATA_DIR = join(process.env.XDG_DATA_HOME || join(HOME, '.local', 'share'), 'masthead');
 export const SETTINGS_FILE = join(CONFIG_DIR, 'settings.json');
 export const CONVERSATIONS_DIR = join(DATA_DIR, 'conversations');
+/** The local server's secret. Only a browser signed in with it, or a program that can read this file, may drive Masthead. */
+export const SECRET_FILE = join(DATA_DIR, 'secret');
 
 export function defaultSettings(): Settings {
   return {
@@ -32,6 +35,7 @@ export function defaultSettings(): Settings {
     autoEffort: true,
     leanSubagents: true,
     leanOpus: true,
+    collapseReports: false,
     defaultCwd: HOME,
   };
 }
@@ -41,9 +45,12 @@ function clampInt(v: unknown, lo: number, hi: number, fallback: number): number 
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
 }
 
-/** Returns valid settings whatever was passed in: unknown or malformed fields fall back to defaults. */
-export function sanitizeSettings(raw: unknown): Settings {
-  const d = defaultSettings();
+/**
+ * Returns valid settings whatever was passed in. Fields that are missing, unknown or malformed keep
+ * their value from `base` (the defaults unless given), so a partial update changes only what it names.
+ */
+export function sanitizeSettings(raw: unknown, base: Settings = defaultSettings()): Settings {
+  const d = structuredClone(base);
   if (!raw || typeof raw !== 'object') return d;
   const r = raw as Record<string, unknown>;
   const tiersIn = (r.tiers && typeof r.tiers === 'object' ? r.tiers : {}) as Record<string, unknown>;
@@ -61,6 +68,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (typeof r.autoEffort === 'boolean') d.autoEffort = r.autoEffort;
   if (typeof r.leanSubagents === 'boolean') d.leanSubagents = r.leanSubagents;
   if (typeof r.leanOpus === 'boolean') d.leanOpus = r.leanOpus;
+  if (typeof r.collapseReports === 'boolean') d.collapseReports = r.collapseReports;
   if (typeof r.defaultCwd === 'string' && r.defaultCwd.startsWith('/')) d.defaultCwd = r.defaultCwd;
   return d;
 }
@@ -83,6 +91,50 @@ export function writeFileAtomic(path: string, data: string): void {
 
 export function saveSettings(s: Settings, file: string = SETTINGS_FILE): void {
   writeFileAtomic(file, JSON.stringify(s, null, 2) + '\n');
+}
+
+const SECRET_FORMAT = /^[0-9a-f]{64}$/;
+
+/** The secret in `file`, or null when there is none (or it is not one Masthead wrote). */
+export function readSecret(file: string = SECRET_FILE): string | null {
+  try {
+    const s = readFileSync(file, 'utf8').trim();
+    return SECRET_FORMAT.test(s) ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The secret in `file`, created once (32 random bytes, hex, mode 0600) when it is missing. It is kept
+ * across restarts so a signed-in browser stays signed in. Creation is atomic, so a launcher and a
+ * server starting together end up with the same secret.
+ */
+export function loadSecret(file: string = SECRET_FILE): string {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const existing = readSecret(file);
+  if (existing) {
+    if ((statSync(file).mode & 0o077) !== 0) chmodSync(file, 0o600);
+    return existing;
+  }
+  const secret = randomBytes(32).toString('hex');
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  writeFileSync(tmp, secret + '\n', { mode: 0o600 });
+  try {
+    if (existsSync(file)) renameSync(tmp, file); // present but unusable: replace it
+    else linkSync(tmp, file); // fails if another process created it meanwhile
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+  } finally {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // already renamed
+    }
+  }
+  const s = readSecret(file);
+  if (!s) throw new Error(`Could not create ${file}.`);
+  return s;
 }
 
 /** What a running Claude Code session sets about itself. Settings a person exports on purpose are not in here. */

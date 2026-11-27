@@ -2,6 +2,7 @@ import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type Sdk
 import { z } from 'zod';
 import { CHILD_TIER, EFFORTS, VERSION, type Effort, type Tier } from '../shared/protocol.js';
 import type { Agent } from './agent.js';
+import { withArticle } from './prompts.js';
 
 /** What the tools can do; implemented by the conversation. Every method returns the text the agent sees. */
 export interface TeamActions {
@@ -48,7 +49,7 @@ export function teamTools(agent: Agent, team: TeamActions): McpSdkServerConfigWi
     tools.push(
       tool(
         'spawn_agent',
-        `Start a ${team.label(child)} agent on a task. It knows only what you write in "task". It is given the next name from the phonetic alphabet (bravo, charlie, …); the reply tells you which. Returns at once; the agent's report arrives later as an <agent-report> message.`,
+        `Start ${withArticle(team.label(child))} agent on a task. It knows only what you write in "task". It is given the next name from the phonetic alphabet (bravo, charlie, …); the reply tells you which. Returns at once; the agent's report arrives later as an <agent-report> message.`,
         {
           title: z.string().min(1).max(60).describe('A few words on its job, shown to the person, e.g. "Review the API layer"'),
           task: z.string().min(1).max(60_000).describe('Everything the agent needs: goal, paths, constraints, what to send back'),
@@ -70,8 +71,8 @@ export function teamTools(agent: Agent, team: TeamActions): McpSdkServerConfigWi
       tool(
         'set_effort',
         agent.tier === 'lead'
-          ? 'Change your own thinking effort from your next step on. You start at low, which is right for most work. Raise it when the task needs careful multi-step reasoning, subtle debugging or a design decision, or when you catch yourself making mistakes; lower it again afterwards. Change it at the start of a piece of work, not repeatedly.'
-          : 'Ask to change your own thinking effort. You start at low, which is right for most work. Lowering applies at once. Raising needs the approval of the agent that started you: this sends the request and returns; keep working at your current level until you are told the outcome.',
+          ? 'Change your own thinking effort from your next step on. Low is right for most work. Raise it when the task needs careful multi-step reasoning, subtle debugging or a design decision, or when you catch yourself making mistakes; lower it again afterwards. Change it at the start of a piece of work, not repeatedly.'
+          : 'Ask to change your own thinking effort. Low is right for most work. Lowering applies at once. Raising needs the approval of the agent that started you: this sends the request and returns; keep working at your current level. If approved, the new level applies by itself.',
         { level: effortSchema, reason: z.string().min(1).max(500).describe('One sentence on why') },
         async (a) => reply(team.setOwnEffort(agent, a.level, a.reason)),
       ),

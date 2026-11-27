@@ -4,9 +4,10 @@ This follows the person typing a message to the lead (`alpha`), from the browser
 
 ## In the page
 
-1. The person types in the message box (`Composer.svelte`) and presses Enter. `submit()` calls `store.sendMessage(text, images)`.
-2. In an open conversation, the store sends `{t:'send', convId, text, images}`, with `agentId` added if a sub-agent's chat is open. On the new-conversation screen it sends `convId: null`, the chosen folder (`newCwd`) and a fresh `ref`, and shows "Starting…" until `created` comes back with that `ref`. The store then opens the new conversation.
-3. If the socket is not open, `send()` shows "Not connected to Masthead…" and the text stays in the box.
+1. The person types in the message box (`Composer.svelte`). The text and images are held in the store's draft for this conversation and agent (`store.composer[composerKey]`). Enter calls `store.sendMessage(key)`.
+2. Every send carries a fresh `ref`. In an open conversation, the store sends `{t:'send', convId, text, images, ref}`, with `agentId` added if a sub-agent's chat is open. On the new-conversation screen it sends `convId: null` and the chosen folder (`newCwd`), and shows "Starting…" until `created` comes back with that `ref`. The store then opens the new conversation.
+3. The box empties, but the store keeps a copy. The message counts as accepted when `created` arrives with its `ref` or its `user` item appears. If the server refuses it (`{t:'error', ref}`: empty, too long, the conversation is gone, a bad folder) or the socket drops first, the text and images go back into that draft, unless something new has been typed there.
+4. If the socket is not open, `send()` shows "Not connected to Masthead…" and nothing leaves the box.
 
 What comes back is drawn by `Transcript.svelte`: `item` messages append or replace entries, `draft` messages show the text being written, and `agent` messages update the status line ("Working…", the activity line). See [Web store](Source-Web-Store.md).
 
@@ -51,7 +52,7 @@ sequenceDiagram
 
 1. **Socket.** `attach()` in `server/http.ts` receives the text frame, parses JSON, and calls `app.handle(client, parsed)`.
 2. **Dispatch.** `App.dispatch()` case `send` (`server/app.ts`):
-   - `text` must be a string; `checkImages()` validates attachments; empty or over 400,000 characters throws, which `handle()` turns into `{t:'error'}`.
+   - `text` must be a string; `checkImages()` validates attachments; empty or over 400,000 characters throws, which `handle()` turns into `{t:'error'}` carrying the send's `ref`, so the page can give the message back.
    - `convId: null` means a new conversation: Claude Code must have been found; `checkDir()` validates the folder (default `defaultCwd`); `Conversation.create()` makes it with an idle lead; a different folder becomes the new default; the tab gets `{t:'created', convId, ref}`.
    - Otherwise `conv(convId)` finds the existing conversation.
 3. **`Conversation.userSend()`** picks the target (the lead unless `agentId` names another agent), sets the conversation title from the first message, adds a `user` item (only the image count is kept), calls `target.deliver(Agent.imageContent(text, images))`, and `touch()`es the conversation (new `updatedAt`, list broadcast, save scheduled).

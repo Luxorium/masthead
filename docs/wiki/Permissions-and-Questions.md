@@ -68,7 +68,7 @@ An answer for an unknown id is ignored. This is expected when two tabs are open:
 
 In every case `settle()` removes it from `pending` and broadcasts `permission_resolved`.
 
-Pending requests live only in memory. A tab that opens a conversation gets the ones for that conversation in the `{t:'conversation'}` reply.
+Pending requests live only in memory. A tab that connects gets all of them, from every conversation, in `AppState.pending`, and a tab that opens a conversation gets the ones for that conversation in the `{t:'conversation'}` reply.
 
 ## In the page
 

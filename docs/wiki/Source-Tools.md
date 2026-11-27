@@ -20,7 +20,7 @@ stop(caller, name)   setOwnEffort(agent, level, reason)   setAgentEffort(caller,
 autoEffort()   label(tier)
 ```
 
-`label(tier)` returns the configured model's readable name (`modelLabel`), so tool descriptions say "Start a Sonnet 5.5 agent" or whatever the settings name.
+`label(tier)` returns the configured model's readable name (`modelLabel`), so tool descriptions say "Start a Sonnet 5.5 agent" or whatever the settings name; the article comes from `withArticle()` in `server/prompts.ts` ("Start an Opus 5.5 agent").
 
 ## `reply(text)`
 
@@ -46,7 +46,7 @@ The tool descriptions are written for the model:
 - **`spawn_agent`** says the new agent gets the next name from the phonetic alphabet, and that the reply says which name.
 - **`send_message`** gives an example name ("charlie") and mentions the aliases "lead" and "parent".
 - **`stop_agent`** says it is only for work that is no longer wanted: a stopped agent sends no report, so it must never be used to wait for or collect a result.
-- **`set_effort`** depends on the tier. The lead is told it changes its own effort directly. Everyone else is told that raising needs approval, and to keep working at the current level until told the outcome.
+- **`set_effort`** says low is right for most work (the agent's actual level is in its system prompt) and depends on the tier. The lead is told it changes its own effort directly. Everyone else is told that raising needs approval, to keep working at the current level, and that an approved level applies by itself (no message follows).
 
 ## Two layers of enforcement
 

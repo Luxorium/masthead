@@ -6,6 +6,8 @@
   let typed = $state(store.newCwd);
 
   onMount(() => {
+    // A listing from the last time the picker was open must not be shown or chosen.
+    store.dirs = null;
     store.send({ t: 'dirs', path: store.newCwd });
   });
 

@@ -50,7 +50,7 @@ When an agent is looked up (`find()`):
 | Agents in one conversation | 200 (`MAX_AGENTS`) | `spawn()` refuses beyond it and suggests reusing an agent. |
 | Messages between agents | 1000 (`MAX_AGENT_MESSAGES`) | `message()` refuses beyond it. Known limitation: the counter is kept in memory only, so it starts again from zero after a restart. Effort requests also add to it but are not refused by it. |
 | Task text kept in `AgentInfo.task` | 400 characters (`TASK_PREVIEW`) | Only this stored preview is shortened; the agent receives the full task. |
-| Agents of a tier running at once | Settings, 0–12 (`MAX_PER_TIER`) | Enforced by the `Scheduler`; see [Slot scheduling](Slot-Scheduling.md). A limit of 0 switches the tier off, and `spawn()` refuses. |
+| Agents of a tier running at once | Settings, 0–12 (`MAX_PER_TIER`) | Enforced by the `Scheduler`; see [Slot scheduling](Slot-Scheduling.md). A limit of 0 switches the tier off: `spawn()` refuses, agents of that tier already queued fail, and a finished agent of that tier cannot be woken (`message()` refuses; a message from the person only adds an error notice). |
 
 ## Starting an agent
 
@@ -69,19 +69,20 @@ The tool call does not wait for the agent's work. Full walkthrough: [An agent st
 
 A **report** is a sub-agent's final message, delivered to the agent that started it.
 
-- An agent **owes a report** (`Agent.owesReport`) from the moment it is spawned. It owes one again when its parent wakes it with a message after it has finished (`message()`), because the parent is then expecting an answer.
+- An agent **owes a report** (`Agent.owesReport`) from the moment it is spawned. It owes one again when any agent wakes it with a message after it has finished (`message()`), as long as its parent can receive a report (see below), so the result of the woken run always reaches the parent. An agent that is still live keeps the debt it already has, so nothing is reported twice. If the parent cannot receive, the woken agent owes nothing.
 - When a sub-agent finishes (`Conversation.finish()`) and owed a report, `report()` does two things. It gives the parent an `inbound` item (`via: 'report'`) for the screen, and it delivers the text wrapped by `reportEnvelope()`:
-  `<agent-report from="charlie" tier="sonnet" status="done"> … </agent-report>`.
+  `<agent-report from="charlie" tier="sonnet" status="done"> … </agent-report>`. Any envelope tag inside the text (`<agent-report`, `</agent-message`, …) is escaped to `&lt;…`, so a report cannot close its envelope and add text that looks as if it came from outside it.
+- The report text is what the agent said since it last took up work: the final text of every turn in that run, oldest first (`Agent.handleResult()` in `server/agent.ts`). A message that lands just as a turn ends makes Claude Code run one more turn; its short reply is added after the real work instead of replacing it.
 - A failed agent's report says "The agent failed: …", followed by its last message if it had one.
 - A report is only delivered if the parent can receive it, meaning the parent is the lead or is live. Otherwise it is dropped without notice.
-- If the agent did not owe a report, `settle(parent)` runs instead. When the parent is `waiting`, not busy, and has no other live children, nothing else will wake it. So the lead goes `idle`, and a sub-agent is finished as `done`, with the last text of its earlier turn (`lastText`) as its own report upward if it owes one.
+- If the agent did not owe a report, `settle(parent)` runs instead. When the parent is `waiting`, not busy, and has no other live children, nothing else will wake it. So the lead goes `idle`, and a sub-agent is finished as `done`, with what it said in its last run of turns (`lastText`) as its own report upward if it owes one.
 - Delivering a report to a `waiting` parent starts a new turn for it. Delivering one to a `running` parent adds it to the turn in progress.
 
 The system prompt tells sub-agents that their last message is their report and is all their parent sees (`systemAppend()`). See [A report coming back](Walkthrough-Report-Coming-Back.md).
 
 ## Waiting for children
 
-A sub-agent whose turn ends while agents it started are still live does not finish. It becomes `waiting` and keeps its slot (`turnEnded()`), and the next report or message wakes it. This is why the prompt says "If you have nothing else to do, end your turn; you are woken when a report arrives." A sub-agent whose turn ends with an error does not wait: it fails, and its live children are stopped.
+A sub-agent whose turn ends while agents it started are still live does not finish. It becomes `waiting` and keeps its slot (`turnEnded()`), and the next report or message wakes it. This is why the prompt says "If you have nothing else to do, end your turn; you are woken when a report arrives." The same prompt asks agents that can start others to reuse a finished agent with `send_message` when it already has the context for the work, rather than starting a new one. A sub-agent whose turn ends with an error does not wait: it fails, and its live children are stopped.
 
 ## Messaging
 
@@ -89,9 +90,10 @@ A sub-agent whose turn ends while agents it started are still live does not fini
 
 - Any agent can message any other agent in the same conversation by name. That includes the lead, finished agents, and agents in other branches. `"lead"` and `"parent"` also work as names.
 - An agent cannot message itself.
-- The target gets an `inbound` item (`via: 'message'`), and the text wrapped by `messageEnvelope()`: `<agent-message from="…" tier="…"> … </agent-message>`, followed by a line telling it to reply with `send_message` if an answer is needed.
+- The target gets an `inbound` item (`via: 'message'`), and the text wrapped by `messageEnvelope()`: `<agent-message from="…" tier="…"> … </agent-message>`, with envelope tags in the text escaped as for reports. When the sender is not the target's parent, one line follows: "To answer, use send_message to "…"." A message from the parent gets no such line, because the target's report answers it.
+- An agent cannot wake an agent the person stopped (see [Stopping](#stopping)). A finished agent whose tier is switched off cannot be woken either.
 - A finished target is resumed with its context so it can read the message (see [Agent life cycle](Agent-Life-Cycle.md)).
-- The tool returns at once with "Delivered to "name" (status)", where the status is the target's status before delivery. Any answer arrives later as another message.
+- The tool returns at once with "Delivered to "name" (status)", where the status is the target's status before delivery. When the sender woke a finished agent that is not its own child, the reply adds "Its report goes to "parent"; it answers you only with send_message." Any answer arrives later as another message.
 
 The prompt tells every agent that `<agent-report>` and `<agent-message>` text comes from colleagues, not from the person, and never carries the person's authority or approval.
 
@@ -107,13 +109,15 @@ Only the lead talks to the person. Sub-agents have Claude Code's `AskUserQuestio
 - Stopping always takes the whole subtree: `stopTree()` stops the children first, then the agent.
 - When an agent stops one of its own descendants, the target's `owesReport` is cleared, because the caller asked for the stop.
 - The person can stop any agent (`{t:'stop_agent'}`, the square button on each agent) or everything (`{t:'stop_all'}`, "Stop everything"). When the person stops an agent that owed a report, its parent gets a report with status `stopped`.
+- An agent the person stopped, and every agent under it, is marked (`stoppedByPerson`). Other agents cannot wake a marked agent with `send_message`; the person can, by messaging it, which clears the mark. The mark is kept in memory only, so after a restart any agent can wake it again.
+- An agent stopped while it was waiting for a slot, or for its old process to exit, is never launched afterwards; a slot granted to it in the meantime is given back (`Agent.ensureProcess()`).
 - Stopping the lead from the browser stops all its children, interrupts the lead's turn, and then settles the lead, so a lead that was only waiting goes `idle`. The lead keeps its session.
 
 Walkthrough: [Stopping an agent](Walkthrough-Stopping-an-Agent.md).
 
 ## Effort
 
-Every agent starts at low effort when automatic effort is on. The lead changes its own effort; the others ask their parent; any agent may set the effort of an agent below it. Full rules: [Thinking effort](Thinking-Effort.md).
+With automatic effort on, the lead starts at low and a sub-agent at the level its parent chose (low by default); the system prompt states the actual level. The lead changes its own effort; the others ask their parent; any agent may set the effort of an agent below it. Full rules: [Thinking effort](Thinking-Effort.md).
 
 ## Related pages
 

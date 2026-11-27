@@ -6,13 +6,13 @@ The message types themselves (`ClientMsg`, `ServerMsg`, `Item`) are explained on
 
 ## Version
 
-`VERSION = '0.1.0'`. Used by the health endpoint, the launcher, `AppState`, the `CLAUDE_AGENT_SDK_CLIENT_APP` variable (`agentEnv()` in `server/config.ts`) and the team-tool server's version (`server/tools.ts`).
+`VERSION = '0.1.1'`. Used by the health endpoint, the launcher, `AppState`, the `CLAUDE_AGENT_SDK_CLIENT_APP` variable (`agentEnv()` in `server/config.ts`) and the team-tool server's version (`server/tools.ts`).
 
 ## Tiers
 
 - `Tier` = `'lead' | 'opus' | 'sonnet' | 'haiku'`. `TIERS` lists them from the top down.
 - `CHILD_TIER`: which tier each one may start (lead → opus → sonnet → haiku → `null`).
-- `TIER_LABEL`: fixed display names: "Fable 5.2", "Opus 5.5", "Sonnet 5.5", "Haiku 5.5". In 0.1.0 the only remaining use is in the accessible labels of the team panel's +/− buttons (`web/src/lib/TeamPanel.svelte`). Everything else shows names made by `modelLabel()`.
+- `TIER_LABEL`: fixed display names: "Fable 5.2", "Opus 5.5", "Sonnet 5.5", "Haiku 5.5". The only remaining use is in the accessible labels of the team panel's +/− buttons (`web/src/lib/TeamPanel.svelte`). Everything else shows names made by `modelLabel()`.
 - `modelLabel(model)`: turns a model id into the name people use. `claude-opus-5-5` becomes "Opus 5.5", `claude-opus-5` becomes "Opus 5", and `claude-sonnet-4-5-20250929` becomes "Sonnet 4.5". It recognises the families fable, mythos, opus, sonnet and haiku; any other id is shown unchanged. Because of this, the tier names in prompts, tool replies and on the page follow whatever model the settings name.
 
 ## Agent names
@@ -37,7 +37,7 @@ See [Thinking effort](Thinking-Effort.md).
 
 - `TierSettings`: `model`, `effort` (a ceiling or a fixed level, depending on `autoEffort`) and `max` (ignored for the lead).
 - `PermissionChoice` / `PERMISSION_CHOICES`: `inherit`, `default`, `acceptEdits`, `auto`, `bypassPermissions`.
-- `Settings`: `tiers`, `permissionMode`, `autoEffort`, `leanSubagents`, `defaultCwd`.
+- `Settings`: `tiers`, `permissionMode`, `autoEffort`, `leanSubagents` (Sonnet and Haiku skip the person's own MCP servers), `leanOpus` (Opus agents skip them too), `collapseReports` (reports are shown folded shut until the person opens them), `defaultCwd`.
 - `MAX_PER_TIER = 12`: the highest allowed `max`.
 
 See [Configuration and settings](Configuration-and-Settings.md).
@@ -67,7 +67,8 @@ See [Configuration and settings](Configuration-and-Settings.md).
 - `Question`, `QuestionOption`, `PermissionRequest`: see [Permissions and questions](Permissions-and-Questions.md).
 - `ImageAttachment`: `mediaType` (PNG, JPEG, GIF or WebP) and the base64 `data`, without a `data:` prefix.
 - `RateLimitNotice`: `status`, `type?`, `utilization?`, `resetsAt?` (seconds since 1970; the page multiplies it by 1000).
-- `AppState`: `version`, `settings`, `conversations`, `claude` (`path`, `version`, `error?`) and `home`. The page uses `home` to show paths with `~` (`shortPath()` in `web/src/lib/store.svelte.ts`).
+- `AppState`: `version`, `settings`, `conversations`, `claude` (`path`, `version`, `error?`), `home`, `pending` (every approval request and question still open, in any conversation) and `usage` (the latest `RateLimitNotice` of each limit type Claude Code has reported since Masthead started). The page uses `home` to show paths with `~` (`shortPath()` in `web/src/lib/store.svelte.ts`).
+- In `ClientMsg`, `send` has an optional `ref`; in `ServerMsg`, both `created` and `error` carry `ref?`, so the browser can match a reply, or a refusal, to its own request.
 
 ## Related pages
 

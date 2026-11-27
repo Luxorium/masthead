@@ -3,13 +3,12 @@
     EFFORTS,
     EFFORT_LABEL,
     MAX_PER_TIER,
-    PERMISSION_CHOICES,
     TIER_LABEL,
     displayName,
     modelLabel,
     type AgentInfo,
     type Effort,
-    type PermissionChoice,
+    type RateLimitNotice,
     type Settings,
     type Tier,
   } from '../../../shared/protocol.ts';
@@ -24,19 +23,46 @@
     const name = modelLabel(s.tiers[above].model).split(' ')[0];
     return above === 'lead' ? `Started by ${name}` : `Started by ${name} agents`;
   }
-  const MODE: Record<PermissionChoice, string> = {
-    inherit: 'Use my Claude Code settings',
-    default: 'Ask me first',
-    acceptEdits: 'Accept file edits, ask for the rest',
-    auto: 'Auto (a classifier decides)',
-    bypassPermissions: 'Bypass all checks',
-  };
+  const update = (change: (s: Settings) => void) => store.updateSettings(change);
 
-  function update(change: (s: Settings) => void) {
-    if (!store.settings) return;
-    const next = structuredClone($state.snapshot(store.settings)) as Settings;
-    change(next);
-    store.saveSettings(next);
+  // Names for Claude Code's `rateLimitType` values (sdk.d.ts, SDKRateLimitInfo).
+  const LIMIT_NAME: Record<string, string> = {
+    five_hour: 'Current session (5 hours)',
+    seven_day: 'Weekly, all models',
+    seven_day_opus: 'Weekly, Opus',
+    seven_day_sonnet: 'Weekly, Sonnet',
+    seven_day_overage_included: 'Weekly, with extra usage',
+    overage: 'Extra usage',
+  };
+  const LIMIT_ORDER = Object.keys(LIMIT_NAME);
+
+  const limits = $derived(
+    Object.values(store.usage).sort((a, b) => {
+      const ia = LIMIT_ORDER.indexOf(a.type ?? ''), ib = LIMIT_ORDER.indexOf(b.type ?? '');
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    }),
+  );
+
+  function limitName(n: RateLimitNotice): string {
+    if (!n.type) return 'Usage limit';
+    return LIMIT_NAME[n.type] ?? n.type.replace(/_/g, ' ');
+  }
+
+  /**
+   * Percent used, or null when not reported. sdk.d.ts does not say the scale of this field (its
+   * /usage endpoint uses 0-100), so a value of 1 or less is read as a fraction.
+   */
+  function percent(n: RateLimitNotice): number | null {
+    if (typeof n.utilization !== 'number' || !Number.isFinite(n.utilization)) return null;
+    const p = n.utilization <= 1 ? n.utilization * 100 : n.utilization;
+    return Math.max(0, Math.min(100, Math.round(p)));
+  }
+
+  function resets(n: RateLimitNotice): string | null {
+    if (!n.resetsAt) return null;
+    const d = new Date(n.resetsAt * 1000);
+    const soon = d.getTime() - Date.now() < 20 * 3600 * 1000;
+    return d.toLocaleString([], soon ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' });
   }
 
   function step(tier: Tier, by: number) {
@@ -113,31 +139,33 @@
         </div>
       {/each}
 
-      <label class="check">
-        <input type="checkbox" checked={s.autoEffort} onchange={(e) => update((n) => (n.autoEffort = e.currentTarget.checked))} />
-        <span>
-          <b>Automatic effort</b>
-          <small>Everyone starts at Low. Fable raises its own; the others ask the agent above them.</small>
-        </span>
-      </label>
-      <label class="check">
-        <input type="checkbox" checked={s.leanSubagents} onchange={(e) => update((n) => (n.leanSubagents = e.currentTarget.checked))} />
-        <span>
-          <b>Lean Sonnet and Haiku</b>
-          <small>They skip your connected services, which keeps their context small.</small>
-        </span>
-      </label>
-      <label class="line mode">
-        <span>Permissions</span>
-        <select value={s.permissionMode} onchange={(e) => update((n) => (n.permissionMode = e.currentTarget.value as PermissionChoice))}>
-          {#each PERMISSION_CHOICES as m (m)}<option value={m}>{MODE[m]}</option>{/each}
-        </select>
-      </label>
       {#if s.permissionMode === 'bypassPermissions'}
-        <p class="warn">Every agent can run any command and change any file without asking.</p>
+        <p class="warn">Permissions are set to bypass: every agent can run any command without asking.</p>
       {/if}
     </section>
   {/if}
+
+  <section>
+    <h2>Usage</h2>
+    {#if limits.length === 0}
+      <p class="small muted">No usage reported yet; it appears once an agent has run.</p>
+    {:else}
+      {#each limits as n (n.type ?? '')}
+        {@const p = percent(n)}
+        {@const r = resets(n)}
+        <div class="limit">
+          <div class="limit-head">
+            <span>{limitName(n)}</span>
+            {#if n.status === 'rejected'}<span class="limit-hit">limit reached</span>{:else if p !== null}<span class="pct">{p}% used</span>{/if}
+          </div>
+          {#if p !== null}
+            <div class="bar" class:hot={n.status !== 'allowed'} role="progressbar" aria-valuenow={p} aria-valuemin="0" aria-valuemax="100" aria-label="{limitName(n)} used"><i style:width="{p}%"></i></div>
+          {/if}
+          {#if r}<div class="small muted">Resets {r}</div>{/if}
+        </div>
+      {/each}
+    {/if}
+  </section>
 
   {#if store.conv && lead}
     <section>
@@ -280,41 +308,30 @@
     font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
-  .check {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    margin-top: 10px;
-    font-size: 13.5px;
-  }
-  .check input {
-    margin-top: 3px;
-    accent-color: var(--accent);
-  }
-  .check b {
-    display: block;
-    font-weight: 500;
-  }
-  .check small {
-    display: block;
-    font-size: 12px;
-    color: var(--muted);
-    line-height: 1.4;
-  }
-  .mode {
-    margin-top: 10px;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-  }
-  .mode span {
-    font-size: 12px;
-    color: var(--muted);
-  }
   .warn {
     margin: 6px 0 0;
     font-size: 12px;
     color: var(--bad);
+  }
+  .limit + .limit {
+    margin-top: 10px;
+  }
+  .limit-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+    font-size: 13px;
+  }
+  .pct {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .limit-hit {
+    color: var(--bad);
+  }
+  .limit .small {
+    margin-top: 3px;
   }
   .ctx {
     display: flex;
@@ -334,6 +351,9 @@
     display: block;
     height: 100%;
     background: var(--accent);
+  }
+  .bar.hot i {
+    background: var(--warn);
   }
   .small {
     margin: 6px 0 0;

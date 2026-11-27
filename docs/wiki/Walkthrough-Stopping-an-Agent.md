@@ -14,6 +14,7 @@ sequenceDiagram
   participant K as its children
   participant L as alpha, the lead (its parent)
   B->>C: stop_agent(bravo)
+  C->>C: mark bravo and its subtree in stoppedByPerson
   C->>C: remember wasLive, owesReport
   C->>K: stopTree(child) for each (children first, recursively)
   C->>X: stopTree(bravo)
@@ -27,7 +28,7 @@ sequenceDiagram
 
 Step by step:
 
-1. `stopAgent()` finds the agent. It records whether it was live and whether it owed a report **before** stopping, because `stopTree()` clears `owesReport`.
+1. `stopAgent()` finds the agent and marks it and every agent under it in `stoppedByPerson`. From now on other agents cannot wake them with `send_message` ("Error: the person stopped "bravo"; only they can wake it."); the person can, by messaging the agent, which clears its mark. The marks are in memory only and are gone after a restart. It then records whether it was live and whether it owed a report **before** stopping, because `stopTree()` clears `owesReport`.
 2. `stopTree(agent, why)` recurses into the children first, so the deepest agents stop first. For each agent that is live:
    - `host.cancelPermissions(agent.id)` denies any approval request from it ("The agent was stopped.");
    - `owesReport = false`;
@@ -38,12 +39,14 @@ Step by step:
 
 When the process ends, `consume()` sees `closing` is set and does not report a lost process.
 
+An agent stopped while it was still queued, or while its old process was exiting, is never launched afterwards. `end()` bumps the agent's generation counter; when the slot (or the old process's exit) arrives, `ensureProcess()` sees the counter changed, does not call `launch()`, and gives back a slot that was granted in the meantime. Without this, stopping one queued agent could free a slot that went straight to another agent already being stopped.
+
 ## The person stops the lead or everything
 
 - `{t:'stop_agent'}` with the lead's id: `stopTree()` on each of the lead's children, then `lead.interrupt()`, then `settle(lead)`. The lead keeps its session and process. `interrupt()` only acts if the lead is `running` (its turn then ends as interrupted); if the lead was `waiting` on those children, `settle()` moves it to `idle`.
 - `{t:'stop_all'}` (the "Stop everything" button): `stopAll()` does the same, then calls `settle(lead)` once more.
 
-No reports are sent in either case: `stopTree()` clears `owesReport` and the lead is not told.
+No reports are sent in either case: `stopTree()` clears `owesReport` and the lead is not told. Every sub-agent is marked in `stoppedByPerson`, so the lead cannot wake them again; the person can.
 
 ## Interrupting the lead
 
@@ -56,7 +59,7 @@ An agent that can start others has `stop_agent`. `Conversation.stop(caller, name
 1. finds the target (`parent` means the caller's parent, which then fails the next check);
 2. requires `isAncestor(caller, target)`: only agents started by the caller or below it;
 3. returns "\"name\" is not running (status)." if it is not live;
-4. clears `owesReport` (the caller asked for it, so no report is needed), `stopTree(target, 'Stopped by "caller".')`;
+4. clears `owesReport` (the caller asked for it, so no report is needed), `stopTree(target, 'Stopped by "caller".')`. This does not mark the target in `stoppedByPerson`, so agents may wake it again later;
 5. if the target's parent is not the caller (a grandchild was stopped), `settle()`s that parent;
 6. returns "Stopped "name" and everything under it."
 

@@ -5,10 +5,14 @@
 
   const MAX_IMAGES = 8;
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  /** Base64 grows by a third; this keeps a full message well under the server's 48 MB socket limit. */
+  const MAX_TOTAL_BYTES = 30 * 1024 * 1024;
   const TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
-  let text = $state('');
-  let images = $state<Array<ImageAttachment & { url: string; name: string }>>([]);
+  // The parent remounts this component (in a key block) when the conversation or agent changes, so
+  // each keeps its own unsent text and images.
+  const key = store.composerKey;
+  const draft = store.composerFor(key);
   let area = $state<HTMLTextAreaElement | null>(null);
   let picker = $state<HTMLInputElement | null>(null);
   let choosingFolder = $state(false);
@@ -19,7 +23,7 @@
   const direct = $derived(!isNew && agent !== null && agent.tier !== 'lead');
   const leadBusy = $derived(store.lead?.status === 'running');
   const anyLive = $derived(store.liveCount > 0);
-  const canSend = $derived((text.trim().length > 0 || images.length > 0) && store.connected && !store.creating && !!store.app?.claude.path);
+  const canSend = $derived((draft.text.trim().length > 0 || draft.images.length > 0) && store.connected && !store.creating && !!store.app?.claude.path);
   const placeholder = $derived(
     isNew
       ? 'Ask for anything'
@@ -44,28 +48,21 @@
   }
 
   $effect(() => {
-    void text;
+    void draft.text;
     resize();
   });
 
-  // Typing anywhere starts in the box when a conversation or agent is opened.
+  // Typing anywhere starts in the box when a conversation or agent is opened (this mounts then).
   $effect(() => {
-    void store.convId;
-    void store.viewAgentId;
     area?.focus();
   });
 
   function submit() {
     if (!canSend) return;
-    const ok = store.sendMessage(
-      text.trim(),
-      images.map(({ mediaType, data }) => ({ mediaType, data })),
-    );
-    if (!ok) return;
-    text = '';
-    for (const img of images) URL.revokeObjectURL(img.url);
-    images = [];
+    store.sendMessage(key);
   }
+
+  const totalBytes = () => draft.images.reduce((n, img) => n + img.size, 0);
 
   function onKey(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -84,17 +81,36 @@
         store.fail(`${file.name} is larger than 5 MB.`);
         continue;
       }
-      if (images.length >= MAX_IMAGES) {
+      if (draft.images.length >= MAX_IMAGES) {
         store.fail(`At most ${MAX_IMAGES} images per message.`);
         break;
       }
-      const data = await new Promise<string>((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(String(r.result).split(',')[1] ?? '');
-        r.onerror = () => rej(r.error);
-        r.readAsDataURL(file);
-      });
-      images.push({ mediaType: file.type as ImageAttachment['mediaType'], data, url: URL.createObjectURL(file), name: file.name || 'image' });
+      if (totalBytes() + file.size > MAX_TOTAL_BYTES) {
+        store.fail(`${file.name || 'That image'} would take this message over 30 MB of images. Send it in another message.`);
+        continue;
+      }
+      let data: string;
+      try {
+        data = await new Promise<string>((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result).split(',')[1] ?? '');
+          r.onerror = () => rej(r.error);
+          r.readAsDataURL(file);
+        });
+      } catch {
+        store.fail(`${file.name || 'That image'} could not be read.`);
+        continue;
+      }
+      // Checked again: another paste or drop may have added images while this one was read.
+      if (draft.images.length >= MAX_IMAGES) {
+        store.fail(`At most ${MAX_IMAGES} images per message.`);
+        break;
+      }
+      if (totalBytes() + file.size > MAX_TOTAL_BYTES) {
+        store.fail(`${file.name || 'That image'} would take this message over 30 MB of images. Send it in another message.`);
+        continue;
+      }
+      draft.images.push({ mediaType: file.type as ImageAttachment['mediaType'], data, url: URL.createObjectURL(file), name: file.name || 'image', size: file.size });
     }
   }
 
@@ -112,7 +128,7 @@
   }
 
   function removeImage(i: number) {
-    const [gone] = images.splice(i, 1);
+    const [gone] = draft.images.splice(i, 1);
     if (gone) URL.revokeObjectURL(gone.url);
   }
 </script>
@@ -129,9 +145,9 @@
   ondragleave={() => (dragging = false)}
   ondrop={onDrop}
 >
-  {#if images.length > 0}
+  {#if draft.images.length > 0}
     <div class="images">
-      {#each images as img, i (img.url)}
+      {#each draft.images as img, i (img.url)}
         <div class="thumb">
           <img src={img.url} alt={img.name} />
           <button onclick={() => removeImage(i)} aria-label="Remove image">×</button>
@@ -145,8 +161,8 @@
       void addFiles(e.currentTarget.files ?? []);
       e.currentTarget.value = '';
     }} />
-    <textarea bind:this={area} bind:value={text} rows="1" {placeholder} onkeydown={onKey} onpaste={onPaste}></textarea>
-    {#if leadBusy && !direct && !text.trim() && images.length === 0}
+    <textarea bind:this={area} bind:value={draft.text} rows="1" {placeholder} onkeydown={onKey} onpaste={onPaste}></textarea>
+    {#if leadBusy && !direct && !draft.text.trim() && draft.images.length === 0}
       <button class="round stop" onclick={() => store.convId && store.send({ t: 'interrupt', convId: store.convId })} title="Stop this turn" aria-label="Stop this turn">■</button>
     {:else}
       <button class="round send" disabled={!canSend} onclick={submit} title="Send (Enter)" aria-label="Send">↑</button>
@@ -165,8 +181,16 @@
         <FolderPicker onclose={() => (choosingFolder = false)} />
       {/if}
     </div>
-  {:else if anyLive}
-    <button class="chip danger" onclick={() => store.convId && store.send({ t: 'stop_all', convId: store.convId })}>Stop everything</button>
+  {:else}
+    {#if store.conv}
+      <span class="chip static" title="Folder the agents work in: {store.conv.cwd}">
+        <span class="muted">Folder</span>
+        <span class="mono">{shortPath(store.conv.cwd, store.app?.home)}</span>
+      </span>
+    {/if}
+    {#if anyLive}
+      <button class="chip danger" onclick={() => store.convId && store.send({ t: 'stop_all', convId: store.convId })}>Stop everything</button>
+    {/if}
   {/if}
   <span class="spacer"></span>
   {#if store.settings}
@@ -308,8 +332,12 @@
     flex: none;
     white-space: nowrap;
   }
-  .chip:hover {
+  .chip:hover:not(.static) {
     border-color: var(--border-strong);
+  }
+  .chip.static {
+    min-width: 0;
+    flex: 0 1 auto;
   }
   .chip.danger {
     color: var(--bad);

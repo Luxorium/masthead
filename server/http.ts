@@ -1,6 +1,8 @@
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { timingSafeEqual } from 'node:crypto';
+import { createReadStream, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { extname, join, normalize, resolve } from 'node:path';
+import type { AddressInfo } from 'node:net';
+import { extname, join, normalize, resolve, sep } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { VERSION, type ServerMsg } from '../shared/protocol.js';
 import type { App, Client } from './app.js';
@@ -18,25 +20,51 @@ const TYPES: Record<string, string> = {
 };
 
 const MAX_WS_PAYLOAD = 48 * 1024 * 1024;
+const PING_MS = 30_000;
+/** The socket's subprotocol. The page also offers `key.<secret>`, which is checked and never echoed. */
+const PROTOCOL = 'masthead';
+const KEY_PREFIX = 'key.';
+const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+/** What the server needs from the app; tests pass a stand-in. */
+export type ServedApp = Pick<App, 'connect' | 'disconnect' | 'handle' | 'workingCount'>;
 
 export interface ServeOptions {
+  /** 0 picks a free port (tests). */
   port: number;
   webDir: string;
+  /** The local secret (see config.ts loadSecret). */
+  secret: string;
   /** Extra origins allowed to open the socket, e.g. the Vite dev server. */
   extraOrigins?: string[];
   onShutdown: () => void;
 }
 
+/** Whether `given` is the secret, compared in constant time. */
+function secretOk(secret: string, given: unknown): boolean {
+  if (typeof given !== 'string' || !given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(secret);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** The secret offered as a `key.<secret>` subprotocol, if any. */
+function offeredKey(req: IncomingMessage): string | undefined {
+  const offered = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((p) => p.trim());
+  return offered.find((p) => p.startsWith(KEY_PREFIX))?.slice(KEY_PREFIX.length);
+}
+
 /**
  * The server listens on 127.0.0.1 only, and it can run commands as the person, so it also refuses
  * requests a web page elsewhere could trick a browser into making: the Host header must name this
- * server (which defeats DNS rebinding) and a socket must be opened by Masthead's own page.
+ * server (which defeats DNS rebinding) and a socket must be opened by Masthead's own page. On top of
+ * that the socket and shutdown need the local secret, which other users on the machine cannot read.
+ * `masthead` opens the page with `?key=<secret>`; the page keeps it (per origin) and offers it as a
+ * subprotocol when it opens the socket. The page itself holds no secret and is served to anyone.
  */
-export function serve(app: App, opts: ServeOptions): Promise<Server> {
-  const hosts = new Set([`127.0.0.1:${opts.port}`, `localhost:${opts.port}`]);
-  // In development the page is served by another local server that forwards requests here.
-  for (const origin of opts.extraOrigins ?? []) hosts.add(new URL(origin).host);
-  const origins = new Set([`http://127.0.0.1:${opts.port}`, `http://localhost:${opts.port}`, ...(opts.extraOrigins ?? [])]);
+export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
+  const hosts = new Set<string>();
+  const origins = new Set<string>(opts.extraOrigins ?? []);
   const webRoot = resolve(opts.webDir);
 
   const hostOk = (req: IncomingMessage) => hosts.has(req.headers.host ?? '');
@@ -45,11 +73,12 @@ export function serve(app: App, opts: ServeOptions): Promise<Server> {
     if (!hostOk(req)) return void send(res, 403, 'Forbidden');
     const url = new URL(req.url ?? '/', 'http://x');
     if (url.pathname === '/api/health') {
-      return void sendJson(res, 200, { name: 'masthead', version: VERSION, pid: process.pid });
+      return void sendJson(res, 200, { name: 'masthead', version: VERSION, pid: process.pid, busy: app.workingCount() });
     }
     if (url.pathname === '/api/shutdown') {
       // A custom header cannot be sent cross-site without a preflight this server never grants.
-      if (req.method !== 'POST' || req.headers['x-masthead'] !== '1') return void send(res, 403, 'Forbidden');
+      const authorised = secretOk(opts.secret, req.headers['x-masthead-key']);
+      if (req.method !== 'POST' || req.headers['x-masthead'] !== '1' || !authorised) return void send(res, 403, 'Forbidden');
       sendJson(res, 200, { ok: true });
       setTimeout(opts.onShutdown, 50);
       return;
@@ -58,10 +87,11 @@ export function serve(app: App, opts: ServeOptions): Promise<Server> {
     serveStatic(webRoot, url.pathname, req, res);
   });
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD });
+  // The key was checked before the upgrade; the answer names only the plain subprotocol.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_PAYLOAD, handleProtocols: () => PROTOCOL });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://x');
-    if (url.pathname !== '/ws' || !hostOk(req) || !origins.has(req.headers.origin ?? '')) {
+    if (url.pathname !== '/ws' || !hostOk(req) || !origins.has(req.headers.origin ?? '') || !secretOk(opts.secret, offeredKey(req))) {
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
@@ -73,12 +103,17 @@ export function serve(app: App, opts: ServeOptions): Promise<Server> {
     server.once('error', reject);
     server.listen(opts.port, '127.0.0.1', () => {
       server.off('error', reject);
+      const port = (server.address() as AddressInfo).port;
+      hosts.add(`127.0.0.1:${port}`).add(`localhost:${port}`);
+      // In development the page is served by another local server that forwards requests here.
+      for (const origin of opts.extraOrigins ?? []) hosts.add(new URL(origin).host);
+      origins.add(`http://127.0.0.1:${port}`).add(`http://localhost:${port}`);
       resolveServer(server);
     });
   });
 }
 
-function attach(app: App, ws: WebSocket): void {
+function attach(app: ServedApp, ws: WebSocket): void {
   const client: Client = {
     send(msg: ServerMsg) {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -95,9 +130,15 @@ function attach(app: App, ws: WebSocket): void {
     }
     app.handle(client, parsed);
   });
+  // A socket that stops answering pings (a sleeping laptop, a dropped network) is ended.
+  let answered = true;
+  ws.on('pong', () => (answered = true));
   const alive = setInterval(() => {
-    if (ws.readyState === ws.OPEN) ws.ping();
-  }, 30_000);
+    if (ws.readyState !== ws.OPEN) return;
+    if (!answered) return void ws.terminate();
+    answered = false;
+    ws.ping();
+  }, PING_MS);
   ws.on('close', () => {
     clearInterval(alive);
     app.disconnect(client);
@@ -122,22 +163,45 @@ function serveStatic(root: string, pathname: string, req: IncomingMessage, res: 
   } catch {
     return send(res, 400, 'Bad request');
   }
+  if (rel.includes('\0')) return send(res, 400, 'Bad request');
   let file = join(root, rel);
-  if (!file.startsWith(root)) return send(res, 403, 'Forbidden');
+  if (file !== root && !file.startsWith(root + sep)) return send(res, 403, 'Forbidden');
   const isAsset = rel.startsWith('/assets/');
-  if (!existsSync(file) || !statSync(file).isFile()) {
+  if (!isFile(file)) {
     if (isAsset || extname(rel)) return send(res, 404, 'Not found');
     file = join(root, 'index.html'); // the page handles its own routes
   }
-  if (!existsSync(file)) return send(res, 503, 'The web page has not been built. Run: npm run build');
-  res.writeHead(200, {
+  if (!isFile(file)) return send(res, 503, 'The web page has not been built. Run: npm run build');
+  const head = {
+    'x-content-type-options': 'nosniff',
+    // Also keeps the ?key in the address from leaking to any other site.
+    'referrer-policy': 'no-referrer',
+    'content-security-policy': CSP,
     'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
     // Built assets have a content hash in their name; the page itself must always be fresh.
     'cache-control': isAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
-    'x-content-type-options': 'nosniff',
-    'referrer-policy': 'no-referrer',
-    'content-security-policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+  };
+  if (req.method === 'HEAD') {
+    res.writeHead(200, head);
+    return void res.end();
+  }
+  // The file can vanish between the check and the read (during a rebuild): answer 404, never crash.
+  const stream = createReadStream(file);
+  stream.on('open', () => {
+    res.writeHead(200, head);
+    stream.pipe(res);
   });
-  if (req.method === 'HEAD') return void res.end();
-  createReadStream(file).pipe(res);
+  stream.on('error', () => {
+    if (!res.headersSent) send(res, 404, 'Not found');
+    else res.destroy();
+  });
+  res.on('close', () => stream.destroy());
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }

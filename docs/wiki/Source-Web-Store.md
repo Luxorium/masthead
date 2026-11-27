@@ -9,16 +9,19 @@ The `.svelte.ts` extension lets the file use Svelte runes outside a component. E
 | Field | Meaning |
 |---|---|
 | `connected` | Whether the socket is open. |
+| `signedOut` | `'nokey'` (no key in this browser), `'refused'` (three closes before the socket ever opened) or null. `App.svelte` shows the sign-in page when set. |
 | `app`, `settings`, `conversations` | From `state`, `settings` and `conversations` messages. |
 | `convId` | The open conversation, or null for the new-conversation screen. |
 | `agents` | `AgentInfo` by id, for the open conversation only. |
 | `viewAgentId` | The agent whose chat is shown; null means the lead. |
 | `items`, `drafts` | Transcripts and live drafts by agent id, only for agents that have been loaded. |
-| `pending` | Open approval requests (all conversations). |
+| `pending` | Open approval requests in every conversation. Replaced from `state.pending` on every `state` message, so the sidebar counts are right after a reload or reconnect. |
 | `view` | `'chat'` or `'map'`. |
 | `newCwd`, `dirs` | The folder chosen for a new conversation, and the folder picker's current listing. |
-| `error`, `rateLimit` | The toast message, and the usage-limit notice (cleared when the status is `allowed`). |
-| `creating` | True between sending the first message of a new conversation and the server's `created`. |
+| `error`, `rateLimit` | The toast message, and the notice the banner shows: the worst known usage window (`rejected`, else `allowed_warning`, else none). |
+| `usage` | The latest notice per usage window (`five_hour`, `seven_day`, …), filled from `state.usage` and updated by each `rate_limit`. The server sends one notice per window. |
+| `creating` | True between sending the first message of a new conversation and the server's `created`. Reset on `state`, on socket drop and on errors. |
+| `composer` | Unsent text and images (`ComposerDraft`) per conversation and agent, keyed by `composerKey` (`<convId or 'new'>:<agentId or 'lead'>`). Kept while you switch around; lost on reload. |
 
 Derived values (recomputed automatically):
 
@@ -29,10 +32,15 @@ Derived values (recomputed automatically):
 - `viewItems`, `viewDraft`.
 - `convPending`: requests for the open conversation.
 - `liveCount`: live sub-agents, shown on the "Team map" tab.
+- `composerKey`: the key of the draft on screen now.
 
 ## Connecting
 
-`connect()` opens `ws://<page host>/ws` (`wss` on https). If the socket closes, it tries again after 400 ms, doubling each time up to 5 seconds. On reconnect, the server's `state` message makes the store reopen the current conversation, so nothing stays stale.
+`connect()` first takes the sign-in key: from `?key=` in the address (saved to `localStorage` as `masthead.key` and removed from the address), else from `localStorage`, which is read again on every connect in case another tab was signed in with a newer key. With no key it sets `signedOut = 'nokey'` and stops. Otherwise it opens `ws://<page host>/ws` (`wss` on https) with the subprotocols `masthead` and `key.<secret>`.
+
+If the socket closes, it tries again after 400 ms, doubling each time up to 5 seconds. Three closes in a row without the socket ever opening set `signedOut = 'refused'` and stop; `retryConnect()` (the Try again button) starts over. On reconnect, the server's `state` message makes the store reopen the current conversation, so nothing stays stale.
+
+When a socket closes, messages sent but not yet accepted go back into the composer (see `sendMessage`).
 
 `send(msg)` refuses with the toast "Not connected to Masthead. Is it still running?" when the socket is not open, and returns false so callers can keep what the person typed.
 
@@ -40,20 +48,20 @@ Derived values (recomputed automatically):
 
 | Message | What the store does |
 |---|---|
-| `state` | Stores the app state, settings and list. Sets `newCwd` to the default folder if empty. Reopens the current conversation, or the one in the URL hash if it exists; otherwise shows the new-conversation screen. |
+| `state` | Stores the app state, settings and list; replaces `pending` and `usage`; clears `creating`. Sets `newCwd` to the default folder if empty. Reopens the current conversation, or the one in the URL hash if it exists; otherwise shows the new-conversation screen. |
 | `conversations` | Replaces the list. |
 | `conversation` | Ignored unless it is for the open conversation. Replaces `agents`, merges in its pending requests, keeps the viewed agent if it still exists, and loads that agent's transcript. |
-| `created` | If `ref` matches its own request, clears `creating` and opens the new conversation. |
+| `created` | Marks the send with that `ref` as accepted. If `ref` matches its own new-conversation request, clears `creating` and opens the new conversation. |
 | `deleted` | Drops its pending requests; returns to the new-conversation screen if it was open. |
 | `items` | Stores the transcript and draft (open conversation only). |
 | `agent` | Updates the agent if it belongs to the open conversation. |
-| `item` | Replaces the item with the same id, or appends it. Ignored if that transcript was never loaded. |
+| `item` | A `user` item marks the matching pending send (same conversation and text) as accepted. Then, for the open conversation, replaces the item with the same id or appends it; ignored if that transcript was never loaded. |
 | `draft` | Stores it (open conversation only). |
 | `permission_request` / `permission_resolved` | Adds or removes the request. |
 | `settings` | Replaces the settings. |
-| `rate_limit` | Keeps the notice unless the status is `allowed`. |
+| `rate_limit` | Stores the notice in `usage` under its window, and points `rateLimit` at the worst known window. |
 | `dirs` | Stores the listing for the folder picker. |
-| `error` | Clears `creating` and shows the toast. |
+| `error` | If `ref` names a pending send, gives it back to the composer (and clears `creating` if it was the new-conversation request). An error without `ref` clears `creating`. Shows the toast. |
 
 ## Actions
 
@@ -61,11 +69,15 @@ Derived values (recomputed automatically):
 - `newConversation()`: clears everything and removes the hash.
 - `loadItems(agentId)`: sends `items` if that transcript is not loaded yet.
 - `viewOf(agentId)`: shows that agent's chat (null for the lead) and loads its transcript.
-- `sendMessage(text, images)`:
-  - On the new-conversation screen, it sends `send` with `convId: null`, the chosen folder and a fresh `ref`, and sets `creating`.
+- `composerFor(key)`: the draft for a key, created empty if missing.
+- `sendMessage(key)`: sends that draft with a fresh `ref` and empties it, keeping a copy until the server accepts it.
+  - On the new-conversation screen, it sends `send` with `convId: null` and the chosen folder, and sets `creating`.
   - Otherwise it sends to the open conversation, with `agentId` when a sub-agent's chat is open.
+  - Accepted means `created` with that `ref`, or the `user` item appearing. Refused (`error` with that `ref`) or a dropped socket puts the text and images back, unless the person has already typed something new in that draft.
+- `dropItems(agentId)`: forgets a transcript fetched only for a team-map preview (never the one on screen).
+- `updateSettings(change)`: clones the settings, applies `change`, and calls `saveSettings()`.
 - `saveSettings(next)`: updates the local copy immediately and sends `settings`.
-- `answer(requestId, decision, answers?)`: sends `permission` and removes the card at once.
+- `answer(requestId, decision, answers?)`: sends `permission` and removes the card, unless the send failed (not connected), in which case the card stays.
 - `childrenOf(id)`, `pathTo(id)`: tree helpers for the map, the panel and the breadcrumbs.
 
 ## Helpers exported with it

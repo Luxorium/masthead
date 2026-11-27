@@ -1,16 +1,25 @@
 # Tests
 
-Masthead has three kinds of test in `test/`. Only the unit tests run without Claude Code. The other two spend real usage and are run by hand. `AGENTS.md` says when each one is expected.
+Masthead 0.1.1 has three kinds of test in `test/`: six unit-test files, a live run and a browser test. Only the unit tests run without Claude Code. The other two spend real usage and are run by hand. `AGENTS.md` says when each one is expected.
 
 | File | Command | Needs | What it covers |
 |---|---|---|---|
 | `test/unit.test.ts` | `npm test` | nothing external | Pure logic: scheduler, settings, tiers, store, prompts, tool wording, names |
+| `test/agent.test.ts` | `npm test` | nothing external | One agent's life cycle, with a fake Claude Code process |
+| `test/conversation.test.ts` | `npm test` | nothing external | The team rules in `Conversation`, with a fake host |
+| `test/app.test.ts` | `npm test` | nothing external | `App.handle` validation, settings, approvals, folders; `agentEnv`; the secret file |
+| `test/http.test.ts` | `npm test` | nothing external | The HTTP layer: Host, Origin, secret, shutdown, static files |
+| `test/launcher.test.ts` | `npm test` | nothing external | Parsing of the `masthead` command line |
 | `test/live.e2e.ts` | `npm run test:live` | Claude Code installed and signed in; spends usage | The whole server driving real agents |
 | `test/ui.e2e.mjs` | `node test/ui.e2e.mjs <url> <screenshot folder>` | A running test server, Chromium, `playwright-core`; spends usage | The real page in a headless browser |
 
-## Unit tests (`test/unit.test.ts`)
+## Unit tests
 
-They run with Node's built-in test runner (`node --test`), with `tsx` loading the TypeScript directly. There are 14 tests:
+All six files run with Node's built-in test runner (`node --test`), with `tsx` loading the TypeScript directly; `npm test` runs every `test/*.test.ts`. None starts Claude Code, and none writes outside the system temp directory.
+
+### `test/unit.test.ts`
+
+There are 14 tests:
 
 | Test | Checks |
 |---|---|
@@ -30,6 +39,47 @@ They run with Node's built-in test runner (`node --test`), with `tsx` loading th
 | agent names: handed out in order… | `agentName()` around `zulu`, `displayName()`, 200 unique names. |
 
 Store tests use a fresh folder from `mkdtempSync` in the system temp directory, so they never touch real data.
+
+### `test/agent.test.ts`
+
+Seven tests of `Agent`, using a `FakeProcess` in place of a Claude Code process; the test decides what it says. They cover: an agent ended while waiting for a slot is never launched, even if the slot was granted first, and can still be resumed later; a follow-up turn does not replace the earlier turn's text in the outcome; a turn that names no messages does not clear ones still queued; a Claude Code that never names messages still ends the turn; a resume whose session is gone starts fresh once and re-sends the message, while a resume failing for another reason is reported, not retried.
+
+### `test/conversation.test.ts`
+
+Fifteen tests of `Conversation` with a fake `ConversationHost` and a real `Scheduler`. `claudePath()` returns null, so an agent that gets a slot fails at once; to keep one live (queued), a test first fills its tier with a dummy holder. They cover: spawning follows the tiers and names agents in order; a tier that is off is refused and the starting effort is capped; names resolve case-insensitively, plus "lead" and "parent"; stop works only down the tree and sends no report; a failed agent reports to its parent; settling a waiting parent; `stopAll`; effort changes, approval and ceilings; `restore` resets agents that were working; and regressions: a tier switched off fails its queued agents, a finished agent woken by a sibling reports to its parent once, a woken agent whose parent cannot receive owes no report, agents cannot wake one the person stopped, envelope bodies cannot close or open an envelope. One test checks the prompt's real starting effort, "a/an" and the request for file-relative line numbers.
+
+### `test/app.test.ts`
+
+Thirteen tests. `App` gets a temp `Store`, its own `settingsFile` and no Claude Code, so no agent starts. They cover:
+
+- malformed messages, unknown requests and missing conversations are answered with `error`, never thrown;
+- a refused `send` carries its `ref` (clipped to 80 characters);
+- images: at most 8, only PNG, JPEG, GIF and WebP, valid base64;
+- a new conversation must start in an existing folder;
+- the folder listing leaves out files and hidden folders, and reports an error for a missing one;
+- rename tidies the title (and ignores an empty one); delete removes the conversation from memory and disk;
+- a partial settings update changes only the fields it names (including `collapseReports`) and is saved; bad values are ignored;
+- settings that cannot be saved are still applied, and the failure is logged once;
+- approvals: every open request is listed in `state.pending`, an answer counts once, "always" passes the suggested rules (a plain allow without them), deny with a message, question answers, cancellation, and Masthead's own tools never reach the person;
+- the latest usage notice of each kind is kept in `state.usage`;
+- `agentEnv()` strips the enclosing Claude Code session's variables and keeps credentials;
+- the secret file is created once, mode 0600 in a 0700 folder, kept across calls, and replaced if it is unusable.
+
+### `test/http.test.ts`
+
+Seven tests against `serve()` on a free port picked by the system (never 7717), with a temp web folder and a stand-in app:
+
+- a wrong `Host` gets 403 (DNS rebinding);
+- `/api/health` is open and reports `busy`;
+- the socket is refused (403) with a wrong or missing `Origin`, a wrong `Host` or another path;
+- the socket is refused without the `key.<secret>` subprotocol, or with a wrong or short key, and accepted with it, answering only `masthead` (the key is never echoed), also via `localhost`;
+- `/api/shutdown` needs POST, `x-masthead: 1` and the right `x-masthead-key`;
+- the page and its assets are served to anyone, with the security headers, cache rules, 404 for a missing asset and 405 for other methods;
+- encoded `../`, a sibling folder sharing the root's prefix, malformed escapes and NUL bytes cannot read outside the web folder.
+
+### `test/launcher.test.ts`
+
+Four tests of `server/cli.ts`: the port comes from `--port N`, `--port=N`, `MASTHEAD_PORT`, then the default; a missing or bad port is an error (`UsageError`, exit 2), never a silent fallback; how the command word is found; and how the installed unit's port is read from `systemctl show` output (no unit, default 7717, or `MASTHEAD_PORT` in its environment), which decides when the launcher goes through systemd.
 
 ## Live end-to-end run (`test/live.e2e.ts`)
 
@@ -52,12 +102,14 @@ It exits 1 on any failure and leaves its temp folder behind. That folder's path 
 
 ## Browser test (`test/ui.e2e.mjs`)
 
+It refuses to run against port 7717, the installed app (message, exit code 2). It needs the test server's secret: from `?key=` in the URL, else `MASTHEAD_KEY`, else `$XDG_DATA_HOME/masthead/secret`; without one it stops. It opens the page with `?key=`, as `masthead` does. How to start such a server: [Building, testing and installing](Building-Testing-Installing.md#a-test-server-with-its-own-folders).
+
 It drives the real page with **playwright-core**, a library that controls a browser from code, using Chromium (`CHROMIUM` variable, default `/usr/bin/chromium`) in a 1440×900 window. It runs in a dark colour scheme unless `SCHEME=light`. It saves numbered screenshots to the folder given. The file's comment says to point it at a test server whose settings use cheap models; `AGENTS.md` adds that the server should be started with its own `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, never the installed one.
 
 It checks that:
 
 - the new-conversation screen renders, with "Team" in the panel;
-- the Opus stepper changes the limit (found by its "More/Fewer Opus 5.5 agents" labels);
+- the Opus stepper changes the limit: "More Opus 5.5 agents" changes the shown value and "Fewer" brings it back;
 - after a two-branch task is sent (with Allow clicked automatically every half second):
   - the agents appear in the panel;
   - the map shows at least four cards named Alpha, Bravo, Charlie and Delta;

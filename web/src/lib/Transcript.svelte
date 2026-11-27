@@ -59,6 +59,18 @@
   }
 
   const VIA: Record<string, string> = { task: 'Task from', report: 'Report from', message: 'Message from' };
+
+  /** Whether an inbound item starts open: tasks start shut, reports too when the setting says so. */
+  function startsOpen(item: Extract<Item, { kind: 'inbound' }>): boolean {
+    if (item.via === 'task') return false;
+    if (item.via === 'report' && store.settings?.collapseReports) return false;
+    return true;
+  }
+
+  function firstWords(text: string, max = 100): string {
+    const t = text.replace(/[#*_`>\[\]]+/g, '').replace(/\s+/g, ' ').trim();
+    return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+  }
   const key = (item: Item) => item.id;
 </script>
 
@@ -116,11 +128,14 @@
             <span>{VIA[item.via]}</span>
             <button class="who" onclick={() => openAgent(item.from)}>{displayName(item.from)}</button>
             {#if item.via === 'report' && item.status && item.status !== 'done'}<span class="state">{STATUS_LABEL[item.status].toLowerCase()}</span>{/if}
-            <button class="toggle" onclick={() => (open[item.id] = !(open[item.id] ?? item.via !== 'task'))}>
-              {(open[item.id] ?? item.via !== 'task') ? 'Hide' : 'Show'}
+            {#if item.via === 'report' && !(open[item.id] ?? startsOpen(item))}
+              <button class="gist" onclick={() => (open[item.id] = true)} aria-expanded="false" title="Show the report">{firstWords(item.text)}</button>
+            {/if}
+            <button class="toggle" onclick={() => (open[item.id] = !(open[item.id] ?? startsOpen(item)))} aria-expanded={open[item.id] ?? startsOpen(item)}>
+              {(open[item.id] ?? startsOpen(item)) ? 'Hide' : 'Show'}
             </button>
           </div>
-          {#if open[item.id] ?? item.via !== 'task'}
+          {#if open[item.id] ?? startsOpen(item)}
             <div class="md inbound-body">{@html renderMarkdown(item.text)}</div>
           {/if}
         </div>
@@ -317,7 +332,20 @@
   .state {
     color: var(--warn);
   }
+  .gist {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-align: left;
+    color: var(--faint);
+  }
+  .gist:hover {
+    color: var(--text);
+  }
   .toggle {
+    flex: none;
     margin-left: auto;
     font-size: 12.5px;
     color: var(--faint);

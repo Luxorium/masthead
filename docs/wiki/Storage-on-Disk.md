@@ -10,6 +10,7 @@ Locations follow the XDG base directory convention, a Linux standard for where p
 |---|---|---|
 | Settings | `$XDG_CONFIG_HOME/masthead/settings.json`, default `~/.config/masthead/settings.json` | `SETTINGS_FILE` |
 | Conversations | `$XDG_DATA_HOME/masthead/conversations/`, default `~/.local/share/masthead/conversations/` | `CONVERSATIONS_DIR` |
+| Local secret | `$XDG_DATA_HOME/masthead/secret`, default `~/.local/share/masthead/secret`: 64 hex characters and a newline, mode `0600`, created once by `loadSecret()` and kept. See [Security model](Security-Model.md#4-the-local-secret). | `SECRET_FILE` |
 
 Claude Code's own session files (the actual model conversation history that `resume` uses) are **not** Masthead's; Claude Code keeps them in its own place. Masthead stores only the `sessionId` that points at them.
 
@@ -50,6 +51,8 @@ Image data is never stored: a `user` item records only how many images were atta
 | Agent info or conversation meta changed | `conversation.json` rewritten, debounced: the first change starts a 400 ms timer and the save happens when it fires, with the state at that moment (`App.scheduleSave`). |
 | App shutdown | All pending saves are written at once (`App.flush`). |
 | Settings changed | `settings.json` rewritten at once (`saveSettings`). |
+
+Every one of these writes goes through `App.safely()`: a failure (a full disk, say) is logged once per kind (`transcript`, `conversation`, `settings`) until a write of that kind works again, and never stops the server. The state in memory and what the tabs see carry on regardless.
 | Conversation deleted | Its whole folder is removed (`Store.deleteConversation`). |
 
 ## Writing safely

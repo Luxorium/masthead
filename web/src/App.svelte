@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import Composer from './lib/Composer.svelte';
   import PermissionCard from './lib/PermissionCard.svelte';
+  import SettingsMenu from './lib/SettingsMenu.svelte';
   import Sidebar from './lib/Sidebar.svelte';
   import TeamMap from './lib/TeamMap.svelte';
   import TeamPanel from './lib/TeamPanel.svelte';
@@ -37,6 +38,8 @@
   }
 
   function finishRename(save: boolean) {
+    // Escape ends renaming first; the blur that follows when the field goes away must not save.
+    if (!renaming) return;
     if (save && store.conv && titleDraft.trim() && titleDraft.trim() !== store.conv.title) {
       store.send({ t: 'rename', convId: store.conv.id, title: titleDraft });
     }
@@ -46,6 +49,18 @@
   const path = $derived(store.viewAgent && store.viewAgent.tier !== 'lead' ? store.pathTo(store.viewAgent.id) : []);
 </script>
 
+{#if store.signedOut}
+  <div class="signed-out">
+    <div class="signed-out-box">
+      <h1>Masthead</h1>
+      <p>Open Masthead with the <code>masthead</code> command (or its launcher entry) to sign this browser in.</p>
+      {#if store.signedOut === 'refused'}
+        <p class="muted small">Masthead refused this browser's key, or is not running. A key from an earlier start no longer works.</p>
+        <button class="btn primary" onclick={() => store.retryConnect()}>Try again</button>
+      {/if}
+    </div>
+  </div>
+{:else}
 <div class="shell" class:no-sidebar={!showSidebar} class:no-panel={!showPanel}>
   {#if showSidebar}
     <Sidebar onhide={() => (showSidebar = false)} />
@@ -87,6 +102,7 @@
           </button>
         </div>
       {/if}
+      <SettingsMenu />
       <button class="btn ghost icon" onclick={() => (showPanel = !showPanel)} title={showPanel ? 'Hide team panel' : 'Show team panel'} aria-label="Toggle team panel">◧</button>
     </header>
 
@@ -131,7 +147,9 @@
           {#each store.convPending as request (request.id)}
             <PermissionCard {request} />
           {/each}
-          <Composer />
+          {#key store.composerKey}
+            <Composer />
+          {/key}
         </div>
       </div>
     {/if}
@@ -145,8 +163,28 @@
     <div class="toast" role="alert">{store.error}</div>
   {/if}
 </div>
+{/if}
 
 <style>
+  .signed-out {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    padding: 24px;
+  }
+  .signed-out-box {
+    max-width: 440px;
+    text-align: center;
+  }
+  .signed-out-box h1 {
+    margin: 0 0 12px;
+    font-family: var(--serif);
+    font-size: 28px;
+    font-weight: 600;
+  }
+  .signed-out-box .small {
+    font-size: 13px;
+  }
   .shell {
     display: grid;
     grid-template-columns: 264px minmax(0, 1fr) 316px;

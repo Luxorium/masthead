@@ -5,7 +5,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VERSION } from '../shared/protocol.js';
 import { App } from './app.js';
-import { DEFAULT_PORT } from './config.js';
+import { UsageError, parseCommand, parsePort, unitPortFrom } from './cli.js';
+import { DEFAULT_PORT, SECRET_FILE, loadSecret, readSecret } from './config.js';
 import { serve } from './http.js';
 
 // Masthead approves its own tools ahead of the permission callback on purpose; the SDK's notice about that is noise here.
@@ -21,14 +22,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 const webDir = join(here, '..', 'web');
 
 function port(): number {
-  const i = process.argv.indexOf('--port');
-  const raw = i >= 0 ? process.argv[i + 1] : process.env.MASTHEAD_PORT;
-  const n = raw ? Number(raw) : DEFAULT_PORT;
-  if (!Number.isInteger(n) || n < 1024 || n > 65535) {
-    console.error(`Invalid port: ${raw}`);
+  try {
+    return parsePort(process.argv.slice(2), process.env);
+  } catch (e) {
+    if (!(e instanceof UsageError)) throw e;
+    console.error(e.message);
     process.exit(2);
   }
-  return n;
 }
 
 const url = (p: number) => `http://127.0.0.1:${p}`;
@@ -43,9 +43,19 @@ async function health(p: number): Promise<{ version: string; pid: number } | nul
   }
 }
 
-function hasUnit(): boolean {
-  const r = spawnSync('systemctl', ['--user', 'cat', 'masthead.service'], { stdio: 'ignore' });
-  return r.status === 0;
+/** Whether the installed user service is the one that serves port `p`. Any other port is a server of its own. */
+function unitServes(p: number): boolean {
+  const r = spawnSync('systemctl', ['--user', 'show', '-p', 'LoadState', '-p', 'Environment', 'masthead.service'], { encoding: 'utf8' });
+  return r.status === 0 && unitPortFrom(r.stdout ?? '') === p;
+}
+
+function secretOrExit(): string {
+  try {
+    return loadSecret();
+  } catch (e) {
+    console.error(`Could not read or create ${SECRET_FILE}: ${(e as Error).message}`);
+    process.exit(1);
+  }
 }
 
 async function runServer(): Promise<void> {
@@ -60,8 +70,9 @@ async function runServer(): Promise<void> {
     // Give the Claude Code processes a moment to end before the server does.
     setTimeout(() => process.exit(0), 300);
   };
+  const secret = secretOrExit();
   try {
-    await serve(app, { port: p, webDir, extraOrigins: dev ? ['http://localhost:7718', 'http://127.0.0.1:7718'] : [], onShutdown: shutdown });
+    await serve(app, { port: p, webDir, secret, extraOrigins: dev ? ['http://localhost:7718', 'http://127.0.0.1:7718'] : [], onShutdown: shutdown });
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     console.error(err.code === 'EADDRINUSE' ? `Port ${p} is already in use. Is Masthead already running?` : `Could not start: ${err.message}`);
@@ -70,11 +81,17 @@ async function runServer(): Promise<void> {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   console.log(`Masthead ${VERSION} is running at ${url(p)}`);
+  if (dev) {
+    // The dev page on 7718 keeps the key in its own storage and forwards the socket here.
+    console.log(`Development page: http://localhost:7718/?key=${secret}`);
+  } else {
+    console.log(`Open it with \`masthead${p === DEFAULT_PORT ? '' : ` --port ${p}`}\` to sign the browser in.`);
+  }
 }
 
 async function start(p: number): Promise<boolean> {
   if (await health(p)) return true;
-  if (hasUnit()) {
+  if (unitServes(p)) {
     spawnSync('systemctl', ['--user', 'start', 'masthead.service'], { stdio: 'inherit' });
   } else {
     const child = spawn(process.execPath, ['--disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED', fileURLToPath(import.meta.url), 'serve', '--port', String(p)], {
@@ -100,9 +117,7 @@ function openBrowser(target: string): void {
 }
 
 async function main(): Promise<void> {
-  // The command is the first word that is neither an option nor the value of --port.
-  const args = process.argv.slice(2);
-  const cmd = args.find((a, i) => !a.startsWith('-') && args[i - 1] !== '--port') ?? 'open';
+  const cmd = parseCommand(process.argv.slice(2));
   const p = port();
   switch (cmd) {
     case 'serve':
@@ -118,7 +133,8 @@ async function main(): Promise<void> {
         process.exit(1);
       }
       console.log(`Masthead is at ${url(p)}`);
-      if (!process.argv.includes('--no-browser')) openBrowser(url(p));
+      // The key signs the browser in: the page keeps it for this address and removes it from the address bar.
+      if (!process.argv.includes('--no-browser')) openBrowser(`${url(p)}/?key=${secretOrExit()}`);
       return;
     }
     case 'status': {
@@ -132,8 +148,14 @@ async function main(): Promise<void> {
         console.log('Masthead is not running.');
         return;
       }
-      if (hasUnit()) spawnSync('systemctl', ['--user', 'stop', 'masthead.service'], { stdio: 'inherit' });
-      if (await health(p)) await fetch(`${url(p)}/api/shutdown`, { method: 'POST', headers: { 'x-masthead': '1' } }).catch(() => {});
+      if (unitServes(p)) spawnSync('systemctl', ['--user', 'stop', 'masthead.service'], { stdio: 'inherit' });
+      if (await health(p)) {
+        const res = await fetch(`${url(p)}/api/shutdown`, { method: 'POST', headers: { 'x-masthead': '1', 'x-masthead-key': readSecret() ?? '' } }).catch(() => null);
+        if (res?.status === 403) {
+          console.error(`Masthead on port ${p} refused to stop: it was started with a secret other than ${SECRET_FILE} (another XDG_DATA_HOME?).`);
+          process.exit(1);
+        }
+      }
       for (let i = 0; i < 20 && (await health(p)); i++) await new Promise((r) => setTimeout(r, 250));
       if (await health(p)) {
         console.error('Masthead is still running.');

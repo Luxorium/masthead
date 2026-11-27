@@ -2,6 +2,7 @@
 Type=Application
 Name=Masthead
 Comment=Run a tiered team of Claude agents
+# scripts/install.sh replaces Exec with the full path of the installed command and drops this comment.
 Exec=masthead
 Icon=masthead
 Terminal=false

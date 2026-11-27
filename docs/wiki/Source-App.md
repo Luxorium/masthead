@@ -20,16 +20,18 @@
 |---|---|
 | `settings()`, `claudePath()` | Current values. |
 | `agentChanged(conv, agent)` | Broadcast `{t:'agent'}`; schedule a save of the conversation; and if the conversation's `busy()` value differs from the last one recorded in the private `busy` map, record it and broadcast the `{t:'conversations'}` list, so the page can show which conversations are working. |
-| `itemChanged(conv, agent, item)` | Ignore it if the conversation is no longer the one registered under its id (it was deleted and its processes are winding down); otherwise append the item to disk and broadcast `{t:'item'}`. |
+| `itemChanged(conv, agent, item)` | Ignore it if the conversation is no longer the one registered under its id (it was deleted and its processes are winding down); otherwise append the item to disk (through `safely()`) and broadcast `{t:'item'}`. |
 | `draftChanged(conv, agent, draft)` | Broadcast `{t:'draft'}` (never saved). |
 | `metaChanged(conv)` | Schedule a save; broadcast the full `{t:'conversations'}` list. |
-| `rateLimit(notice)` | Broadcast `{t:'rate_limit'}`. |
+| `rateLimit(notice)` | Keep it as the latest notice of its `type` in the private `usage` map (sent to tabs that connect later in `AppState.usage`), and broadcast `{t:'rate_limit'}`. |
 | `askPermission(...)` | Allow `mcp__masthead__*` tools at once; otherwise create a `PermissionRequest`, store it in `pending`, broadcast it and return a promise settled by the person's answer, by the SDK's abort signal, or by cancellation. See [Permissions and questions](Permissions-and-Questions.md). |
 | `cancelPermissions(agentId)` | Deny every pending request from that agent ("The agent was stopped."). |
 
 ## Saving
 
-- `scheduleSave(conv)`: if no save is pending for the conversation, start a 400 ms timer; when it fires, save `conv.toStored()` if the conversation still exists. Further changes during those 400 ms are included because the state is read when the timer fires.
+- `safely(what, write)`: runs a disk write. If it throws (a full disk, say), the error is logged once for that kind of write (`transcript`, `conversation` or `settings`, tracked in the private `failing` set) until one works again; the server carries on.
+- `workingCount()`: how many conversations have `busy()` true. `/api/health` reports it as `busy`, and `scripts/install.sh` reads that before restarting.
+- `scheduleSave(conv)`: if no save is pending for the conversation, start a 400 ms timer; when it fires, save `conv.toStored()` (through `safely()`) if the conversation still exists. Further changes during those 400 ms are included because the state is read when the timer fires.
 - `flush()`: write all pending saves now.
 - `shutdown()`: deny all pending approvals ("Masthead is shutting down."), `shutdown()` every conversation, `flush()`.
 
@@ -38,8 +40,8 @@
 - `connect(client)`: add it and send `{t:'state'}`. `disconnect(client)`: remove it.
 - `broadcast(msg)`: send to every tab.
 - `metas()`: each conversation's meta with `busy: conv.busy()` added, sorted by `updatedAt` (newest first).
-- `state()`: `AppState` with the version, settings, `metas()`, Claude Code info and home folder.
-- `handle(client, raw)`: run `dispatch()`; any thrown error becomes `{t:'error'}` to that tab.
+- `state()`: `AppState` with the version, settings, `metas()`, Claude Code info, home folder, every open approval request (`pending`) and the kept usage notices (`usage`).
+- `handle(client, raw)`: run `dispatch()`; any thrown error becomes `{t:'error'}` to that tab, with the message's `ref` (if it was a string, cut to 80 characters).
 - `conv(id)`: look up a conversation or throw "That conversation no longer exists."
 
 ## `dispatch()`
@@ -48,7 +50,7 @@ One `switch` on `msg.t`. Every case is described on [Browser/server protocol](Br
 
 - **`send` with `convId: null`** creates the conversation, then compares the chosen folder with `defaultCwd` and saves it as the new default if different (so the next new conversation starts where the last one did). `created` goes only to the requesting tab, with its `ref`.
 - **`delete`** runs `stopAll()` then `shutdown()` on the conversation, cancels its pending save timer, forgets it (and its `busy` entry), deletes its folder, and broadcasts `deleted` and the new list.
-- **`settings`** goes through `sanitizeSettings()` and then `updateSettings()`, which saves to `settingsFile`, calls `scheduler.limitsChanged()`, and broadcasts.
+- **`settings`** goes through `sanitizeSettings(msg.settings, currentSettings)`, so a partial update changes only the fields it names, and then `updateSettings()`, which applies the settings, saves them to `settingsFile` (through `safely()`), calls `scheduler.limitsChanged()`, and broadcasts.
 
 ## Validation helpers
 

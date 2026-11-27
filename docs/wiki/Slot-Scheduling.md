@@ -15,8 +15,9 @@ The settings sidebar sets, for each of the Opus, Sonnet and Haiku tiers, how man
 - An agent asks for a slot every time it needs a process: when it starts, and again when it is resumed after finishing.
 - An agent that is `waiting` for its children **keeps its slot**: it is still part of the running team, and its process stays open.
 - The slot is given back when the agent finishes, fails, is stopped, or its process is lost (`Agent.end()` and `Conversation.processLost()` call `release()`).
-- A tier limit of 0 means agents of that tier cannot be started at all (`spawn()` refuses before reaching the scheduler).
-- Lowering a limit in the settings does not stop agents already running; it only affects who starts next (a known limitation, deliberate for 0.1.0, and checked by a unit test). Raising it starts queued agents at once (`limitsChanged()`).
+- A tier limit of 0 means agents of that tier cannot be started at all (`spawn()` refuses before reaching the scheduler), and a finished one cannot be woken (`Conversation.message()` refuses).
+- Setting a limit to 0 while agents of that tier are queued refuses them: `limitsChanged()` rejects each waiter with `TierOff`. `ensureProcess()` passes that to `Conversation.processLost()`, so the agent fails with "This tier was switched off in the settings while the agent was waiting to start." and its parent gets the usual failure report (or is settled if no report was owed). Nobody is left waiting for ever.
+- Otherwise, lowering a limit does not stop agents already running; it only affects who starts next (a known limitation, deliberate for 0.1.1, and checked by a unit test). Raising it starts queued agents at once (`limitsChanged()`).
 
 ## Fair queueing
 
@@ -30,7 +31,8 @@ flowchart TD
   C -- yes --> D["take slot,<br/>resolve at once"]
   C -- no --> E["push waiter onto queue,<br/>then pump()"]
   R["release(tier, id)"] --> P
-  L["limitsChanged()"] --> P
+  L["limitsChanged()"] -- "limit > 0" --> P
+  L -- "limit 0" --> LO["refuse every waiter (TierOff)"]
   E --> P["pump(tier)"]
   P --> Q{"queue not empty AND<br/>running < limit?"}
   Q -- no --> Z["stop"]
@@ -48,7 +50,7 @@ Sonnet limit 4. Opus agent `A` has 3 Sonnets running; Opus agent `B` has 1. Both
 
 ## Cancelling
 
-When a queued agent is stopped, `Agent.end()` calls `scheduler.cancel()`, which removes the waiter and rejects its promise with `SlotCancelled`. `ensureProcess()` recognises that error and quietly gives up instead of reporting a failure.
+When a queued agent is stopped, `Agent.end()` calls `scheduler.cancel()`, which removes the waiter and rejects its promise with `SlotCancelled`. `ensureProcess()` recognises that error and quietly gives up instead of reporting a failure. If the stop came too late to cancel (the slot was granted in the same pass that freed it), `ensureProcess()` sees that the agent was ended meanwhile, does not launch it, and releases the slot.
 
 ## What the person sees
 

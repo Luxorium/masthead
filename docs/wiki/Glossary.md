@@ -36,6 +36,8 @@ Terms used in the code and this wiki, in alphabetical order. Code names are in b
 | **JSONL** | JSON Lines: a text file with one JSON value per line. Used for transcripts. |
 | **Lead** | The top agent of a conversation, the one the person talks to, always named `alpha` (Fable 5.2 by default). `lead` also works as an alias in `send_message`. |
 | **Lean sub-agents** (`leanSubagents`) | Setting: Sonnet and Haiku agents get only Masthead's MCP server, not the person's own. |
+| **Lean Opus** (`leanOpus`) | Setting: Opus agents get only Masthead's MCP server too. |
+| **Local secret** | 64 hex characters in `<DATA_DIR>/secret`. The socket and `/api/shutdown` require it; `masthead` signs a browser in with `/?key=…`. See [Security model](Security-Model.md#4-the-local-secret). |
 | **Live** | Status `queued`, `running` or `waiting`. |
 | **MCP / MCP server** | Model Context Protocol: a standard way to give Claude Code extra tools. Masthead's team tools are an in-process MCP server named `masthead`. |
 | **`modelLabel()`** | Turns a model id into the name people use: `claude-opus-5-5` → "Opus 5.5". Tier names everywhere come from it. |
@@ -44,7 +46,7 @@ Terms used in the code and this wiki, in alphabetical order. Code names are in b
 | **Permission mode** | Claude Code's policy for asking before acting (`inherit`, `default`, `acceptEdits`, `auto`, `bypassPermissions`). |
 | **Permission request** | A tool approval or a question shown to the person (`PermissionRequest`). |
 | **Process** | The running `claude` program behind an agent (the SDK `Query`, `Agent.q`). |
-| **Report** | A sub-agent's final message, delivered to its parent in an `<agent-report>` envelope. |
+| **Report** | What a sub-agent said in its last run of turns (the final text of each turn since it took up work), delivered to its parent in an `<agent-report>` envelope. |
 | **Resume** | Starting a new process that continues an existing Claude Code session (`options.resume = sessionId`). |
 | **Seed** | The first message of a brand-new agent session: its task. Saved to disk while the agent has not started (`pendingSeed`). |
 | **Session** | Claude Code's saved conversation history for one agent (`sessionId`). Survives the process and app restarts. |

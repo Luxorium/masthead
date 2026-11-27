@@ -53,6 +53,10 @@ export class App implements ConversationHost {
   private pending = new Map<string, PendingPermission>();
   private dirty = new Map<string, NodeJS.Timeout>();
   private busy = new Map<string, boolean>();
+  /** The latest usage-limit notice of each kind, so a tab that connects later sees it too. */
+  private usage = new Map<string, RateLimitNotice>();
+  /** Disk writes that are failing; each is logged once until it works again. */
+  private failing = new Set<string>();
 
   /**
    * `settingsFile` is where changes to the settings are written. Tests pass their own file so they
@@ -93,7 +97,7 @@ export class App implements ConversationHost {
   itemChanged(conv: Conversation, agent: Agent, item: Item): void {
     // A deleted conversation's processes may still be winding down; nothing of theirs is kept.
     if (this.conversations.get(conv.meta.id) !== conv) return;
-    this.store.appendItem(conv.meta.id, agent.id, item);
+    this.safely('transcript', () => this.store.appendItem(conv.meta.id, agent.id, item));
     this.broadcast({ t: 'item', convId: conv.meta.id, agentId: agent.id, item });
   }
 
@@ -107,6 +111,7 @@ export class App implements ConversationHost {
   }
 
   rateLimit(notice: RateLimitNotice): void {
+    this.usage.set(notice.type ?? '', notice);
     this.broadcast({ t: 'rate_limit', notice });
   }
 
@@ -150,6 +155,25 @@ export class App implements ConversationHost {
 
   // ---- persistence ----
 
+  /** Runs a disk write. A failure (a full disk, say) is logged once and never stops the server. */
+  private safely(what: string, write: () => void): void {
+    try {
+      write();
+      this.failing.delete(what);
+    } catch (e) {
+      if (this.failing.has(what)) return;
+      this.failing.add(what);
+      console.error(`Masthead could not save the ${what}: ${(e as Error).message}`);
+    }
+  }
+
+  /** How many conversations have agents working. */
+  workingCount(): number {
+    let n = 0;
+    for (const c of this.conversations.values()) if (c.busy()) n++;
+    return n;
+  }
+
   private scheduleSave(conv: Conversation): void {
     const id = conv.meta.id;
     if (this.dirty.has(id)) return;
@@ -157,7 +181,7 @@ export class App implements ConversationHost {
       id,
       setTimeout(() => {
         this.dirty.delete(id);
-        if (this.conversations.has(id)) this.store.saveConversation(conv.toStored());
+        if (this.conversations.has(id)) this.safely('conversation', () => this.store.saveConversation(conv.toStored()));
       }, SAVE_DELAY_MS),
     );
   }
@@ -166,7 +190,7 @@ export class App implements ConversationHost {
     for (const [id, timer] of this.dirty) {
       clearTimeout(timer);
       const conv = this.conversations.get(id);
-      if (conv) this.store.saveConversation(conv.toStored());
+      if (conv) this.safely('conversation', () => this.store.saveConversation(conv.toStored()));
     }
     this.dirty.clear();
   }
@@ -185,7 +209,7 @@ export class App implements ConversationHost {
   }
 
   private state(): AppState {
-    return { version: VERSION, settings: this.currentSettings, conversations: this.metas(), claude: this.claude, home: HOME, pending: [...this.pending.values()].map((p) => p.request) };
+    return { version: VERSION, settings: this.currentSettings, conversations: this.metas(), claude: this.claude, home: HOME, pending: [...this.pending.values()].map((p) => p.request), usage: [...this.usage.values()] };
   }
 
   private broadcast(msg: ServerMsg): void {
@@ -272,7 +296,8 @@ export class App implements ConversationHost {
         this.answerPermission(msg);
         return;
       case 'settings':
-        this.updateSettings(sanitizeSettings(msg.settings));
+        // A partial update changes only the fields it names.
+        this.updateSettings(sanitizeSettings(msg.settings, this.currentSettings));
         return;
       case 'rename': {
         const conv = this.conv(msg.convId);
@@ -307,7 +332,7 @@ export class App implements ConversationHost {
 
   private updateSettings(next: Settings): void {
     this.currentSettings = next;
-    saveSettings(next, this.settingsFile);
+    this.safely('settings', () => saveSettings(next, this.settingsFile));
     this.scheduler.limitsChanged();
     this.broadcast({ t: 'settings', settings: next });
   }

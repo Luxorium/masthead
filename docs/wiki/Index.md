@@ -22,7 +22,7 @@ Every page in this wiki, grouped. Start at [Home](Home.md).
 - [Configuration and settings](Configuration-and-Settings.md): every setting and environment variable, and when each takes effect.
 - [Command-line launcher](Command-Line-Launcher.md): the `masthead` command.
 - [Storage on disk](Storage-on-Disk.md): where files live, their format, and safe writing.
-- [Security model](Security-Model.md): what the local server defends against and what it does not.
+- [Security model](Security-Model.md): what the local server defends against (including the local secret) and what it does not.
 - [Building, testing and installing](Building-Testing-Installing.md): npm scripts, output, the checks before a change is done.
 - [Tests](Source-Tests.md): the unit tests, the live run, and the browser test.
 - [Installing](Source-Install-Scripts.md): `scripts/install.sh`, `scripts/uninstall.sh` and `packaging/`.
@@ -41,14 +41,14 @@ Every page in this wiki, grouped. Start at [Home](Home.md).
 - [server/conversation.ts](Source-Conversation.md): one conversation and the team rules.
 - [server/app.ts](Source-App.md): the application, tabs, saving and approvals.
 - [server/http.ts](Source-Http.md): HTTP, the WebSocket and the security checks.
-- [server/main.ts](Source-Main.md): entry point and launcher.
+- [server/main.ts](Source-Main.md): entry point and launcher, and `server/cli.ts` (command-line parsing).
 - [Build configuration](Source-Build-Config.md): `package.json`, the tsconfig files, the Vite and Svelte config.
 
 ## Web source
 
 - [Web front end](Source-Web-Front-End.md): files, layout (`App.svelte`), safe Markdown rendering.
 - [Web store](Source-Web-Store.md): `store.svelte.ts`, the page's state and every protocol message.
-- [Web components](Source-Web-Components.md): Sidebar, Transcript, Composer, FolderPicker, PermissionCard, TeamPanel, TeamMap.
+- [Web components](Source-Web-Components.md): Sidebar, Transcript, Composer, FolderPicker, PermissionCard, TeamPanel, TeamMap, SettingsMenu.
 
 ## Walkthroughs
 

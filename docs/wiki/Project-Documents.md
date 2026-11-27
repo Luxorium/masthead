@@ -8,7 +8,7 @@ The page for people installing and using Masthead. It covers:
 
 - **What it is:** a lead agent plus up to three tiers of agents (a table: Lead Fable 5.2, Second Opus 5.5, Third Sonnet 5.5, Fourth Haiku 5.5). A panel sets the limits; agents report back, message each other by name, and start at low effort. It runs the installed, signed-in Claude Code and has no login of its own.
 - **Requirements:** Linux, Node.js 22 or newer, and Claude Code installed and signed in.
-- **Install:** clone the repository, run `scripts/install.sh`, then run `masthead`. It describes the same steps as [Installing](Source-Install-Scripts.md), and the command table from the [Command-line launcher](Command-Line-Launcher.md).
+- **Install:** clone the repository, run `scripts/install.sh`, then run `masthead`. Running the script again updates; if agents are working it asks before restarting, or `--force` skips the question. It describes the same steps as [Installing](Source-Install-Scripts.md), and the command table from the [Command-line launcher](Command-Line-Launcher.md). `masthead` opens the page signed in; a tab opened some other way asks to be opened with `masthead` once. `--port N` or `MASTHEAD_PORT` changes the port; the installed service always serves 7717, and any other port gets a separate copy that reads its secret from its own data folder.
 - **Using it:**
   - conversations and the folder picker;
   - the team panel ("At once", "Off");
@@ -18,11 +18,11 @@ The page for people installing and using Masthead. It covers:
   - stopping (the square button stops the lead's turn; "Stop everything"; per-agent stop).
 - Closing the browser tab stops nothing; stopping Masthead stops the agents.
 - **Where things are kept:**
-  - the settings and conversation paths ([Storage on disk](Storage-on-Disk.md));
+  - the settings, conversation and local secret paths ([Storage on disk](Storage-on-Disk.md));
   - Claude Code's own session files in `~/.claude/`, which Masthead resumes by id.
-- **Security:** the same points as [Security model](Security-Model.md), including that any program running as the person can reach the server.
+- **Security:** the same points as [Security model](Security-Model.md): the Host and Origin checks, the local secret that other users cannot read, and that any program running as the person can still read it.
 - **Usage and limits:** every agent uses the person's Claude plan or API key as Claude Code does. A large team spends usage quickly, and the limits and low default effort are there to keep that in hand.
-- **Development:** `npm install`, `check`, `test`, `build`, `start`, `test:live`, and `dev:web` with `MASTHEAD_DEV=1 npm start` beside it. It points to this wiki.
+- **Development:** `npm install`, `check`, `test`, `build`, `start`, `test:live`, and `dev:web` with `MASTHEAD_DEV=1 npm start` beside it (the server prints the dev page's address with its key). It points to this wiki.
 - A closing line that Masthead is an independent project, not made or endorsed by Anthropic.
 
 ## `AGENTS.md`

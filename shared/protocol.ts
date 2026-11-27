@@ -1,6 +1,6 @@
 // Types shared by the server and the browser. Nothing in here may import Node or DOM APIs.
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.1';
 
 /** The four levels of the team. `lead` is the agent the person talks to. */
 export type Tier = 'lead' | 'opus' | 'sonnet' | 'haiku';
@@ -98,6 +98,8 @@ export interface Settings {
   leanSubagents: boolean;
   /** Opus agents skip the person's external MCP servers too. */
   leanOpus: boolean;
+  /** Reports from agents are shown folded shut in a transcript until the person opens them. */
+  collapseReports: boolean;
   /** Folder a new conversation starts in. */
   defaultCwd: string;
 }
@@ -241,6 +243,8 @@ export interface AppState {
   home: string;
   /** Every approval request and question still open, in any conversation. */
   pending: PermissionRequest[];
+  /** The latest usage notice of each limit type Claude Code has reported since Masthead started. */
+  usage: RateLimitNotice[];
 }
 
 // ---- browser -> server ----

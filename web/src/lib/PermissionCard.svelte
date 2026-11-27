@@ -1,4 +1,11 @@
+<script lang="ts" module>
+  // When the person last pressed a key anywhere, so a new card does not take focus mid-typing.
+  let lastKey = 0;
+  if (typeof window !== 'undefined') window.addEventListener('keydown', () => (lastKey = Date.now()), true);
+</script>
+
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { displayName, type PermissionRequest } from '../../../shared/protocol.ts';
   import { store } from './store.svelte.ts';
   import { toolLine } from './tools.ts';
@@ -9,6 +16,18 @@
   let picked = $state<Record<number, string[]>>({});
   let other = $state<Record<number, string>>({});
   let showDetail = $state(false);
+  let card = $state<HTMLDivElement | null>(null);
+
+  // The card takes focus when it appears so the keyboard can reach it, unless the person is typing:
+  // a key pressed in the last 1.5 s, text in the field they are in, or focus already on another card.
+  // Focus goes to the card itself, not to Allow, so a stray Enter answers nothing.
+  onMount(() => {
+    const active = document.activeElement as HTMLElement | null;
+    const typing = Date.now() - lastKey < 1500;
+    const field = active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement ? active.value.trim().length > 0 : !!active?.isContentEditable;
+    const onCard = !!active?.closest('.card[role="alertdialog"]');
+    if (!typing && !field && !onCard) card?.focus({ preventScroll: true });
+  });
 
   const line = $derived(toolLine(request.toolName, request.input));
   const WANTS: Record<string, string> = {
@@ -53,13 +72,20 @@
   }
 </script>
 
-<div class="card" role="alertdialog" aria-label={request.kind === 'question' ? 'Question' : 'Permission request'}>
+<div
+  bind:this={card}
+  class="card"
+  role="alertdialog"
+  tabindex="-1"
+  aria-label={request.kind === 'question' ? `Question from ${displayName(request.agentName)}` : `Permission request from ${displayName(request.agentName)}`}
+>
   {#if request.kind === 'question'}
+    <div class="head"><span class="who">{displayName(request.agentName)}</span> <span class="what">asks</span></div>
     {#each request.questions ?? [] as q, qi (qi)}
       <fieldset>
         <legend>{q.question}</legend>
         <div class="options">
-          {#each q.options as opt (opt.label)}
+          {#each Array.isArray(q.options) ? q.options : [] as opt, oi (oi)}
             <button class="option" class:on={picked[qi]?.includes(opt.label)} onclick={() => toggle(qi, opt.label, !!q.multiSelect)} aria-pressed={!!picked[qi]?.includes(opt.label)}>
               <span class="opt-label">{opt.label}</span>
               {#if opt.description}<span class="opt-desc">{opt.description}</span>{/if}
@@ -103,6 +129,13 @@
     border-radius: 12px;
     background: var(--raised);
     box-shadow: var(--shadow);
+  }
+  .card:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .card > .head + fieldset {
+    margin-top: 8px;
   }
   .head {
     display: flex;

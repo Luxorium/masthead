@@ -61,6 +61,11 @@ function titleFrom(text: string): string {
 export class Conversation implements AgentHost, TeamActions {
   readonly agents = new Map<string, Agent>();
   private agentMessages = 0;
+  /**
+   * Agents the person stopped. Other agents may not wake them; the person still can, which clears the
+   * mark. Kept in memory only, so after a restart any agent can wake them again.
+   */
+  private stoppedByPerson = new Set<string>();
 
   private constructor(
     readonly meta: ConversationMeta,
@@ -170,6 +175,11 @@ export class Conversation implements AgentHost, TeamActions {
     const target = (agentId && this.agents.get(agentId)) || this.lead;
     if (this.meta.title === 'New conversation' && target === this.lead && text.trim()) this.meta.title = titleFrom(text);
     target.addItem({ kind: 'user', text, ...(images?.length ? { images: images.length } : {}) });
+    if (this.tierOff(target)) {
+      target.addItem({ kind: 'notice', level: 'error', text: `${this.label(target.tier)} agents are switched off in the settings. Turn them on to wake "${target.name}".` });
+      return;
+    }
+    this.stoppedByPerson.delete(target.id);
     target.deliver(Agent.imageContent(text, images));
     this.touch();
   }
@@ -179,10 +189,11 @@ export class Conversation implements AgentHost, TeamActions {
     await this.lead.interrupt();
   }
 
-  /** Stops one agent and everything under it. */
+  /** Stops one agent and everything under it. Only the person calls this. */
   stopAgent(agentId: string, why: string): void {
     const agent = this.agents.get(agentId);
     if (!agent) return;
+    this.markStoppedByPerson(agent);
     if (agent.tier === 'lead') {
       for (const c of this.children(agent)) this.stopTree(c, why);
       void agent.interrupt();
@@ -201,6 +212,16 @@ export class Conversation implements AgentHost, TeamActions {
   stopAll(): void {
     this.stopAgent(this.lead.id, 'Stopped by the person.');
     this.settle(this.lead);
+  }
+
+  private markStoppedByPerson(agent: Agent): void {
+    if (agent.tier !== 'lead') this.stoppedByPerson.add(agent.id);
+    for (const c of this.children(agent)) this.markStoppedByPerson(c);
+  }
+
+  /** A sub-agent that is not running and whose tier is off: it could only queue for ever. */
+  private tierOff(agent: Agent): boolean {
+    return agent.tier !== 'lead' && !agent.live && this.host.settings().tiers[agent.tier].max <= 0;
   }
 
   private stopTree(agent: Agent, why: string): void {
@@ -357,17 +378,24 @@ export class Conversation implements AgentHost, TeamActions {
     const target = this.find(to, from);
     if (!target) return `Error: there is no agent named "${to}". Use list_agents to see the names.`;
     if (target === from) return 'Error: that is you.';
+    if (!target.live && this.stoppedByPerson.has(target.id)) return `Error: the person stopped "${target.name}"; only they can wake it.`;
+    if (this.tierOff(target)) return `Error: ${this.label(target.tier)} agents are switched off in the settings, so "${target.name}" cannot be woken.`;
     if (this.agentMessages >= MAX_AGENT_MESSAGES) return 'Error: this conversation has reached its limit of messages between agents.';
     this.agentMessages++;
     const wasLive = target.live;
     const statusBefore = target.status;
-    // A finished agent woken by the one that started it owes that agent a fresh report.
-    if (!wasLive && target.tier !== 'lead' && this.parent(target) === from) target.owesReport = true;
+    const parent = this.parent(target);
+    // A woken sub-agent owes its parent a fresh report, whoever woke it, if the parent can still receive
+    // one (as in report()). An agent that is already live keeps the debt it has, so nothing is reported twice.
+    const reportsTo = !wasLive && parent && (parent.tier === 'lead' || parent.live) ? parent : null;
+    if (reportsTo) target.owesReport = true;
     target.addItem({ kind: 'inbound', via: 'message', from: from.name, text });
-    target.deliver(messageEnvelope(from.name, from.tier, text));
+    // A message from the parent is answered by the report; anyone else needs send_message.
+    target.deliver(messageEnvelope(from.name, from.tier, text, parent !== from));
     this.touch();
     const state = target.tier === 'lead' ? 'the lead' : wasLive ? statusBefore : `was ${statusBefore}, now resuming`;
-    return `Delivered to "${target.name}" (${state}).`;
+    const where = reportsTo && reportsTo !== from ? ` Its report goes to "${reportsTo.name}"; it answers you only with send_message.` : '';
+    return `Delivered to "${target.name}" (${state}).${where}`;
   }
 
   list(viewer: Agent): string {
@@ -400,13 +428,13 @@ export class Conversation implements AgentHost, TeamActions {
     const ceiling = s.tiers[agent.tier].effort;
     const current = agent.info.effort;
     if (level === current) return `You are already at ${current} effort.`;
-    if (effortRank(level) > effortRank(ceiling)) return `Error: ${this.label(agent.tier)} agents may go up to ${ceiling} effort. The person sets that limit.`;
+    if (effortRank(level) > effortRank(ceiling)) return `Error: ${this.label(agent.tier)} agents may go up to ${ceiling} effort; you are at ${current}. The person sets that limit.`;
     const lowering = effortRank(level) < effortRank(current);
     const parent = this.parent(agent);
     if (lowering || !parent) {
       agent.setEffort(level);
       agent.addItem({ kind: 'notice', level: 'info', text: `Effort ${lowering ? 'lowered' : 'raised'} to ${level}: ${reason}` });
-      return `Your effort is now ${level}, from your next step on.`;
+      return `Effort ${lowering ? 'lowered' : 'raised'} from ${current} to ${level}, from your next step on.`;
     }
     if (!(parent.tier === 'lead' || parent.live)) {
       return `Error: "${parent.name}" is no longer running, so nobody can approve this. Stay at ${current}.`;
@@ -416,7 +444,7 @@ export class Conversation implements AgentHost, TeamActions {
     parent.addItem({ kind: 'inbound', via: 'message', from: agent.name, text });
     parent.deliver(messageEnvelope(agent.name, agent.tier, text));
     agent.addItem({ kind: 'notice', level: 'info', text: `Asked "${parent.name}" for ${level} effort: ${reason}` });
-    return `Request sent to "${parent.name}". Keep working at ${current} effort; you will get a message with the outcome.`;
+    return `Asked "${parent.name}" to raise you from ${current} to ${level}. Keep working at ${current}; if approved, the change applies by itself.`;
   }
 
   setAgentEffort(caller: Agent, name: string, level: Effort): string {
@@ -430,10 +458,8 @@ export class Conversation implements AgentHost, TeamActions {
     const before = target.info.effort;
     if (before === level) return `"${target.name}" is already at ${level} effort.`;
     target.setEffort(level);
-    const note = `"${caller.name}" set your thinking effort to ${level} (it was ${before}). It applies from your next step.`;
-    target.addItem({ kind: 'notice', level: 'info', text: `Effort set to ${level} by "${caller.name}".` });
-    // Only tell an agent that is mid-turn; there is no reason to wake a waiting or finished one for this.
-    if (target.status === 'running') target.deliver(messageEnvelope(caller.name, caller.tier, note));
-    return `"${target.name}" is now at ${level} effort.`;
+    // Not sent as a message: that would force an extra turn, whose reply could replace the agent's report.
+    target.addItem({ kind: 'notice', level: 'info', text: `Effort set to ${level} by "${caller.name}" (was ${before}).` });
+    return `"${target.name}" ${effortRank(level) > effortRank(before) ? 'raised' : 'lowered'} from ${before} to ${level} effort.`;
   }
 }

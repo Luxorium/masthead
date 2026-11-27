@@ -6,6 +6,10 @@
 
 The error a queued request is rejected with when it is cancelled. `Agent.ensureProcess()` checks for it with `instanceof` so a stop while queued is not reported as a failure.
 
+## `class TierOff extends Error`
+
+The error a queued request is rejected with when its tier's limit is 0 after the limits change. Its message is "This tier was switched off in the settings while the agent was waiting to start." and `toString()` returns just that, because `ensureProcess()` passes `String(error)` to `processLost()` and the agent shows it as its error.
+
 ## `class Scheduler`
 
 Constructed by `App` as `new Scheduler((tier) => this.currentSettings.tiers[tier].max)`. Taking the limit as a **function** rather than a number means it always reads the current settings; no update call is needed for the numbers themselves.
@@ -27,7 +31,7 @@ Constructed by `App` as `new Scheduler((tier) => this.currentSettings.tiers[tier
 | `acquire(tier, id, owner)` | Returns a promise. Resolves at once if the agent already holds a slot, or if there is room **and** nobody is queued. Otherwise adds a waiter and calls `pump()`. |
 | `release(tier, id)` | Removes the agent from `active`; if it was there, calls `pump()`. Safe to call twice. |
 | `cancel(tier, id)` | Removes a queued waiter and rejects it with `SlotCancelled`. Returns whether one was found. |
-| `limitsChanged()` | Calls `pump()` for every tier with a queue. `App.updateSettings()` calls it. |
+| `limitsChanged()` | For every tier with a queue: if its cap is now 0, removes every waiter and rejects it with `TierOff`; otherwise calls `pump()`. `App.updateSettings()` calls it. |
 | `pump(tier)` (private) | While there are waiters and room: count active agents per owner, choose the waiter whose owner has the fewest (ties: smallest `seq`), move it to `active`, call its `grant()`. |
 
 ### Why "fewest running for the same owner"
@@ -36,7 +40,7 @@ The owner is the parent agent. Choosing the parent with the least current share 
 
 ## Tests
 
-`test/unit.test.ts` has five scheduler tests: the limit is never exceeded and the next waiter starts when one finishes; tiers are separate and the lead is unlimited (and a limit of 0 starts nothing); a freed slot goes to the parent with fewest running; cancelling frees a place and raising the limit starts waiters (while lowering it stops nothing); asking twice for the same agent holds one slot.
+`test/conversation.test.ts` checks, through a `Conversation`, that switching a tier off fails its queued agents and reports to the parent. `test/unit.test.ts` has five scheduler tests: the limit is never exceeded and the next waiter starts when one finishes; tiers are separate and the lead is unlimited (and a limit of 0 starts nothing); a freed slot goes to the parent with fewest running; cancelling frees a place and raising the limit starts waiters (while lowering it stops nothing); asking twice for the same agent holds one slot.
 
 ## Callers
 

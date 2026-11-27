@@ -27,19 +27,31 @@
   // Hovering an agent shows the tail of its chat without leaving the map.
   let previewId = $state<string | null>(null);
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The transcript the current preview fetched itself, dropped again when the preview closes. */
+  let fetchedFor: string | null = null;
 
   function enter(id: string) {
     if (hoverTimer) clearTimeout(hoverTimer);
     hoverTimer = setTimeout(() => {
+      forget();
       previewId = id;
-      store.loadItems(id);
+      if (!store.items[id]) {
+        fetchedFor = id;
+        store.loadItems(id);
+      }
     }, 220);
+  }
+
+  function forget() {
+    if (fetchedFor) store.dropItems(fetchedFor);
+    fetchedFor = null;
   }
 
   function leave() {
     if (hoverTimer) clearTimeout(hoverTimer);
     hoverTimer = null;
     previewId = null;
+    forget();
   }
 
   function flat(text: string, max: number): string {

@@ -1,5 +1,9 @@
 # Next release: 0.1.1
 
+**Status, 2026-11-26:** items 1-20 below were implemented and released as 0.1.1, together with a usage
+section, a settings popup, folded agent reports and a reuse line in the lead's prompt. The "Later"
+list is still open. The rest of this page is the audit as written before the work.
+
 Audit of Masthead 0.1.0, 2026-11-26. Done inside Masthead by the lead (alpha) with three Opus agents:
 bravo (server/, shared/), charlie (web/), delta (tests, install scripts, docs). The lead read all of
 `server/` itself and checked the findings below against the code; items it did not check are marked

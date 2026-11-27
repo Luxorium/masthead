@@ -1,9 +1,34 @@
 // Drives the real page in a headless browser against a running Masthead and saves screenshots.
 // Usage: node test/ui.e2e.mjs <url> <screenshot folder>
-// It sends real messages, so point it at a test server whose settings use cheap models.
+// It sends real messages, so point it at a test server whose settings use cheap models, started with
+// its own XDG_CONFIG_HOME and XDG_DATA_HOME. The server's secret is taken from the URL's ?key=, else
+// MASTHEAD_KEY, else $XDG_DATA_HOME/masthead/secret. It never runs against the installed app on 7717.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 
-const [url = 'http://127.0.0.1:7799', shots = '.'] = process.argv.slice(2);
+const [rawUrl = 'http://127.0.0.1:7799', shots = '.'] = process.argv.slice(2);
+const target = new URL(rawUrl);
+if (target.port === '7717') {
+  console.error('Refusing to run against port 7717, the installed Masthead. Start a test server on another port with its own XDG_CONFIG_HOME and XDG_DATA_HOME.');
+  process.exit(2);
+}
+if (!target.searchParams.get('key')) {
+  let key = process.env.MASTHEAD_KEY;
+  if (!key && process.env.XDG_DATA_HOME) {
+    try {
+      key = readFileSync(join(process.env.XDG_DATA_HOME, 'masthead', 'secret'), 'utf8').trim();
+    } catch {
+      // reported below
+    }
+  }
+  if (!key) {
+    console.error("No key for the test server: add ?key=<secret> to the URL, or set MASTHEAD_KEY, or the server's XDG_DATA_HOME.");
+    process.exit(2);
+  }
+  target.searchParams.set('key', key);
+}
+const url = target.href;
 const t0 = Date.now();
 const log = (...a) => console.log(((Date.now() - t0) / 1000).toFixed(1).padStart(6), ...a);
 let failed = false;
@@ -31,8 +56,11 @@ try {
   const before = await opus.locator('output').textContent();
   await opus.getByLabel('More Opus 5.5 agents').click();
   await page.waitForFunction((b) => document.querySelector('.tier.tier-opus output')?.textContent !== b, before);
+  const raised = await opus.locator('output').textContent();
   await opus.getByLabel('Fewer Opus 5.5 agents').click();
-  check('the stepper changes the limit', true);
+  await page.waitForFunction((b) => document.querySelector('.tier.tier-opus output')?.textContent === b, before, { timeout: 5000 }).catch(() => {});
+  const lowered = await opus.locator('output').textContent();
+  check('the stepper changes the limit', raised !== before && lowered === before);
 
   const box = page.locator('textarea');
   await box.fill(

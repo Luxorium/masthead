@@ -53,11 +53,11 @@ Start with **[Architecture](Architecture.md)**, then read **[Agent life cycle](A
 - **Web source:** [Web front end](Source-Web-Front-End.md) · [Web store](Source-Web-Store.md) · [Web components](Source-Web-Components.md)
 - **Walkthroughs:** [Sending a message](Walkthrough-Sending-a-Message.md) · [An agent starting another](Walkthrough-Starting-an-Agent.md) · [A report coming back](Walkthrough-Report-Coming-Back.md) · [An effort request](Walkthrough-Effort-Request.md) · [Stopping an agent](Walkthrough-Stopping-an-Agent.md) · [Restarting with saved conversations](Walkthrough-Restarting-the-App.md)
 
-## Known limitations in 0.1.0
+## Known limitations in 0.1.1
 
 These are deliberate for this version:
 
-- **No local authentication** beyond the Host and Origin checks ([Security model](Security-Model.md)).
+- **Any program running as the person can drive Masthead**, because it can read the local secret; other user accounts cannot ([Security model](Security-Model.md#what-it-does-not-defend-against)).
 - **Effort does not drop back to low on its own.**
 - **Lowering an effort ceiling or a tier limit does not affect agents already running** ([Thinking effort](Thinking-Effort.md#known-limitations), [Slot scheduling](Slot-Scheduling.md)).
 - **The inter-agent message counter resets on restart** ([Team rules](Team-Rules.md#limits-per-conversation)).
@@ -69,4 +69,4 @@ Every statement here was written from the source code. Where the code leaves som
 
 ---
 
-Written 2026-11-26. Describes Masthead version 0.1.0 (`VERSION` in `shared/protocol.ts`).
+Written 2026-11-26, updated the same day for Masthead version 0.1.1 (`VERSION` in `shared/protocol.ts`).

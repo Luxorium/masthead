@@ -35,18 +35,22 @@ masthead
 
 The script builds the app, installs it under `~/.local/lib/masthead`, adds a `masthead` command to
 `~/.local/bin`, registers a user service that starts at login, and adds a launcher entry. It needs
-no root. Run it again to update. `scripts/uninstall.sh` removes it and keeps your conversations.
+no root. Run it again to update; if agents are working it asks before restarting (or pass `--force`).
+`scripts/uninstall.sh` removes it and keeps your conversations.
 
-`masthead` opens the app in your browser at `http://127.0.0.1:7717`.
+`masthead` opens the app in your browser at `http://127.0.0.1:7717` and signs that browser in (see
+Security). A tab opened some other way asks you to open it with `masthead` once.
 
 | Command | What it does |
 |---|---|
-| `masthead` | Start it if needed and open the browser |
+| `masthead` | Start it if needed and open the browser, signed in |
 | `masthead serve` | Run the server in this terminal |
 | `masthead status` | Say whether it is running |
 | `masthead stop` | Stop it; agents that are working are stopped too |
 
-`--port N` or `MASTHEAD_PORT` changes the port.
+`--port N` or `MASTHEAD_PORT` changes the port. The installed service always serves 7717; on any
+other port `masthead` starts and stops a separate copy of its own. That copy reads its secret from
+its own data folder, so stop it with the same `XDG_DATA_HOME` it was started with.
 
 ## Using it
 
@@ -76,14 +80,20 @@ Stopping Masthead itself stops them.
 |---|---|
 | Settings | `~/.config/masthead/settings.json` |
 | Conversations | `~/.local/share/masthead/conversations/` |
+| The local secret | `~/.local/share/masthead/secret` |
 | Claude Code's own session files | `~/.claude/` (Masthead resumes these by id) |
 
 ## Security
 
 The server listens on `127.0.0.1` only. It can run commands as you, so it also refuses requests that
 a web page elsewhere could trick your browser into sending: the `Host` header must name the server,
-and only Masthead's own page may open the live connection. Any program running as you on the same
-machine can still reach it, as it could run `claude` itself.
+and only Masthead's own page may open the live connection.
+
+On top of that, the live connection and `masthead stop` need a secret. It is created once in
+`~/.local/share/masthead/secret`, which only you can read, so other users on the machine cannot
+drive Masthead. `masthead` opens the page with the secret in the address; the page keeps it for that
+address, removes it from the address bar and sends it when it connects. Any program running as you
+can still read the secret, as it could run `claude` itself.
 
 ## Usage and limits
 
@@ -102,6 +112,6 @@ npm run test:live    # end-to-end against the real Claude Code, using Haiku for 
 ```
 
 `npm run dev:web` serves the page with hot reload on port 7718; start the server with
-`MASTHEAD_DEV=1 npm start` beside it. The design of the code is described in `docs/wiki/`.
+`MASTHEAD_DEV=1 npm start` beside it. The server prints the address of the dev page with its key. The design of the code is described in `docs/wiki/`.
 
 Masthead is an independent project. It is not made or endorsed by Anthropic.

@@ -15,6 +15,17 @@ export class SlotCancelled extends Error {
   }
 }
 
+/** A queued request refused because its tier was switched off (limit 0) while it waited. */
+export class TierOff extends Error {
+  constructor() {
+    super('This tier was switched off in the settings while the agent was waiting to start.');
+  }
+  // The agent shows String(error); keep it free of an "Error:" prefix.
+  override toString(): string {
+    return this.message;
+  }
+}
+
 /**
  * Limits how many agents of each tier run at once, across every conversation.
  *
@@ -83,9 +94,15 @@ export class Scheduler {
     return true;
   }
 
-  /** Call after the limits change so newly allowed agents start. */
+  /**
+   * Call after the limits change so newly allowed agents start. Requests queued for a tier that is now
+   * off would wait for ever, so they are refused with TierOff; the agent then fails and reports.
+   */
   limitsChanged(): void {
-    for (const tier of this.queue.keys()) this.pump(tier);
+    for (const [tier, q] of this.queue) {
+      if (this.cap(tier) === 0) for (const w of q.splice(0)) w.refuse(new TierOff());
+      else this.pump(tier);
+    }
   }
 
   private pump(tier: Tier): void {
