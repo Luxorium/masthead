@@ -9,6 +9,9 @@ import { UsageError, onPath, openSignedIn, parseCommand, parseDevWebPort, parseP
 import { DATA_DIR, DEFAULT_PORT, SECRET_FILE } from './paths.js';
 import { loadSecret, readSecret } from './transport/auth.js';
 import { serve } from './transport/http.js';
+import { chooseTarget, startRemote } from './transport/remote.js';
+import { RemoteAccess } from './remote/access.js';
+import { CliTailscale } from './remote/tailscale.js';
 import { serviceFor, ServiceError } from './service/index.js';
 import { doctor, doctorExitCode, formatChecks, sdkBinaryPackage, systemDoctorFs } from './doctor.js';
 import { findClaude } from './backends/claude/env.js';
@@ -153,7 +156,9 @@ function secretOrExit(): string {
 
 async function runServer(): Promise<void> {
   const p = port();
-  const app = new App();
+  // Remote access over Tailscale: off by default; Masthead adds and removes only its own serve entry.
+  const remote = new RemoteAccess({ dir: join(DATA_DIR, 'remote'), tailscale: new CliTailscale(), target: chooseTarget(process.env, DATA_DIR) });
+  const app = new App({ remote });
   const dev = process.env.MASTHEAD_DEV === '1';
   let devWeb = 7718;
   try {
@@ -178,6 +183,10 @@ async function runServer(): Promise<void> {
     console.error(err.code === 'EADDRINUSE' ? `Port ${p} is already in use. Is Masthead already running?` : `Could not start: ${err.message}`);
     process.exit(1);
   }
+  // Opens the private listener when remote access is on; Tailscale missing is not an error.
+  void startRemote(app, remote, { webDir, blobs: app.blobs, convExists: (id) => app.hasConversation(id) }).catch((e) =>
+    console.error(`Masthead: remote access did not start: ${(e as Error).message}`),
+  );
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   // Windows never sends SIGTERM: closing the console window gives SIGHUP, Ctrl+Break gives SIGBREAK.

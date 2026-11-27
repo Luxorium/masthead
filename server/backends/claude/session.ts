@@ -93,6 +93,9 @@ function sdkContent(content: Content): unknown {
 export interface ClaudeBackendOptions {
   /** The Claude Code binary; null when it was not found. */
   path: string | null;
+  /** As found at start-up (findClaude), for detect(). */
+  version?: string | null;
+  error?: string;
   /** Starts a session; tests replace it. Defaults to the Agent SDK's `query`. */
   query?: typeof sdkQuery;
 }
@@ -106,7 +109,15 @@ export class ClaudeBackend implements Backend {
 
   async detect(): Promise<BackendInfo> {
     // Detection still lives in settings/app (findClaude) until the registry step.
-    return { id: this.id, label: this.label, available: this.opts.path !== null, path: this.opts.path, version: null, signedIn: null };
+    return {
+      id: this.id,
+      label: this.label,
+      available: this.opts.path !== null,
+      path: this.opts.path,
+      version: this.opts.version ?? null,
+      signedIn: null,
+      ...(this.opts.error ? { error: this.opts.error } : {}),
+    };
   }
 
   async models(): Promise<ModelInfo[]> {

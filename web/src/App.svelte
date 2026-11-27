@@ -165,7 +165,7 @@
       </div>
     {/if}
 
-    {#if store.app && !store.app.claude.path}
+    {#if store.app && !store.canRun}
       <FirstRun />
     {:else if store.view === 'map' && store.conv && hasTeam && !ui.narrow}
       <TeamMap />

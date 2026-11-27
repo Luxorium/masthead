@@ -175,3 +175,10 @@ test('settings v2: generated built-in profiles are added once; a stored copy win
   assert.equal(again.profiles.find((x) => x.id === 'codex')!.tiers[1]!.max, 1);
   assert.equal(again.profiles.find((x) => x.id === 'codex')!.builtIn, true);
 });
+
+test('settings v2: a profile keeps a short description', () => {
+  const s = sanitizeSettings({ profiles: [{ ...twoTier, description: `  Built from\nthe list. ${'x'.repeat(300)}` }] });
+  const d = s.profiles.find((p) => p.id === 'duo')!.description!;
+  assert.ok(d.startsWith('Built from the list.'));
+  assert.equal(d.length, 200);
+});

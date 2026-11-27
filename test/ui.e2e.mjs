@@ -35,6 +35,10 @@ if (!target.searchParams.get('key')) {
   target.searchParams.set('key', key);
 }
 const url = target.href;
+// MASTHEAD_E2E_BACKEND=fake: the server runs echo's fake backend (MASTHEAD_BACKEND=fake), which answers
+// scripted phrases instead of a model. The team is then built one tool call per message, and the checks
+// that need a model's own writing (a code block, a final table) are skipped.
+const fake = process.env.MASTHEAD_E2E_BACKEND === 'fake';
 const base = `${target.origin}/`;
 const t0 = Date.now();
 const log = (...a) => console.log(((Date.now() - t0) / 1000).toFixed(1).padStart(6), ...a);
@@ -166,21 +170,46 @@ try {
   check('a refused message is given back to the composer', (await box.inputValue()).length === tooLong.length);
   await box.fill('');
 
-  const busyTask =
-    'Run the shell command `sleep 8` as a foreground Bash command, twelve separate times, one after another. Never run it in the background. Then reply DONE.';
-  await box.fill(
-    `Wiring test, follow literally. In one step use spawn_agent three times: an agent titled "shell job" with the task "Use spawn_agent to start an agent titled helper job with the task: Run the shell command \`sleep 6; echo ready\` and reply with its output. When its report arrives, reply SHELL-DONE plus what it said. Never call stop_agent.", an agent titled "list job" with the task "Use the Write tool to save a three-item markdown list of fruit to fruit.md. Then reply with the same list and a short python code block printing hi." and an agent titled "busy one" with the task "${busyTask}". Then end your turn. When every report has arrived, summarise them in a short markdown table.`,
-  );
-  await box.press('Enter');
+  if (fake) {
+    // One spawn_agent call per message: shell job (which starts helper job, whose `ls` needs approval),
+    // list job, and busy one (a background task keeps it working until it is stopped).
+    // The fake reads markers anywhere in a message, JSON included; writing "[" as \u005b inside the JSON
+    // keeps the lead from acting on a marker meant for the helper (JSON.parse turns it back into "[").
+    const spawn = (title, task) => `Call the tool spawn_agent with input ${JSON.stringify({ title, task }).replace(/\[/g, '\\u005b')}`;
+    const messages = [
+      spawn('shell job', spawn('helper job', 'Run the shell command `ls`')),
+      spawn('list job', 'Reply with exactly the word fruit'),
+      spawn('busy one', '[[background 120s]] Reply with exactly the word busy'),
+    ];
+    for (const m of messages) {
+      await box.fill(m);
+      await box.press('Enter');
+      await page.waitForFunction((n) => document.querySelectorAll('.user .bubble').length >= n, messages.indexOf(m) + 1);
+    }
+  } else {
+    const busyTask =
+      'Run the shell command `sleep 8` as a foreground Bash command, twelve separate times, one after another. Never run it in the background. Then reply DONE.';
+    await box.fill(
+      `Wiring test, follow literally. In one step use spawn_agent three times: an agent titled "shell job" with the task "Use spawn_agent to start an agent titled helper job with the task: Run the shell command \`sleep 6; echo ready\` and reply with its output. When its report arrives, reply SHELL-DONE plus what it said. Never call stop_agent.", an agent titled "list job" with the task "Use the Write tool to save a three-item markdown list of fruit to fruit.md. Then reply with the same list and a short python code block printing hi." and an agent titled "busy one" with the task "${busyTask}". Then end your turn. When every report has arrived, summarise them in a short markdown table.`,
+    );
+    await box.press('Enter');
+  }
   await page.waitForSelector('.user .bubble');
+  const lastKeyAt = Date.now();
   log('sent');
 
   // Approval card: the first one appears, names the agent, takes focus (nobody is typing), Allow works.
   const firstCard = page.locator('.card[role="alertdialog"]').first();
   await firstCard.waitFor({ timeout: 120_000 });
+  const cardAfter = Date.now() - lastKeyAt;
   const asker = (await firstCard.locator('.who').textContent())?.trim() ?? '';
   check('an approval card names the agent', asker.length > 0 && ((await firstCard.getAttribute('aria-label')) ?? '').includes(asker));
-  check('the card takes focus', await page.evaluate(() => document.activeElement?.getAttribute('role') === 'alertdialog'));
+  // The card takes focus unless a key was pressed in the last 1.5 s (PermissionCard's rule). A real model
+  // asks seconds later; the fake asks at once, while the person is still "typing".
+  const focus = await page.evaluate(() => document.activeElement?.getAttribute('role') ?? document.activeElement?.tagName);
+  if (cardAfter > 2000) check('the card takes focus', focus === 'alertdialog');
+  else if (cardAfter < 1200) check('the card does not take focus while the person is typing', focus !== 'alertdialog');
+  else log(`card appeared ${cardAfter} ms after typing: too close to the 1.5 s rule to judge focus`);
   const cardId = await firstCard.evaluate((el) => el.outerHTML);
   await firstCard.getByRole('button', { name: 'Allow', exact: true }).click();
   await page.waitForFunction((html) => ![...document.querySelectorAll('.card[role="alertdialog"]')].some((el) => el.outerHTML === html), cardId, { timeout: 10_000 }).catch(() => {});
@@ -229,7 +258,7 @@ try {
 
   // Stop: the ■ on a busy agent's map card stops it.
   const busyOne = page.locator('.map .card', { hasText: 'busy one' }).first();
-  await busyOne.locator('.dot.running').waitFor({ timeout: 90_000 });
+  await busyOne.locator('.dot.running, .dot.waiting').first().waitFor({ timeout: 90_000 });
   const stopBtn = busyOne.getByRole('button', { name: /^Stop / });
   await stopBtn.hover();
   check('the stop button says "Stop" on hover', await stopBtn.locator('.label').isVisible());
@@ -244,9 +273,11 @@ try {
   await page.waitForSelector('.inbound.task');
   await page.screenshot({ path: `${shots}/4-agent-${scheme}.png` });
   check('a sub-agent transcript opens with its task', (await page.locator('.inbound.task').count()) === 1);
-  // Its reply has a python code block: the page's own code-block markup survives the sanitiser in a real browser.
-  await page.waitForSelector('.md .code-block .code-copy', { timeout: 30_000 }).catch(() => {});
-  check('code blocks render with a Copy button', (await page.locator('.md .code-block .code-copy').count()) >= 1);
+  if (!fake) {
+    // Its reply has a python code block: the page's own code-block markup survives the sanitiser in a real browser.
+    await page.waitForSelector('.md .code-block .code-copy', { timeout: 30_000 }).catch(() => {});
+    check('code blocks render with a Copy button', (await page.locator('.md .code-block .code-copy').count()) >= 1);
+  }
   // The message box says who it is pointed at, and Back returns it to the lead.
   const targetLine = (await page.locator('.addressee .to').textContent().catch(() => '')) ?? '';
   const placeholderText = (await page.locator('textarea').getAttribute('placeholder')) ?? '';
@@ -255,15 +286,17 @@ try {
   await page.waitForFunction(() => !document.querySelector('.crumbs'), null, { timeout: 5000 }).catch(() => {});
   check('Back returns the composer to the lead', (await page.locator('.addressee').count()) === 0 && (await page.locator('.crumbs').count()) === 0);
 
-  // Wait for all three reports and a table written after the last of them (the lead may draw interim tables).
+  // Wait for all three reports and (with a model) a table written after the last of them (the lead may
+  // draw interim tables).
   await page.waitForFunction(
-    () => {
+    (needTable) => {
       const reports = document.querySelectorAll('.inbound.report');
       if (reports.length < 3) return false;
+      if (!needTable) return true;
       const last = reports[reports.length - 1];
       return [...document.querySelectorAll('.md.assistant table')].some((t) => last.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING);
     },
-    null,
+    !fake,
     { timeout: 180_000 },
   );
   await page.waitForFunction(() => !document.querySelector('.working'), null, { timeout: 60_000 });
@@ -275,7 +308,7 @@ try {
   check('a report is folded to one line', (await report.locator('.gist').count()) === 1 && (await report.locator('.inbound-body').count()) === 0);
   await report.locator('.gist').click();
   check('a folded report opens on click', (await report.locator('.inbound-body').count()) === 1);
-  check('the final answer has a table', (await page.locator('.md.assistant table').count()) >= 1);
+  if (!fake) check('the final answer has a table', (await page.locator('.md.assistant table').count()) >= 1);
   // Usage: a quiet line in the sidebar once Claude Code has reported usage; it opens into each window.
   const usageLine = page.locator('.usage .summary');
   if (await usageLine.count()) {
@@ -287,8 +320,8 @@ try {
 
   // Reload: the conversation comes back from disk.
   await page.reload();
-  await page.waitForSelector('.md.assistant table');
-  check('the conversation survives a reload', (await page.locator('.user .bubble').count()) === 1);
+  await page.waitForSelector(fake ? '.inbound.report' : '.md.assistant table');
+  check('the conversation survives a reload', (await page.locator('.user .bubble').count()) === (fake ? 3 : 1));
   check('the sidebar lists it', (await page.locator('aside.left .row').count()) >= 1);
 
   // Phone: a 390 × 844 touch screen in the light theme, on the same server and conversation.

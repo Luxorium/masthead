@@ -44,6 +44,8 @@ export interface TierSpec {
 export interface TeamProfile {
   id: string;
   label: string;
+  /** One line for people on where it comes from or what it is for (at most 200 characters). */
+  description?: string;
   builtIn: boolean;
   /** Index 0 is the lead; tier i starts tier i+1; the last starts nothing. 1 to MAX_TIERS tiers. */
   tiers: TierSpec[];

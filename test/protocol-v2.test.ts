@@ -246,3 +246,35 @@ test('app: scheduler limits come from the tier\'s profile; a new conversation ta
   assert.equal(conv.agents[0]!.tier, mini.tiers[0]!.id, "the lead is on the profile's first tier");
   app2.shutdown();
 });
+
+test('v2: state carries backends for version 2 tabs only; check_backends re-detects and tells everyone', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { App } = await import('../server/app/app.ts');
+  const { defaultSettings } = await import('../server/settings/settings.ts');
+  const { Store } = await import('../server/storage/store.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'masthead-backends-'));
+  let detected = 0;
+  const registry = { status: () => [{ id: 'fake', label: 'Fake', available: true, models: [] }], detectAll: async () => (detected++, []), dispose: () => {}, get: () => undefined, generatedProfiles: () => [] } as never;
+  const app = new App({ store: new Store(join(dir, 'c')), settingsFile: join(dir, 's.json'), settings: defaultSettings(), claude: { path: null, version: null }, registry });
+  const v1: Array<Record<string, unknown>> = [];
+  const v2: Array<Record<string, unknown>> = [];
+  const c1: Client = { send: (m) => void v1.push(m as Record<string, unknown>) };
+  const c2: Client = { send: (m) => void v2.push(m as Record<string, unknown>) };
+  app.connect(c1);
+  app.connect(c2);
+  assert.equal('backends' in (v1[0]!.state as object), false, 'a version 1 state is unchanged');
+  app.handle(c2, { t: 'hello', protocol: 2 });
+  assert.deepEqual((v2.at(-1)!.state as { backends: Array<{ id: string }> }).backends.map((b) => b.id), ['fake']);
+  app.handle(c2, { t: 'check_backends' });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(detected, 1);
+  assert.equal(v2.at(-1)!.t, 'backends');
+  const reader: Client = { send: () => {}, role: 'read' };
+  app.connect(reader);
+  const out: Array<Record<string, unknown>> = [];
+  reader.send = (m) => void out.push(m as Record<string, unknown>);
+  app.handle(reader, { t: 'check_backends' });
+  assert.equal(out[0]!.t, 'error');
+});

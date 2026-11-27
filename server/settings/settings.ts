@@ -146,7 +146,9 @@ function parseProfiles(raw: unknown[], prev: TeamProfile[]): TeamProfile[] {
       if (tiers.some((t) => !t.model)) continue;
     }
     const label = typeof r.label === 'string' && r.label.trim() ? r.label.trim().slice(0, 40) : (before?.label ?? id);
-    out.push({ id, label, builtIn: id === CLAUDE_PROFILE || (before?.builtIn ?? false), tiers });
+    const descIn = typeof r.description === 'string' ? r.description.replace(/\s+/g, ' ').trim().slice(0, 200) : undefined;
+    const description = descIn || before?.description;
+    out.push({ id, label, ...(description ? { description } : {}), builtIn: id === CLAUDE_PROFILE || (before?.builtIn ?? false), tiers });
     seen.add(id);
   }
   if (!seen.has(CLAUDE_PROFILE)) out.unshift(prev.find((p) => p.id === CLAUDE_PROFILE) ?? claudeProfile());

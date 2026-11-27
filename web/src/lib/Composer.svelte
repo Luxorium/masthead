@@ -25,7 +25,7 @@
   const direct = $derived(!isNew && agent !== null && agent.tier !== 'lead');
   const leadBusy = $derived(store.lead?.status === 'running');
   const anyLive = $derived(store.liveCount > 0);
-  const canSend = $derived((draft.text.trim().length > 0 || draft.images.length > 0) && store.connected && !store.creating && !!store.app?.claude.path);
+  const canSend = $derived((draft.text.trim().length > 0 || draft.images.length > 0) && store.connected && !store.creating && store.canRun);
   const leadName = $derived(displayName(store.lead?.name ?? 'alpha'));
   const placeholder = $derived(
     isNew

@@ -79,35 +79,42 @@ export function renderMarkdown(text: string): string {
 }
 
 /**
- * Where a streaming draft can be split: the end of its last finished block (a blank line outside a
- * code fence), and whether the text after it is inside an unclosed fence.
+ * Splits a streaming draft into its finished blocks (each ending at a blank line outside a code fence,
+ * or where a fence closes) and the unfinished tail, and says whether the tail is inside an open fence.
  */
-export function splitDraft(text: string): { head: string; tail: string; inFence: boolean } {
+export function splitDraft(text: string): { blocks: string[]; tail: string; inFence: boolean } {
+  const blocks: string[] = [];
   let inFence = false;
-  let boundary = 0;
+  let start = 0;
   let pos = 0;
   for (const line of text.split('\n')) {
+    const end = Math.min(pos + line.length + 1, text.length);
     if (/^\s{0,3}(```|~~~)/.test(line)) {
       inFence = !inFence;
-      // A fence that just closed ends a block too.
-      if (!inFence) boundary = pos + line.length + 1;
-    } else if (!inFence && line.trim() === '' && pos > 0) {
-      boundary = pos + line.length + 1;
+      // A fence that just closed ends a block.
+      if (!inFence && end > start && pos + line.length < text.length) {
+        blocks.push(text.slice(start, end));
+        start = end;
+      }
+    } else if (!inFence && line.trim() === '' && pos > start && pos + line.length < text.length) {
+      blocks.push(text.slice(start, end));
+      start = end;
     }
     pos += line.length + 1;
   }
-  boundary = Math.min(boundary, text.length);
-  return { head: text.slice(0, boundary), tail: text.slice(boundary), inFence };
+  return { blocks, tail: text.slice(start), inFence };
 }
 
 /**
- * Renders a draft that grows a little every 70 ms. Finished blocks come from the cache, so only the
- * unfinished tail is parsed on each update; a tail inside an unclosed code fence is shown as plain
- * escaped text until the fence closes (no highlighting per keystroke). The same safety steps apply.
+ * Renders a draft that grows a little every 70 ms. Each finished block is rendered once and then comes
+ * from the cache, so an update parses only the unfinished tail; a tail inside an unclosed code fence is
+ * shown as plain escaped text until the fence closes (no highlighting per update). The same safety
+ * steps apply to every block. Blocks are rendered separately, so a list interrupted by a blank line can
+ * look split until the reply ends; the finished item is then rendered whole.
  */
 export function renderDraft(text: string): string {
-  const { head, tail, inFence } = splitDraft(text);
-  const top = head ? renderMarkdown(head) : '';
+  const { blocks, tail, inFence } = splitDraft(text);
+  const top = blocks.map(renderMarkdown).join('');
   if (!tail) return top;
   if (inFence) {
     const fenceAt = tail.search(/^\s{0,3}(```|~~~)/m);

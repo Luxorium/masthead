@@ -97,6 +97,11 @@ export class Store {
   viewAgent = $derived((this.viewAgentId ? this.agents[this.viewAgentId] : null) ?? this.lead);
   viewItems = $derived(this.viewAgent ? (this.items[this.viewAgent.id] ?? []) : []);
   viewDraft = $derived(this.viewAgent ? (this.drafts[this.viewAgent.id] ?? null) : null);
+  /**
+   * Whether an agent backend is there to run. Until the server sends `state.backends` (W8) this reads
+   * the Claude Code info: a path, or (for the test-only fake backend) a version without a path.
+   */
+  canRun = $derived(!!this.app && (!!this.app.claude.path || !!this.app.claude.version));
   convPending = $derived(this.pending.filter((p) => p.convId === this.convId));
   liveCount = $derived(this.agentList.filter((a) => a.tier !== 'lead' && (a.status === 'queued' || a.status === 'running' || a.status === 'waiting')).length);
 

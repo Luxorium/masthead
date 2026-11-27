@@ -38,7 +38,7 @@ export interface ConversationHost {
   askPermission(conv: Conversation, agent: Agent, ask: PermissionAsk): Promise<PermissionAnswer>;
   cancelPermissions(agentId: string): void;
   /** The backend agents run on, when not the default Claude Code (the fake, in tests and CI). */
-  backend?(): Backend | undefined;
+  backend?(tier: string): Backend | undefined;
   /** Stores an image from a tool result as a blob of this conversation. */
   storeImage?(convId: string, data: string, mediaType: string): { ref: unknown } | { error: string };
   /** Tests replace the clock; the app uses the real one. */
@@ -429,8 +429,8 @@ export class Conversation implements AgentHost, TeamActions {
   settings(): Settings {
     return this.host.settings();
   }
-  backend(_agent: Agent): Backend | undefined {
-    return this.host.backend?.();
+  backend(agent: Agent): Backend | undefined {
+    return this.host.backend?.(agent.tier);
   }
   storeImage(_agent: Agent, data: string, mediaType: string): { ref: unknown } | { error: string } {
     return this.host.storeImage ? this.host.storeImage(this.meta.id, data, mediaType) : { error: 'images are not stored here' };

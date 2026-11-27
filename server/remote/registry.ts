@@ -45,7 +45,7 @@ export interface PendingRequest {
 
 export interface AuditEntry {
   ts: number;
-  event: 'request' | 'allow' | 'deny' | 'revoke' | 'expire' | 'role' | 'connect' | 'refuse' | 'collect';
+  event: 'request' | 'allow' | 'deny' | 'revoke' | 'expire' | 'role' | 'connect' | 'refuse' | 'collect' | 'switch';
   nodeId?: string;
   nodeName?: string;
   user?: string;
@@ -273,6 +273,12 @@ export class DeviceRegistry {
     if (!/^[0-9a-f]{64}$/.test(token)) return null;
     const h = sha(token);
     return [...this.devices.values()].find((d) => sameHash(h, d.tokenHash)) ?? null;
+  }
+
+  /** Changes who may ask (the person's setting). */
+  setPolicy(p: { allowOtherTailnets: boolean; allowTagged: boolean }): void {
+    this.opts.allowOtherTailnets = p.allowOtherTailnets;
+    this.opts.allowTagged = p.allowTagged;
   }
 
   get options(): { allowOtherTailnets: boolean; allowTagged: boolean } {

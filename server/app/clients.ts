@@ -208,6 +208,11 @@ export class Hub {
     this.sendTo(convId, v2, msg);
   }
 
+  /** Only to the local browser's tabs (remote access management): never to a remote device. */
+  publishLocal(msg: Record<string, unknown>): void {
+    for (const client of this.sessions.keys()) if (!client.role) client.send(msg);
+  }
+
   /** A version 2 event the hub makes itself (not from App), to subscribers only. */
   private emit(convId: string, event: Record<string, unknown>): void {
     const e = this.record(convId, event);

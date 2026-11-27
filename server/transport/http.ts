@@ -241,7 +241,7 @@ export function serveStatic(root: string, pathname: string, req: IncomingMessage
     'x-content-type-options': 'nosniff',
     // Also keeps the ?key in the address from leaking to any other site.
     'referrer-policy': 'no-referrer',
-    'content-security-policy': CSP,
+    'content-security-policy': csp,
     'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
     // Built assets have a content hash in their name; the page itself must always be fresh.
     'cache-control': isAsset ? 'public, max-age=31536000, immutable' : 'no-cache',

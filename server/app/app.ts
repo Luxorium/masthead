@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { Backend, PermissionAnswer, PermissionAsk } from '../backends/types.js';
-import { FakeBackend, fakeBackendSelected } from '../backends/fake/index.js';
-import { ClaudeBackend } from '../backends/claude/session.js';
+import { fakeBackendSelected } from '../backends/fake/index.js';
+import { BackendRegistry } from '../backends/registry.js';
 import {
   VERSION,
   type AppState,
@@ -19,12 +19,14 @@ import {
 import type { Agent } from '../runtime/agent.js';
 import { HOME, SETTINGS_FILE } from '../paths.js';
 import { findClaude, type ClaudeInfo } from '../backends/claude/env.js';
-import { loadSettings, sanitizeSettings, saveSettings, tierLimit } from '../settings/settings.js';
+import { loadSettings, sanitizeSettings, saveSettings, tierLimit, withBuiltInProfiles } from '../settings/settings.js';
+import { findTier } from '../../shared/protocol.js';
 import { Conversation, type ConversationHost } from '../core/conversation.js';
 import { Scheduler } from '../core/scheduler.js';
 import type { BlobRef } from '../storage/blobs.js';
 import { Store } from '../storage/store.js';
-import { Hub, type Client } from './clients.js';
+import type { RemoteAccess } from '../remote/access.js';
+import { ClientError, Hub, type Client } from './clients.js';
 
 /** A browser tab connected to the server. */
 export type { Client } from './clients.js';
@@ -60,24 +62,27 @@ export class App implements ConversationHost {
   private usage = new Map<string, RateLimitNotice>();
   /** Disk writes that are failing; each is logged once until it works again. */
   private failing = new Set<string>();
-  /** The fake backend when the environment selects it (see the constructor); otherwise null. */
-  private fake: FakeBackend | null;
-  private claudeBackend: ClaudeBackend | undefined;
+  /** The agent backends (Claude Code, Codex; only the fake when the environment selects it). */
+  readonly registry: BackendRegistry;
 
   /**
    * `settingsFile` is where changes to the settings are written. Tests pass their own file so they
    * never touch the person's real settings.
    */
-  constructor(opts: { store?: Store; claude?: ClaudeInfo; settings?: Settings; settingsFile?: string } = {}) {
+  constructor(opts: { store?: Store; claude?: ClaudeInfo; settings?: Settings; settingsFile?: string; registry?: BackendRegistry; remote?: RemoteAccess } = {}) {
+    this.remote = opts.remote ?? null;
+    // Local tabs see remote access change as it happens (requests, devices, the switch).
+    this.remote?.onChange(() => this.hub.publishLocal({ t: 'remote', remote: this.remote!.state() }));
     this.settingsFile = opts.settingsFile ?? SETTINGS_FILE;
     this.currentSettings = opts.settings ?? loadSettings(this.settingsFile);
-    // The scripted fake backend, for the browser test and CI only: it needs both variables, and the
-    // page can never choose it.
-    if (process.env.MASTHEAD_BACKEND === 'fake' && !fakeBackendSelected(process.env)) {
-      throw new Error('MASTHEAD_BACKEND=fake is for tests only and also needs MASTHEAD_ALLOW_FAKE=1.');
-    }
-    this.fake = fakeBackendSelected(process.env) ? new FakeBackend({ stepMs: Number(process.env.MASTHEAD_FAKE_STEP_MS) || 20 }) : null;
-    this.claude = this.fake ? { path: null, version: 'fake backend (tests only)' } : (opts.claude ?? findClaude());
+    // The scripted fake backend is for the browser test and CI only: the registry needs both
+    // variables for it, and the page can never choose it.
+    const fakeOnly = fakeBackendSelected(process.env);
+    this.claude = fakeOnly ? { path: null, version: 'fake backend (tests only)' } : (opts.claude ?? (opts.registry ? { path: null, version: null } : findClaude()));
+    this.registry = opts.registry ?? new BackendRegistry({ claude: this.claude });
+    // Detect every backend in the background; a usable Codex adds its generated team profile. Only
+    // for a real start (no Claude Code or registry handed in): tests decide themselves when to detect.
+    if (!opts.claude && !opts.registry) void this.registry.detectAll().then(() => this.backendsDetected(), () => {});
     this.store = opts.store ?? new Store();
     // Limits come from whichever profile the tier belongs to.
     this.scheduler = new Scheduler((tier) => tierLimit(this.currentSettings, tier));
@@ -91,11 +96,15 @@ export class App implements ConversationHost {
 
   // ---- ConversationHost ----
 
-  backend(): Backend | undefined {
-    if (this.fake) return this.fake;
-    if (!this.claude.path) return undefined;
-    this.claudeBackend ??= new ClaudeBackend({ path: this.claude.path });
-    return this.claudeBackend;
+  /** The backend a tier runs on, if it can be used now. */
+  backend(tier: string): Backend | undefined {
+    return this.registry.get(findTier(this.currentSettings, tier)?.backend ?? 'claude-code');
+  }
+
+  /** After detection: add generated team profiles (the Codex team when Codex is usable). */
+  backendsDetected(): void {
+    const next = withBuiltInProfiles(this.currentSettings, this.registry.generatedProfiles());
+    if (next !== this.currentSettings) this.updateSettings(next);
   }
 
   settings(): Settings {
@@ -220,6 +229,7 @@ export class App implements ConversationHost {
     for (const p of [...this.pending.values()]) p.resolve({ decision: 'deny', message: 'Masthead is shutting down.' });
     for (const conv of this.conversations.values()) conv.shutdown();
     this.flush();
+    void this.registry.dispose();
   }
 
   // ---- browser tabs ----
@@ -246,8 +256,15 @@ export class App implements ConversationHost {
     }
   }
 
+  /** Remote access over Tailscale, when this server offers it. */
+  private remote: RemoteAccess | null;
+
   private state(client?: Client): AppState {
-    return { ...(client?.blobToken ? { blobToken: client.blobToken } : {}), version: VERSION, settings: this.currentSettings, conversations: this.metas(), claude: this.claude, home: HOME, pending: [...this.pending.values()].map((p) => p.request), usage: [...this.usage.values()] };
+    // Remote access is managed from the local browser only; a remote device never sees the list.
+    const remote = this.remote && client && !client.role ? { remote: this.remote.state() } : {};
+    // Version 2 pages read `backends`; version 1 pages ignore it.
+    const backends = client && this.hub.isV2(client) ? { backends: this.registry.status() } : {};
+    return { ...remote, ...backends, ...(client?.blobToken ? { blobToken: client.blobToken } : {}), version: VERSION, settings: this.currentSettings, conversations: this.metas(), claude: this.claude, home: HOME, pending: [...this.pending.values()].map((p) => p.request), usage: [...this.usage.values()] };
   }
 
   /** Every tab, in the protocol version it speaks; see clients.ts. */
@@ -295,11 +312,60 @@ export class App implements ConversationHost {
         client.send(this.hub.stateV2(client));
         return;
       }
+      if (this.remoteMessage(client, msg)) return;
       this.dispatch(client, raw as ClientMsg);
     } catch (e) {
       const ref = (raw as { ref?: unknown } | null)?.ref;
       this.hub.error(client, e, typeof ref === 'string' ? ref.slice(0, 80) : undefined);
     }
+  }
+
+  /** Remote access management, from the local browser only (the gate refuses it from devices). */
+  private remoteMessage(client: Client, msg: Record<string, unknown>): boolean {
+    switch (msg.t) {
+      case 'remote_settings': {
+        const remote = this.requireRemote();
+        const m = msg as { enabled?: unknown; port?: unknown; allowOtherTailnets?: unknown; allowTagged?: unknown };
+        remote.configure(m);
+        if (typeof m.enabled === 'boolean') {
+          void remote.setEnabled(m.enabled).then((r) => {
+            if (!r.ok) this.hub.error(client, new ClientError('refused', [r.problem ?? 'Remote access could not be changed.', r.command ? `Run: ${r.command}` : ''].filter(Boolean).join(' ')));
+          });
+        }
+        return true;
+      }
+      case 'device_decision': {
+        const m = msg as { requestId?: unknown; decision?: unknown; role?: unknown };
+        if (m.decision !== 'allow' && m.decision !== 'deny') throw new Error('Allow or deny.');
+        this.requireRemote().decide(String(m.requestId ?? ''), m.decision, m.role ?? 'full');
+        return true;
+      }
+      case 'device_revoke':
+        this.requireRemote().revoke(String(msg.nodeId ?? ''));
+        return true;
+      case 'device_role': {
+        const m = msg as { nodeId?: unknown; role?: unknown };
+        this.requireRemote().setRole(String(m.nodeId ?? ''), m.role);
+        return true;
+      }
+      case 'check_backends':
+        // Any approved device may ask (read devices may not: it runs programs to check versions).
+        void this.registry.detectAll().then(() => {
+          this.backendsDetected();
+          this.broadcast({ t: 'backends', backends: this.registry.status() } as unknown as ServerMsg);
+        });
+        return true;
+      case 'remote_audit':
+        client.send({ t: 'remote_audit', entries: this.requireRemote().audit() } as unknown as ServerMsg);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private requireRemote(): RemoteAccess {
+    if (!this.remote) throw new ClientError('not_found', 'Remote access is not available here.');
+    return this.remote;
   }
 
   private conv(id: unknown): Conversation {
@@ -348,13 +414,15 @@ export class App implements ConversationHost {
         let conv: Conversation;
         let firstRefs: BlobRef[] | undefined;
         if (msg.convId === null || msg.convId === undefined) {
-          if (!this.claude.path && !this.fake) throw new Error(this.claude.error ?? 'Claude Code was not found.');
           const cwd = this.checkDir(typeof msg.cwd === 'string' && msg.cwd ? msg.cwd : this.currentSettings.defaultCwd);
           // v2 pages may choose a team profile; anything unknown falls back to the default one.
           const wanted = (msg as { profile?: unknown }).profile;
           const profiles = this.currentSettings.profiles;
           const profile = typeof wanted === 'string' && profiles.some((p) => p.id === wanted) ? wanted : this.currentSettings.defaultProfile;
           if (typeof wanted === 'string' && profile !== wanted) throw new Error(`There is no team profile "${wanted.slice(0, 40)}".`);
+          // The lead's backend must be usable before a conversation starts on it.
+          const leadBackend = (profiles.find((p) => p.id === profile) ?? profiles[0])?.tiers[0]?.backend ?? 'claude-code';
+          if (!this.registry.get(leadBackend)) throw new Error(leadBackend === 'claude-code' ? (this.claude.error ?? 'Claude Code was not found.') : this.registry.unavailableReason(leadBackend));
           conv = Conversation.create(this, cwd, profile);
           this.conversations.set(conv.meta.id, conv);
           if (cwd !== this.currentSettings.defaultCwd) this.updateSettings({ ...this.currentSettings, defaultCwd: cwd });
