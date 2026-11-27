@@ -254,7 +254,9 @@ export class CachedWhois implements TailscaleProvider {
     const pending = this.limited(() => this.inner.whois(address));
     this.cache.set(address, { at: now, id: null, pending });
     const id = await pending.catch(() => null);
-    this.cache.set(address, { at: now, id });
+    // Only answers are kept: a failed or empty lookup (tailscaled restarting) must not lock a device out.
+    if (id) this.cache.set(address, { at: now, id });
+    else this.cache.delete(address);
     if (this.cache.size > 1000) this.cache.clear();
     return id;
   }

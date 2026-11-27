@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { Backend, PermissionAnswer, PermissionAsk } from '../backends/types.js';
 import { fakeBackendSelected } from '../backends/fake/index.js';
@@ -318,6 +318,9 @@ export class App implements ConversationHost {
       // The one gate for what a tab may send (a remote device's role).
       this.hub.admit(client, msg as { t: string; convId?: unknown });
       if (this.hub.intercept(client, msg)) return;
+      // A remote device is answered only through protocol 2 (the gate already refused anything else
+      // before its hello; a plain v1 hello afterwards gets the v2 state, never the v1 one).
+      if (msg.t === 'hello' && client.role && !this.hub.isV2(client)) throw new ClientError('protocol', 'Say hello with protocol 2.');
       if (msg.t === 'hello' && this.hub.isV2(client)) {
         client.send(this.hub.stateV2(client));
         return;
@@ -418,8 +421,9 @@ export class App implements ConversationHost {
       }
       case 'send': {
         const text = typeof msg.text === 'string' ? msg.text : '';
-        const images = this.checkImages(msg.images);
-        if (!text.trim() && images.length === 0) throw new Error('The message is empty.');
+        let images = this.checkImages(msg.images);
+        const sentRefs = (msg as { blobs?: unknown }).blobs;
+        if (!text.trim() && images.length === 0 && !(Array.isArray(sentRefs) && sentRefs.length)) throw new Error('The message is empty.');
         if (text.length > MAX_TEXT) throw new ClientError('too_large', 'The message is too long.');
         let conv: Conversation;
         let firstRefs: BlobRef[] | undefined;
@@ -446,9 +450,18 @@ export class App implements ConversationHost {
           firstRefs = refs;
         } else {
           conv = this.conv(msg.convId);
+          // Pictures uploaded beforehand (POST /blob), plus any still sent inline: all become files of
+          // this conversation, go on the person's item, and reach the agent as image content.
+          const refs = this.checkRefs(conv.meta.id, sentRefs, images.length);
+          for (const img of images) {
+            const stored = this.storeImage(conv.meta.id, img.data, img.mediaType);
+            if ('ref' in stored) refs.push(stored.ref);
+          }
+          images = [...images, ...this.imagesOf(conv.meta.id, refs.slice(0, refs.length - images.length))];
+          firstRefs = refs;
         }
-        // The stored refs go on the person's item (Conversation.userSend's fourth argument, once it takes one).
-        (conv.userSend as (t: string, i: typeof images, a?: string, refs?: BlobRef[]) => void).call(conv, text, images, typeof msg.agentId === 'string' ? msg.agentId : undefined, firstRefs);
+        // The stored refs go on the person's item; `images` (base64) is what the agent receives.
+        conv.userSend(text, images, typeof msg.agentId === 'string' ? msg.agentId : undefined, firstRefs?.length ? firstRefs : undefined);
         return;
       }
       case 'interrupt':
@@ -523,6 +536,35 @@ export class App implements ConversationHost {
     } else {
       p.resolve({ decision: 'allow' });
     }
+  }
+
+  /**
+   * Refs from POST /blob: each must name a picture stored in THIS conversation. Count and size are
+   * checked together with any inline images, against the same caps.
+   */
+  private checkRefs(convId: string, raw: unknown, inline: number): BlobRef[] {
+    if (raw === undefined || raw === null) return [];
+    if (!Array.isArray(raw)) throw new ClientError('invalid', 'Bad image list.');
+    if (raw.length + inline > MAX_IMAGES) throw new ClientError('too_large', `At most ${MAX_IMAGES} images per message.`);
+    let total = 0;
+    return raw.map((r) => {
+      const hash = (r as { blob?: unknown } | null)?.blob;
+      const found = typeof hash === 'string' ? this.store.blobs.find(convId, hash) : null;
+      if (!found) throw new ClientError('not_found', 'That picture is not part of this conversation; attach it again.');
+      const bytes = statSync(found.file).size;
+      total += bytes;
+      if (total > MAX_TOTAL_IMAGE_BYTES) throw new ClientError('too_large', 'The images together are larger than 30 MB.');
+      const ref = r as BlobRef;
+      return { blob: hash as string, mediaType: found.mediaType, w: Number(ref.w) || 0, h: Number(ref.h) || 0, bytes };
+    });
+  }
+
+  /** The stored pictures as image content for the agent. */
+  private imagesOf(convId: string, refs: BlobRef[]): ImageAttachment[] {
+    return refs.map((r) => {
+      const found = this.store.blobs.find(convId, r.blob)!;
+      return { mediaType: found.mediaType, data: readFileSync(found.file).toString('base64') };
+    });
   }
 
   private checkImages(images: unknown): ImageAttachment[] {

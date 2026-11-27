@@ -19,6 +19,16 @@
   --code-text: #e3e7ee;
   --code-faint: #7c8494;
   --code-muted: #b3bac7;
+  /* Tier colour slots (shared PALETTE): profiles pick a slot, the page owns the colours, each at least
+     4.5:1 on the page background so tier names stay readable. */
+  --pal-amber: #8a5a00;
+  --pal-violet: #6d4bc4;
+  --pal-blue: #2463c9;
+  --pal-teal: #0f766e;
+  --pal-rose: #b4235a;
+  --pal-green: #1f7a3a;
+  --pal-slate: #4b5563;
+  --pal-orange: #b45309;
   --tier-lead: #a8720a;
   --tier-opus: #6d4bc4;
   --tier-sonnet: #2463c9;
@@ -50,6 +60,14 @@
   --code-text: #e6e9f0;
   --code-faint: #808899;
   --code-muted: #b8bfcc;
+  --pal-amber: #e9b949;
+  --pal-violet: #b39cf5;
+  --pal-blue: #7fb0ff;
+  --pal-teal: #5fd0b8;
+  --pal-rose: #f48fb1;
+  --pal-green: #7bd88f;
+  --pal-slate: #a7b0be;
+  --pal-orange: #f6a35b;
   --tier-lead: #e9b949;
   --tier-opus: #b39cf5;
   --tier-sonnet: #7fb0ff;
@@ -76,6 +94,14 @@
     --code-text: #e6e9f0;
     --code-faint: #808899;
     --code-muted: #b8bfcc;
+    --pal-amber: #e9b949;
+    --pal-violet: #b39cf5;
+    --pal-blue: #7fb0ff;
+    --pal-teal: #5fd0b8;
+    --pal-rose: #f48fb1;
+    --pal-green: #7bd88f;
+    --pal-slate: #a7b0be;
+    --pal-orange: #f6a35b;
     --tier-lead: #e9b949;
     --tier-opus: #b39cf5;
     --tier-sonnet: #7fb0ff;
@@ -262,6 +288,16 @@ button:disabled {
 .tier-haiku {
   --tier: var(--tier-haiku);
 }
+/* Colours from team profiles (0.2.0): `pal-<slot>` sets --tier for everything inside. The tier-* classes
+   above stay for 0.1.x agents whose tier ids are the Claude names. */
+.pal-amber { --tier: var(--pal-amber); }
+.pal-violet { --tier: var(--pal-violet); }
+.pal-blue { --tier: var(--pal-blue); }
+.pal-teal { --tier: var(--pal-teal); }
+.pal-rose { --tier: var(--pal-rose); }
+.pal-green { --tier: var(--pal-green); }
+.pal-slate { --tier: var(--pal-slate); }
+.pal-orange { --tier: var(--pal-orange); }
 
 .dot {
   flex: none;

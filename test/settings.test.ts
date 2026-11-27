@@ -182,3 +182,22 @@ test('settings v2: a profile keeps a short description', () => {
   assert.ok(d.startsWith('Built from the list.'));
   assert.equal(d.length, 200);
 });
+
+test('settings v2: keepAwake is a boolean, on by default and for older files', () => {
+  assert.equal(defaultSettings().keepAwake, true);
+  assert.equal(sanitizeSettings({ keepAwake: false }).keepAwake, false);
+  assert.equal(sanitizeSettings({ keepAwake: 'no' }).keepAwake, true);
+  const old = defaultSettings() as Partial<Settings>;
+  delete old.keepAwake;
+  assert.equal(sanitizeSettings({}, old as Settings).keepAwake, true);
+});
+
+test('settings v2: a built-in profile can be reset to its defaults', async () => {
+  const { resetProfile } = await import('../server/settings/settings.ts');
+  const edited = sanitizeSettings({ tiers: { opus: { max: 1, model: 'x-model' } } });
+  const reset = resetProfile(edited, 'claude');
+  assert.deepEqual(reset.profiles.find((p) => p.id === 'claude'), claudeProfile());
+  assert.equal(reset.tiers.opus.max, 3);
+  const withDuo = sanitizeSettings({ profiles: [claudeProfile(), twoTier] });
+  assert.equal(resetProfile(withDuo, 'duo'), withDuo, 'user profiles have no defaults');
+});

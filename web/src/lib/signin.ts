@@ -87,3 +87,36 @@ export function resetSignin(): void {
   pageKey = null;
   candidate = null;
 }
+
+// ---- remote devices (Tailscale access, served over https) ----
+
+const DEVICE_STORAGE = 'masthead.device';
+
+/** The page runs on a remote device: golf's remote listener is https, the local page is plain http. */
+export function isRemoteDevice(): boolean {
+  return typeof location !== 'undefined' && location.protocol === 'https:';
+}
+
+export function deviceToken(): string | null {
+  try {
+    return localStorage.getItem(DEVICE_STORAGE);
+  } catch {
+    return null;
+  }
+}
+
+export function saveDeviceToken(token: string): void {
+  try {
+    localStorage.setItem(DEVICE_STORAGE, token);
+  } catch {
+    // Private mode: the token works for this page load only.
+  }
+}
+
+export function forgetDeviceToken(): void {
+  try {
+    localStorage.removeItem(DEVICE_STORAGE);
+  } catch {
+    // Nothing stored.
+  }
+}

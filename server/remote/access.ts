@@ -77,6 +77,7 @@ export class RemoteAccess {
       now: opts.now,
       allowOtherTailnets: this.config.allowOtherTailnets,
       allowTagged: this.config.allowTagged,
+      loopback: opts.target.kind === 'loopback',
       // An approval that runs out ends the device's open sockets, as a revoke does.
       onExpire: (nodeId) => {
         for (const fn of this.deviceListeners) fn(nodeId, { revoked: true });
@@ -259,7 +260,7 @@ export class RemoteAccess {
       ...(this.problem ? { problem: this.problem.text, ...(this.problem.command ? { command: this.problem.command } : {}) } : {}),
       target: this.opts.target.kind,
       ...(this.opts.target.kind === 'loopback'
-        ? { warning: 'On this computer Tailscale reaches Masthead through a local port, so another program running here could pretend to be one of your devices. Approve a device only while you are pairing it, and only when the code on its screen matches.' }
+        ? { warning: 'On this computer Tailscale reaches Masthead through a local port, so another program on this computer, including one run by another user account, could pretend to be one of your devices. Approve a device only while you are pairing it, and only when the code on its screen matches.' }
         : {}),
       allowOtherTailnets: this.config.allowOtherTailnets,
       allowTagged: this.config.allowTagged,

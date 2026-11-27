@@ -61,6 +61,7 @@ export function defaultSettings(): Settings {
     leanOpus: true,
     collapseReports: false,
     maxRunMinutes: 0,
+    keepAwake: true,
     defaultCwd: HOME,
   });
 }
@@ -203,6 +204,8 @@ export function sanitizeSettings(raw: unknown, base: Settings = defaultSettings(
   }
   if (typeof r.autoEffort === 'boolean') d.autoEffort = r.autoEffort;
   if (typeof r.collapseReports === 'boolean') d.collapseReports = r.collapseReports;
+  if (typeof r.keepAwake === 'boolean') d.keepAwake = r.keepAwake;
+  if (typeof d.keepAwake !== 'boolean') d.keepAwake = true; // settings made before the field existed
   d.maxRunMinutes = clampInt(r.maxRunMinutes, 0, 24 * 60, d.maxRunMinutes);
   if (absoluteFolder(r.defaultCwd)) d.defaultCwd = r.defaultCwd;
   return withCompat(d);
@@ -257,5 +260,18 @@ export function withBuiltInProfiles(s: Settings, generated: TeamProfile[]): Sett
     const p = out.profiles.find((x) => x.id === g.id);
     if (p) p.builtIn = true;
   }
+  return out;
+}
+
+/**
+ * The settings with built-in profile `id` back to its defaults: `claude` from `claudeProfile()`, others
+ * from `generated` (e.g. Codex from the registry). Unknown or user profiles: unchanged.
+ */
+export function resetProfile(s: Settings, id: string, generated: TeamProfile[] = []): Settings {
+  const fresh = id === CLAUDE_PROFILE ? claudeProfile() : generated.find((g) => g.id === id);
+  if (!fresh || !s.profiles.some((p) => p.id === id && p.builtIn)) return s;
+  const out = sanitizeSettings({ profiles: s.profiles.map((p) => (p.id === id ? fresh : p)) }, { ...s, profiles: s.profiles.filter((p) => p.id !== id) });
+  const p = out.profiles.find((x) => x.id === id);
+  if (p) p.builtIn = true;
   return out;
 }

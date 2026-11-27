@@ -342,3 +342,26 @@ test('review: rings are capped by bytes as well as count; draft_sync needs a rea
   assert.equal(b.say({ t: 'draft_sync', convId: 'ghost', agentId: 'a' })[0]!.code, 'refused', 'not subscribed');
   assert.equal((hub as unknown as { rings: Map<string, unknown> }).rings.size, ringsBefore, 'no ring made for an unknown id');
 });
+
+test('review: a remote device sending a plain v1 hello gets a protocol error, never the v1 state', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { App } = await import('../server/app/app.ts');
+  const { defaultSettings } = await import('../server/settings/settings.ts');
+  const { Store } = await import('../server/storage/store.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'mh-v1hello-'));
+  const app = new App({ store: new Store(join(dir, 'c')), settingsFile: join(dir, 's.json'), settings: defaultSettings(), claude: { path: null, version: null } });
+  const got: Array<Record<string, unknown>> = [];
+  const phone: Client = { send: (m) => void got.push(m as Record<string, unknown>), role: 'full' };
+  app.connect(phone);
+  app.handle(phone, { t: 'hello', protocol: 2 });
+  got.length = 0;
+  app.handle(phone, { t: 'hello' });
+  assert.deepEqual(got.map((m) => [m.t, m.protocol]), [['state', 2]], 'after its v2 hello: the v2 state again');
+  const fresh: Client = { send: (m) => void got.push(m as Record<string, unknown>), role: 'full' };
+  got.length = 0;
+  app.connect(fresh);
+  app.handle(fresh, { t: 'hello' });
+  assert.deepEqual(got.map((m) => [m.t, m.code]), [['error', 'protocol']]);
+});

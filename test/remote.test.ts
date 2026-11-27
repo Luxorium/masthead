@@ -348,3 +348,36 @@ test('tailscale: anything Masthead does not fully understand counts as in use, n
   assert.equal(serveStateFrom(null as never, host, 7443, SOCK).kind, 'elsewhere');
   assert.equal(serveStateFrom({ Foreground: {} } as never, host, 7443, SOCK).kind, 'off', 'an empty key is nothing');
 });
+
+test('remote (loopback): a forged first request cannot block the real device; deny locks out that request only', () => {
+  const dir = join(mkdtempSync(join(tmpdir(), 'masthead-remote-')), 'remote');
+  const registry = new DeviceRegistry({ dir, loopback: true });
+  const forged = registry.request(phone, '100.64.0.2');
+  const real = registry.request(phone, '100.64.0.2');
+  assert.ok(!('refused' in forged) && !('refused' in real), 'both may wait');
+  assert.notEqual(forged.request.id, real.request.id);
+  assert.notEqual(forged.pollSecret, real.pollSecret);
+  // The owner sees two cards for "phone"; the code on the phone matches only the real one.
+  assert.equal(registry.deny(forged.request.id), true);
+  assert.equal(registry.collect(real.request.id, real.pollSecret, phone.nodeId).state, 'pending', 'the real request survives');
+  assert.ok(!('refused' in registry.request(phone, '100.64.0.2')), 'no lockout of the device id');
+  registry.allow(real.request.id);
+  assert.equal(registry.collect(real.request.id, real.pollSecret, phone.nodeId).state, 'allowed');
+  // Capped per device even there.
+  const many = new DeviceRegistry({ dir: join(dir, 'b'), loopback: true });
+  for (let i = 0; i < 3; i++) assert.ok(!('refused' in many.request(laptop, '100.64.0.3')));
+  assert.ok('refused' in many.request(laptop, '100.64.0.3'));
+});
+
+test('tailscale: a failed whois is not cached', async () => {
+  let calls = 0;
+  let up = false;
+  const inner = new FakeTailscale();
+  const flaky = Object.assign(Object.create(inner), { whois: async () => (calls++, up ? phone : null) });
+  const cached = new CachedWhois(flaky);
+  assert.equal(await cached.whois('100.64.0.2'), null);
+  up = true;
+  assert.deepEqual(await cached.whois('100.64.0.2'), phone, 'asked again at once after a failure');
+  await cached.whois('100.64.0.2');
+  assert.equal(calls, 2, 'the answer is cached');
+});

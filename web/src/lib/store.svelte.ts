@@ -13,8 +13,10 @@ import type {
   Settings,
 } from '../../../shared/protocol.ts';
 import type { ApprovalSummary, Capability, ClientMsgV2, ServerMsgV2 } from '../../../shared/protocol-v2.ts';
+import { deviceToken, forgetDeviceToken, isRemoteDevice, saveDeviceToken } from './signin.ts';
 import { dropCandidate, idFromHash, keepCandidate, serverUp, storedKey, takeKey } from './signin.ts';
 import { limitKey, settingsPatch, worstLimit } from './state/pure.ts';
+import { T } from './text.ts';
 
 /** What the composer holds for one conversation and agent: text and attached images. */
 export interface ComposerImage extends ImageAttachment {
@@ -85,7 +87,11 @@ export class Store {
   /** The latest notice per usage-limit type. */
   usage = $state<Record<string, RateLimitNotice>>({});
   /** Why the page cannot connect at all: no key in this browser, or the server keeps refusing it. */
-  signedOut = $state<'nokey' | 'refused' | null>(null);
+  /**
+   * Why the page cannot connect: no key in this browser, the server keeps refusing it, or (on a remote
+   * device, served over https) the device has no approved token yet, or the computer withdrew access.
+   */
+  signedOut = $state<'nokey' | 'refused' | 'device' | 'withdrawn' | null>(null);
   /** Unsent text and images per conversation and agent; see `composerKey`. */
   composer = $state<Record<string, ComposerDraft>>({});
 
@@ -111,6 +117,9 @@ export class Store {
   pages = $state<Record<string, { cursor: number | null; more: boolean; loading: boolean }>>({});
   /** The last per-conversation event number seen for the open conversation, for resync after a drop. */
   private seq = 0;
+  /** The server's start marker: a different one after a reconnect means it restarted, so sequence
+   *  numbers start again and the page reloads the conversation instead of replaying. */
+  private epoch: string | null = null;
   /** The conversation this tab is subscribed to. */
   private subscribed: string | null = null;
   /** Each streaming draft's step count, to notice a missed step. */
@@ -122,6 +131,34 @@ export class Store {
   private helloPending = false;
   /** Items per transcript page. */
   static PAGE = 100;
+
+  // ---- for the settings and remote-access pieces (web/src/lib/settings, web/src/lib/remote) ----
+  /** `state.remote` (local page only) and its live updates (`{t:'remote'}`); null on a device or an older server. */
+  remote = $state<Record<string, unknown> | null>(null);
+  /** `state.backends` (protocol v2) and the answer to `check_backends`. */
+  backends = $state<Record<string, unknown>[]>([]);
+  private listeners = new Map<string, Set<(msg: Record<string, unknown>) => void>>();
+
+  /**
+   * Calls `fn` for every server message of type `t` (after the store has handled it). Returns the
+   * function that stops listening. For replies only one component cares about (e.g. `remote_audit`).
+   */
+  listen(t: string, fn: (msg: Record<string, unknown>) => void): () => void {
+    let set = this.listeners.get(t);
+    if (!set) this.listeners.set(t, (set = new Set()));
+    set.add(fn);
+    return () => set!.delete(fn);
+  }
+
+  /** Sends any protocol message (for message types the store itself does not use). False when offline. */
+  request(msg: Record<string, unknown> & { t: string }): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.fail(T.errors.notConnected);
+      return false;
+    }
+    this.ws.send(JSON.stringify(msg));
+    return true;
+  }
   /** Whether the server already has this tab subscribed to `subscribed` on the current socket. */
   private subscribedOnServer = false;
 
@@ -148,6 +185,8 @@ export class Store {
   }
 
   connect(): void {
+    // A remote device (golf's Tailscale access) is always served over https; the local page never is.
+    if (isRemoteDevice()) return this.connectDevice();
     const { key, untried } = takeKey();
     if (!key) {
       this.signedOut = 'nokey';
@@ -246,6 +285,63 @@ export class Store {
     if (this.rateLimit) this.dismissedLimit = limitKey(this.rateLimit);
   }
 
+  /** A remote device connects with its approved token (`device.<token>`), never a key. */
+  private connectDevice(): void {
+    const token = deviceToken();
+    if (!token) {
+      this.signedOut = 'device';
+      return;
+    }
+    this.signedOut = null;
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(`wss://${location.host}/ws`, ['masthead', `device.${token}`]);
+    } catch {
+      forgetDeviceToken();
+      this.signedOut = 'device';
+      return;
+    }
+    this.ws = ws;
+    let opened = false;
+    ws.onopen = () => {
+      opened = true;
+      this.connected = true;
+      this.retry = 0;
+      this.v2 = false;
+      this.subscribedOnServer = false;
+      this.v1State = null;
+      this.helloPending = this.sendV2({ t: 'hello', protocol: 2, caps: ['drafts-delta', 'items-paging', 'blobs', 'resync'] });
+    };
+    ws.onmessage = (ev) => this.receive(JSON.parse(ev.data as string) as ServerMsgV2);
+    ws.onclose = (ev) => {
+      if (this.ws !== ws) return;
+      this.connected = false;
+      this.ws = null;
+      this.dropped();
+      if (ev.code === 4001) {
+        // The computer withdrew this device's access.
+        forgetDeviceToken();
+        this.signedOut = 'withdrawn';
+        return;
+      }
+      if (opened) return this.later();
+      void serverUp().then((up) => {
+        if (this.ws) return;
+        if (!up) return this.later();
+        // Up, and it refused the token (revoked or expired): back to the sign-in screen.
+        forgetDeviceToken();
+        this.signedOut = 'device';
+      });
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  /** The remote sign-in screen got a token for this device: keep it and connect. */
+  deviceApproved(token: string): void {
+    saveDeviceToken(token);
+    this.retryConnect();
+  }
+
   /** "Try again" on the signed-out page. */
   retryConnect(): void {
     this.refusals = 0;
@@ -296,6 +392,9 @@ export class Store {
   /** The app state, from a version 1 `state` or a version 2 one (approvals already taken out). */
   private receiveState(state: AppState): void {
     this.app = state;
+    const extra = state as AppState & { remote?: Record<string, unknown>; backends?: Record<string, unknown>[] };
+    this.remote = extra.remote ?? null;
+    this.backends = extra.backends ?? [];
     this.settings = state.settings;
     this.conversations = state.conversations;
     this.pending = state.pending ?? [];
@@ -314,6 +413,21 @@ export class Store {
 
   /** Applies one message from the server. Public so tests can drive the store without a socket. */
   receive(msg: ServerMsg | ServerMsgV2): void {
+    this.handle(msg);
+    const any = msg as Record<string, unknown> & { t: string };
+    for (const fn of this.listeners.get(any.t) ?? []) fn(any);
+  }
+
+  private handle(msg: ServerMsg | ServerMsgV2): void {
+    const raw = msg as Record<string, unknown> & { t: string };
+    if (raw.t === 'remote') {
+      this.remote = (raw.remote as Record<string, unknown>) ?? null;
+      return;
+    }
+    if (raw.t === 'backends') {
+      this.backends = (raw.backends as Record<string, unknown>[]) ?? [];
+      return;
+    }
     // Version 2 messages that version 1 does not have, or that differ from it.
     if (this.receiveV2(msg)) return;
     const m = msg as ServerMsg;
@@ -452,7 +566,7 @@ export class Store {
   /** After a reconnect: subscribe again from the last event seen, keeping what is loaded. */
   private resubscribe(): void {
     if (!this.subscribed) return;
-    this.subscribedOnServer = this.sendV2({ t: 'subscribe', convId: this.subscribed, since: this.seq });
+    this.subscribedOnServer = this.sendV2({ t: 'subscribe', convId: this.subscribed, since: this.seq, ...(this.epoch ? { epoch: this.epoch } : {}) } as ClientMsgV2);
   }
 
   private unsubscribe(): void {
@@ -480,6 +594,9 @@ export class Store {
     switch (m.t) {
       case 'state': {
         if (m.protocol === 2) {
+          const epoch = typeof m.epoch === 'string' ? m.epoch : null;
+          if (this.epoch && epoch && epoch !== this.epoch) this.seq = 0; // restarted: no replay
+          this.epoch = epoch;
           this.v2 = true;
           this.helloPending = false;
           if (this.helloTimer) clearTimeout(this.helloTimer);

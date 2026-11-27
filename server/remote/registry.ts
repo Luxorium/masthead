@@ -60,6 +60,12 @@ export interface RegistryOptions {
   tokenDays?: number;
   allowOtherTailnets?: boolean;
   allowTagged?: boolean;
+  /**
+   * The remote listener is a loopback port (Windows), where any local program can claim to be any
+   * device: then a device may have a few waiting requests (each its own code and poll secret; the
+   * matching code is the guard) and a denial locks out that request only, not the whole device.
+   */
+  loopback?: boolean;
   /** Called when a device's approval ends by expiry, so its open sockets can be closed. */
   onExpire?: (nodeId: string) => void;
 }
@@ -67,6 +73,8 @@ export interface RegistryOptions {
 const FILE_VERSION = 1;
 /** Pending requests one tailnet user (or all tagged nodes together) may have at once. */
 const MAX_PENDING_PER_USER = 3;
+/** Waiting requests one device may have when the listener is a loopback port. */
+const MAX_PENDING_PER_NODE_LOOPBACK = 3;
 /** The audit log is moved aside past this size; reads take a bounded tail. */
 const AUDIT_MAX_BYTES = 1024 * 1024;
 const AUDIT_TAIL_BYTES = 256 * 1024;
@@ -220,12 +228,13 @@ export class DeviceRegistry {
     // One waiting request per node, and its poll secret never changes: a second asker (on a loopback
     // listener, another local user forging this node's address) must not take over the first one's
     // request. The device keeps its poll secret; a page that lost it waits for the request to expire.
-    if ([...this.pending.values()].some((p) => p.nodeId === id.nodeId && !p.denied)) {
+    const waiting = [...this.pending.values()].filter((p) => p.nodeId === id.nodeId && !p.denied).length;
+    if (waiting >= (this.opts.loopback ? MAX_PENDING_PER_NODE_LOOPBACK : 1)) {
       return { refused: 'A request from this device is already waiting for approval.' };
     }
     if (this.pending.size >= MAX_PENDING) return { refused: 'Too many devices are waiting for approval.' };
     const owner = id.user?.login ?? 'tagged';
-    if ([...this.pending.values()].filter((p) => (p.user?.login ?? 'tagged') === owner).length >= MAX_PENDING_PER_USER) {
+    if ([...this.pending.values()].filter((p) => (p.user?.login ?? 'tagged') === owner).length >= MAX_PENDING_PER_USER * (this.opts.loopback ? 2 : 1)) {
       return { refused: 'Too many devices of this tailnet user are waiting for approval.' };
     }
     const pollSecret = randomBytes(24).toString('hex');
@@ -265,7 +274,8 @@ export class DeviceRegistry {
     if (!p || p.token) return false;
     p.denied = true;
     this.pending.delete(requestId);
-    this.deniedUntil.set(p.nodeId, this.now() + DENY_COOLDOWN_MS);
+    // On a loopback listener the device id may have been claimed by someone else: lock out nothing more.
+    if (!this.opts.loopback) this.deniedUntil.set(p.nodeId, this.now() + DENY_COOLDOWN_MS);
     this.audit({ event: 'deny', nodeId: p.nodeId, nodeName: p.nodeName, user: p.user?.login, address: p.address });
     return true;
   }

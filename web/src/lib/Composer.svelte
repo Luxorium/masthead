@@ -1,6 +1,7 @@
 <script lang="ts">
   import { displayName, modelLabel, type ImageAttachment } from '../../../shared/protocol.ts';
   import FolderPicker from './FolderPicker.svelte';
+  import { profileById, tierClass } from './tiers.ts';
   import { MAX_PICK_BYTES, MAX_UPLOAD_BYTES, shrinkIfLarge, toBase64, uploadImage } from './images.ts';
   import { shortPath, store } from './store.svelte.ts';
   import { T } from './text.ts';
@@ -160,7 +161,7 @@
 {/if}
 {#if direct && agent}
   <!-- Says plainly who the box is pointed at, so nobody types to a sub-agent thinking it is the lead. -->
-  <div class="addressee tier-{agent.tier}">
+  <div class="addressee {tierClass(store.settings, agent.tier)}">
     <span class="to">{T.composer.to} <b>{displayName(agent.name)}</b> · {modelLabel(agent.model)}</span>
     {#if store.lead}
       <button class="back" onclick={() => store.lead && store.viewOf(store.lead.id)}>{T.shell.backTo(displayName(store.lead.name))}</button>
@@ -168,7 +169,7 @@
   </div>
 {/if}
 <div
-  class="composer {direct && agent ? `direct tier-${agent.tier}` : ''}"
+  class="composer {direct && agent ? `direct ${tierClass(store.settings, agent.tier)}` : ''}"
   class:dragging
   role="group"
   aria-label={direct && agent ? T.composer.labelTo(displayName(agent.name)) : T.composer.label}
@@ -235,7 +236,8 @@
       {#if direct && agent}
         <b>{modelLabel(agent.model)}</b> {T.effort[agent.effort]}
       {:else}
-        <b>{modelLabel(store.settings.tiers.lead.model)}</b> {T.effort[store.lead?.effort ?? (store.settings.autoEffort ? 'low' : store.settings.tiers.lead.effort)]}
+        {@const first = profileById(store.settings, store.conv?.profileId ?? store.settings.defaultProfile)?.tiers[0]}
+        <b>{modelLabel(store.lead?.model ?? first?.model ?? '')}</b> {T.effort[store.lead?.effort ?? (store.settings.autoEffort ? 'low' : (first?.effort ?? 'low'))]}
       {/if}
       <span class="sep">·</span>
       {T.settings.askShort[store.settings.permissionMode]}

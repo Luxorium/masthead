@@ -3,6 +3,7 @@
   // In Advanced it also holds the levels (helpers at a time, thinking time).
   import { displayName, modelLabel, type AgentInfo } from '../../../shared/protocol.ts';
   import StopControl from './StopControl.svelte';
+  import { tierClass } from './tiers.ts';
   import TierControls from './team/TierControls.svelte';
   import { fmtTokens, statusWords, store } from './store.svelte.ts';
   import { T } from './text.ts';
@@ -19,7 +20,7 @@
     <button class="agent-main" onclick={() => store.viewOf(a.id)} title={a.task}>
       <span class="dot {a.status}"></span>
       <span class="agent-text">
-        <span class="agent-name">{displayName(a.name)} <span class="tier-badge tier-{a.tier}">{modelLabel(a.model)}</span>{#if a.title}<span class="agent-title"> {a.title}</span>{:else if a.tier === 'lead'}<span class="agent-title"> {T.team.mainAssistant}</span>{/if}</span>
+        <span class="agent-name">{displayName(a.name)} <span class="tier-badge {tierClass(store.settings, a.tier)}">{modelLabel(a.model)}</span>{#if a.title}<span class="agent-title"> {a.title}</span>{:else if a.tier === 'lead'}<span class="agent-title"> {T.team.mainAssistant}</span>{/if}</span>
         <span class="agent-sub">{statusWords(a)}</span>
       </span>
     </button>

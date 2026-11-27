@@ -59,7 +59,7 @@ test('row 3: launch failed (TierOff, no Claude Code) → failed with a report', 
   const { s, fx } = run(sub(), [{ type: 'LaunchFailed', error: 'This tier was switched off' }]);
   assert.equal(statusOf(s), 'failed');
   assert.match(of(fx, 'report')[0]!.text, /^The agent failed: This tier was switched off/);
-  assert.ok(has(fx, 'releaseSlot'));
+  assert.ok(has(fx, 'end') && !has(fx, 'releaseSlot'), 'the runtime\'s end() frees the slot, once');
 });
 
 test('row 4: input from an agent to a running agent is sent', () => {
@@ -86,7 +86,7 @@ test('row 7: a sub-agent\'s turn ends with nothing holding it → done, report, 
   assert.equal(statusOf(s), 'done');
   assert.deepEqual(of(fx, 'report'), [{ type: 'report', status: 'done', text: 'Found two bugs.' }]);
   assert.ok(has(fx, 'setEffortLow'));
-  assert.ok(has(fx, 'releaseSlot'));
+  assert.ok(!has(fx, 'releaseSlot'), 'end() frees the slot');
   assert.equal(s.owesReport, false);
 });
 
@@ -192,7 +192,8 @@ test('row 18: background count follows the backend; alone it starts the cap time
   assert.equal(w.holds.backgroundSince, undefined, 'a child holds it too');
   const alone = run(w, [[{ type: 'ChildEnded', reported: true }, { busy: true, now: T0 + 5 }]]).s;
   const again = run(alone, [[{ type: 'Background', active: 1 }, { now: T0 + 9 }]]).s;
-  assert.equal(again.holds.backgroundSince, T0 + 9);
+  assert.equal(alone.holds.backgroundSince, T0 + 5, 'timed from when background became the only hold (the child ended)');
+  assert.equal(again.holds.backgroundSince, T0 + 5);
 });
 
 test('row 19: background work ends with no new turn → finished (lead: idle, not finished)', () => {
@@ -313,6 +314,61 @@ test('invariants: no sequence leaves a sub-agent waiting with nothing holding it
       s = r.state;
       if (s.phase === 'waiting' && !s.lead) assert.ok(holding(s), `waiting with nothing holding it after ${ev.type}`);
       if (s.phase === 'ended') assert.equal(holding(s), false);
+    }
+  }
+});
+
+// ---- review fixes (echo's review of Core 3b) ----
+
+test('fix: the background cap starts when a child ends and background work is left as the only hold', () => {
+  const w = run(running(), [{ type: 'ChildStarted' }, { type: 'Background', active: 1 }, { type: 'TurnEnded', text: 'x', interrupted: false }]).s;
+  assert.equal(w.holds.backgroundSince, undefined);
+  const alone = run(w, [[{ type: 'ChildEnded', reported: false }, { now: T0 + 5 }]]).s;
+  assert.equal(alone.phase, 'waiting');
+  assert.equal(alone.holds.backgroundSince, T0 + 5);
+  const capped = run(alone, [[{ type: 'Tick', maxRunMs: 0, backgroundCapMs: 600_000 }, { now: T0 + 5 + 600_000 }]]).s;
+  assert.equal(statusOf(capped), 'done');
+});
+
+test('fix: a pause that ends during a turn the person started leaves the agent running, with its clock on', () => {
+  const p = run(running(), [{ type: 'TurnEnded', text: '', interrupted: false, usageLimit: { resetsAt: T0 + 1000 } }]).s;
+  const woke = run(p, [{ type: 'Input', from: 'person' }, { type: 'Status', status: 'running' }]).s;
+  assert.equal(woke.phase, 'waiting', 'running is not taken while paused');
+  const { s } = run(woke, [[{ type: 'Tick', maxRunMs: 0, backgroundCapMs: 1e9 }, { now: T0 + 1000, inTurn: true }]]);
+  assert.equal(s.phase, 'running');
+  assert.equal(s.run.since, T0 + 1000);
+});
+
+test('invariants, wider: lead and sub-agents, every event, busy varied — waiting always has a hold, the lead never ends, ended holds nothing', () => {
+  const events: Event[] = [
+    { type: 'ChildStarted' }, { type: 'ChildEnded', reported: false }, { type: 'ChildEnded', reported: true }, { type: 'Asked', from: 'b' }, { type: 'AnswerArrived' },
+    { type: 'Background', active: 1 }, { type: 'Background', active: 0 }, { type: 'BackgroundIdle' }, { type: 'TurnStarted' },
+    { type: 'TurnEnded', text: 't', interrupted: false }, { type: 'TurnEnded', text: 't', error: 'e', interrupted: false }, { type: 'TurnEnded', text: '', interrupted: true },
+    { type: 'TurnEnded', text: '', interrupted: false, usageLimit: {} }, { type: 'ProcessLost', error: 'x' }, { type: 'ProcessLost', error: 'x', usageLimit: {} },
+    { type: 'Tick', maxRunMs: 30 * 60_000, backgroundCapMs: 600_000 }, { type: 'RecipientTurnEnded', recipientIsLead: false, interrupted: false },
+    { type: 'RecipientTurnEnded', recipientIsLead: true, interrupted: false }, { type: 'RecipientEnded' }, { type: 'ApprovalOpened' }, { type: 'ApprovalClosed' },
+    { type: 'Stop', by: 'person', why: 'p' }, { type: 'Stop', by: 'agent', why: 'a' }, { type: 'Woken', by: 'agent', parentCanReceive: true }, { type: 'Woken', by: 'person', parentCanReceive: false },
+    { type: 'Input', from: 'agent' }, { type: 'Input', from: 'person' }, { type: 'Status', status: 'running' }, { type: 'Status', status: 'queued' }, { type: 'Status', status: 'stopped' },
+    { type: 'Restored' },
+  ];
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff), seed);
+  for (let trial = 0; trial < 400; trial++) {
+    const isLead = trial % 3 === 0;
+    let s = isLead ? lead() : running();
+    let now = T0;
+    for (let i = 0; i < 30; i++) {
+      const ev = events[rnd() % events.length]!;
+      now += (rnd() % 4) * 5 * 60_000;
+      const busy = rnd() % 4 === 0;
+      const frozen = JSON.stringify(s);
+      const r = step(s, ev, ctx({ now, busy }));
+      assert.equal(JSON.stringify(s), frozen, 'step does not change its input');
+      s = r.state;
+      if (isLead) assert.notEqual(s.phase, 'ended', `the lead ended after ${ev.type}`);
+      if (s.phase === 'waiting' && !s.lead && !busy) assert.ok(holding(s), `waiting with nothing holding it after ${ev.type}`);
+      if (s.phase === 'ended') assert.equal(holding(s), false);
+      if (r.effects.some((f) => f.type === 'end')) assert.equal(s.phase, 'ended');
     }
   }
 });

@@ -186,6 +186,8 @@ export interface Settings {
   leanOpus: boolean;
   /** Reports from agents are shown folded shut in a transcript until the person opens them. */
   collapseReports: boolean;
+  /** Keep the computer from sleeping while any agent works. Applies at once. */
+  keepAwake: boolean;
   /** The longest a sub-agent may stay live on one piece of work, in minutes. 0 means no limit. */
   maxRunMinutes: number;
   /** Folder a new conversation starts in. */
@@ -389,6 +391,8 @@ export type ClientMsg =
       message?: string;
     }
   | { t: 'settings'; settings: SettingsPatch }
+  /** Put a built-in team profile back to its defaults (claude; codex from the installed CLI). */
+  | { t: 'reset_profile'; id: string }
   | { t: 'rename'; convId: string; title: string }
   | { t: 'delete'; convId: string }
   | { t: 'dirs'; path: string };

@@ -184,6 +184,11 @@ export const T = {
   settings: {
     title: 'Settings',
     close: 'Close settings',
+    general: 'General',
+    about: 'About',
+    themeLabel: 'Colours',
+    keepAwake: 'Keep this computer awake while helpers are working',
+    keepAwakeHelp: 'Stops the computer going to sleep on its own while agents work. Closing the lid or choosing Sleep still works.',
     theme: 'Appearance',
     themeSystem: 'Same as this device',
     themeLight: 'Light',

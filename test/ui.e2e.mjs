@@ -357,7 +357,8 @@ try {
     check('an attached picture uploads before sending', (await page.locator('.composer .thumb.bad').count()) === 0);
     await page.locator('textarea').fill('Reply with exactly the word seen');
     await page.locator('textarea').press('Enter');
-    await page.locator('.user .thumbs img').first().waitFor({ timeout: 10_000 });
+    await page.locator('.user .bubble', { hasText: 'Reply with exactly the word seen' }).waitFor({ timeout: 10_000 });
+    await page.locator('.user .thumbs img').first().waitFor({ timeout: 10_000 }).catch(() => {});
     await page.waitForFunction(() => [...document.querySelectorAll('.user .thumbs img')].some((i) => i.complete && i.naturalWidth > 0), null, { timeout: 10_000 }).catch(() => {});
     check('the sent picture shows in the message', await loaded('.user .thumbs img'));
     await page.screenshot({ path: `${shots}/5b-pictures-${scheme}.png` });

@@ -98,4 +98,5 @@ Set the power settings so the machine sleeps after 1 to 2 minutes idle, with `ke
 5. Switch `keepAwake` off while agents work: the hold is released at once.
 6. Kill the server process (`kill -9` / Task Manager): the hold disappears with it.
 7. Put the machine to sleep by hand while agents work, wake it after a few minutes: each conversation
-   that was working shows "This computer was asleep from HH:MM to HH:MM; work carried on afterwards".
+   that was working shows "This computer was asleep from HH:MM to HH:MM; work carried on afterwards". (Posted by `Conversation.wokeFromSleep()` when the
+   awake-time clock, `activeNow()` in `server/core/conversation.ts`, sees a wall-clock gap over 60 s.)

@@ -58,6 +58,20 @@ class Ui {
     applyTheme(this.theme);
   }
 
+  /** The settings view is shown in place of the chat. */
+  settingsOpen = $state(false);
+
+  openSettings(): void {
+    this.settingsOpen = true;
+    if (this.narrow) this.sidebarOpen = false;
+  }
+
+  /** Back to the chat; focus returns to the settings button. */
+  closeSettings(): void {
+    this.settingsOpen = false;
+    queueMicrotask(() => document.getElementById('settings-gear')?.focus());
+  }
+
   setAdvanced(on: boolean): void {
     this.advanced = on;
     write(ADVANCED_KEY, on ? '1' : '0');

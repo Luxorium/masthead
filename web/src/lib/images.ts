@@ -2,7 +2,7 @@
 // photos before upload. The server stores images per conversation (core.md 6.2): PNG, JPEG, GIF, WebP,
 // at most 5 MB and 8192 px a side, the type checked from the file itself.
 import type { BlobRef, ImageAttachment } from '../../../shared/protocol.ts';
-import { storedKey } from './signin.ts';
+import { deviceToken, isRemoteDevice, storedKey } from './signin.ts';
 
 /** What the server accepts for one image. */
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
@@ -21,7 +21,8 @@ export function blobUrl(convId: string, ref: BlobRef, token: string | null): str
 export async function uploadImage(convId: string, data: Blob, mediaType: ImageAttachment['mediaType']): Promise<BlobRef> {
   const res = await fetch(`/blob?conv=${encodeURIComponent(convId)}`, {
     method: 'POST',
-    headers: { 'content-type': mediaType, 'x-masthead-key': storedKey() ?? '' },
+    // The local page proves itself with its key; a remote device with its approved token.
+    headers: { 'content-type': mediaType, ...(isRemoteDevice() ? { 'x-masthead-device': deviceToken() ?? '' } : { 'x-masthead-key': storedKey() ?? '' }) },
     body: data,
   });
   const body = (await res.json().catch(() => ({}))) as BlobRef & { message?: string };

@@ -201,7 +201,8 @@ export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState
     s.owesReport = false;
     s.holds = { children: 0, background: 0, approvals: 0 };
     s.limitStreak = 0;
-    fx.push({ type: 'end', kind, ...(error !== undefined ? { error } : {}) }, { type: 'releaseSlot' });
+    // The runtime's end() gives the slot back; no separate releaseSlot here.
+    fx.push({ type: 'end', kind, ...(error !== undefined ? { error } : {}) });
   };
   /** A waiting agent whose last hold went away finishes (sub-agent) or goes idle (lead). */
   const released = () => {
@@ -348,6 +349,7 @@ export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState
         const inTurn = ctx.inTurn ?? (s.phase === 'running' && ctx.busy);
         s.holds.pause = undefined;
         fx.push({ type: 'resumeRuntime', note: inTurn ? null : `${RESUME_NOTE}${p.backgroundStopped ? BACKGROUND_STOPPED_NOTE : ''}` });
+        if (inTurn) s.phase = 'running'; // the turn the person started carries on, now as a normal one
         if (!inTurn) {
           fx.push({ type: 'notice', text: 'The usage limit has reset; resumed.' });
           // The process was closed at the limit: the note starts a new one (Launched / TurnStarted follow).
@@ -420,6 +422,8 @@ export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState
         }
       } else if (st === 'waiting' || st === 'idle') {
         s.phase = st;
+      } else if (s.lead) {
+        s.phase = holding(s) ? 'waiting' : 'idle'; // the lead never ends; it keeps its session
       } else if (s.phase !== 'queued') {
         // Ended outside the machine (shutdown); a 'queued' state is a wake-up the runtime has not shown yet.
         s.phase = 'ended';
@@ -452,7 +456,9 @@ export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState
     s.run.ms += ctx.now - s.run.since;
     s.run.since = undefined;
   }
+  // Waiting on background work alone, however it got there (a child ended, a hold was released): time it.
   if (s.phase !== 'waiting' || !backgroundOnly(s)) s.holds.backgroundSince = undefined;
+  else s.holds.backgroundSince ??= ctx.now;
   if (s.stoppedByPerson !== prev.stoppedByPerson) fx.push({ type: 'save' });
   return { state: s, effects: fx };
 }

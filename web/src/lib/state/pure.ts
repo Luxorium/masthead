@@ -6,10 +6,12 @@ export function settingsPatch(before: Settings, next: Settings): SettingsPatch {
   const patch: Record<string, unknown> = {};
   for (const k of Object.keys(next) as (keyof Settings)[]) {
     if (k === 'tiers') continue;
-    if (next[k] !== before[k]) patch[k] = next[k];
+    // Objects (the profile list) are compared by content: a deep copy is never the same object.
+    const changed = typeof next[k] === 'object' && next[k] !== null ? JSON.stringify(next[k]) !== JSON.stringify(before[k]) : next[k] !== before[k];
+    if (changed) patch[k] = next[k];
   }
   const tiers: Record<string, Record<string, unknown>> = {};
-  for (const tier of Object.keys(next.tiers) as Tier[]) {
+  for (const tier of Object.keys(next.tiers ?? {}) as Tier[]) {
     for (const f of Object.keys(next.tiers[tier]) as (keyof TierSettings)[]) {
       if (next.tiers[tier][f] !== before.tiers[tier]?.[f]) (tiers[tier] ??= {})[f] = next.tiers[tier][f];
     }

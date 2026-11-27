@@ -1,6 +1,7 @@
 <script lang="ts">
   import { displayName, modelLabel, type AgentInfo, type Item } from '../../../shared/protocol.ts';
   import { T } from './text.ts';
+  import { tierClass } from './tiers.ts';
   import StopControl from './StopControl.svelte';
   import { fmtTokens, statusWords, store } from './store.svelte.ts';
   import { toolLine } from './tools.ts';
@@ -89,7 +90,7 @@
   <li>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="card tier-{a.tier}"
+      class="card tier-{a.tier} {tierClass(store.settings, a.tier)}"
       class:live={isLive(a)}
       class:stoppable={isLive(a) && a.tier !== 'lead'}
       class:ended={a.status === 'done' || a.status === 'stopped' || a.status === 'failed'}
@@ -100,7 +101,7 @@
         <span class="top">
           <span class="dot {a.status}"></span>
           <span class="name">{displayName(a.name)}</span>
-          <span class="tier-badge tier-{a.tier}">{modelLabel(a.model)}</span>
+          <span class="tier-badge {tierClass(store.settings, a.tier)}">{modelLabel(a.model)}</span>
         </span>
         {#if a.title}<span class="title">{a.title}</span>{:else if a.tier === 'lead'}<span class="title lead">{T.team.mainAssistant}</span>{/if}
         <span class="doing" class:bad={a.status === 'failed'}>{doing(a)}</span>

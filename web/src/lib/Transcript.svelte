@@ -78,6 +78,18 @@
     limit = PAGE;
   });
 
+  // A picture that finishes loading makes the chat taller; stay at the bottom if the reader was there.
+  // Load events do not bubble, so this listens in the capture phase.
+  $effect(() => {
+    const el = scroller;
+    if (!el) return;
+    const onLoad = (e: Event) => {
+      if (pinned && (e.target as HTMLElement).tagName === 'IMG') el.scrollTop = el.scrollHeight;
+    };
+    el.addEventListener('load', onLoad, true);
+    return () => el.removeEventListener('load', onLoad, true);
+  });
+
   function toBottom() {
     pinned = true;
     if (scroller) scroller.scrollTop = scroller.scrollHeight;

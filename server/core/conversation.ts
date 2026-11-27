@@ -10,6 +10,7 @@ import {
   capEffort,
   effortRank,
   type AgentInfo,
+  type BlobRef,
   type ConversationMeta,
   type Draft,
   type Effort,
@@ -68,9 +69,14 @@ export interface Clock {
 const ACTIVE_STEP_MS = 60_000;
 let activeBase = Date.now();
 let activeLastWall = activeBase;
+/** Conversations to tell when the clock sees the computer was asleep. */
+const sleepWatchers = new Set<(from: number, to: number) => void>();
 function activeNow(): number {
   const wall = Date.now();
-  activeBase += Math.min(Math.max(0, wall - activeLastWall), ACTIVE_STEP_MS);
+  const gap = wall - activeLastWall;
+  activeBase += Math.min(Math.max(0, gap), ACTIVE_STEP_MS);
+  // A gap the 15 s reader cannot explain: the computer was asleep (above the step, so jitter never counts).
+  if (gap > ACTIVE_STEP_MS) for (const w of sleepWatchers) w(activeLastWall, wall);
   activeLastWall = wall;
   return activeBase;
 }
@@ -112,6 +118,8 @@ const CLOSED_LEAD_TOLD = 'Masthead was closed while this agent was working. The 
 
 /** Effects that would tell a parent about a child stopped as part of stopping the parent itself. */
 const QUIET: ReadonlySet<Effect['type']> = new Set(['report', 'childEndedQuietly', 'stopChildren']);
+/** At shutdown nothing is told or shown: the state is saved as it ends. */
+const SHUTDOWN: ReadonlySet<Effect['type']> = new Set(['report', 'childEndedQuietly', 'stopChildren', 'notice']);
 
 const MAX_AGENTS = 200;
 const MAX_AGENT_MESSAGES = 1000;
@@ -159,10 +167,26 @@ export class Conversation implements AgentHost, TeamActions {
   /** Cancels the shared 30 s timer; null while nothing needs watching. */
   private stopTimer: (() => void) | null = null;
 
+  private readonly sleepWatcher = (from: number, to: number) => this.wokeFromSleep(from, to);
+
   private constructor(
     readonly meta: ConversationMeta,
     private host: ConversationHost,
-  ) {}
+  ) {
+    if (!host.clock) {
+      sleepWatchers.add(this.sleepWatcher);
+      REAL_CLOCK.active?.(); // starts the 15 s reader that notices a sleep
+    }
+  }
+
+  /**
+   * The clock saw that the computer was asleep from `from` to `to` (wall clock). If this conversation was
+   * working, its lead's transcript says so; the time asleep never counts as running time either way.
+   */
+  wokeFromSleep(from: number, to: number): void {
+    if (!this.busy()) return;
+    this.lead.addItem({ kind: 'notice', level: 'info', text: `This computer was asleep from ${clockTime(from)} to ${clockTime(to)}; work carried on afterwards.` });
+  }
 
   /** A new conversation on team profile `profileId` (default: the settings' default profile). */
   static create(host: ConversationHost, cwd: string, profileId?: string): Conversation {
@@ -303,10 +327,10 @@ export class Conversation implements AgentHost, TeamActions {
   // ---- the person ----
 
   /** A message typed by the person, to the lead or straight to another agent. */
-  userSend(text: string, images: ImageAttachment[] | undefined, agentId?: string): void {
+  userSend(text: string, images: ImageAttachment[] | undefined, agentId?: string, refs?: BlobRef[]): void {
     const target = (agentId && this.agents.get(agentId)) || this.lead;
     if (this.meta.title === 'New conversation' && target === this.lead && text.trim()) this.meta.title = titleFrom(text);
-    target.addItem({ kind: 'user', text, ...(images?.length ? { images: images.length } : {}) });
+    target.addItem({ kind: 'user', text, ...(refs?.length ? { images: refs } : images?.length ? { images: images.length } : {}) });
     if (this.tierOff(target)) {
       target.addItem({ kind: 'notice', level: 'error', text: `${this.label(target.tier)} agents are switched off in the settings. Turn them on to wake "${target.name}".` });
       return;
@@ -324,7 +348,13 @@ export class Conversation implements AgentHost, TeamActions {
         this.agentChanged(a);
       }
     }
-    // The person may know the limit is gone: their message goes through at once, unlike agents' messages.
+    // The person may know the limit is gone: their message goes through at once, unlike agents' messages,
+    // after what agents sent it meanwhile, in order.
+    if (this.st(target).holds.pause) {
+      const held = this.held.get(target.id) ?? [];
+      this.held.delete(target.id);
+      for (const m of held) target.deliver(m);
+    }
     this.apply(target, { type: 'Input', from: 'person' });
     target.deliver(Agent.imageContent(content, images));
     this.touch();
@@ -377,10 +407,12 @@ export class Conversation implements AgentHost, TeamActions {
 
   /** Ends every process when the app shuts down. */
   shutdown(): void {
+    sleepWatchers.delete(this.sleepWatcher);
     this.stopTimer?.();
     this.stopTimer = null;
     for (const a of this.agents.values()) {
-      if (!this.isLead(a) && a.live) a.end('stopped', CLOSED_WHILE_WORKING);
+      // Through the machine, so it and the runtime agree the agent ended (quietly: the app is closing).
+      if (!this.isLead(a) && a.live) this.apply(a, { type: 'Stop', by: 'restart', why: CLOSED_WHILE_WORKING }, { drop: SHUTDOWN });
       else a.dispose();
     }
     const lead = this.lead;

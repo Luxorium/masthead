@@ -24,7 +24,8 @@ function setup(opts: { target?: RemoteTarget; tailscale?: FakeTailscale } = {}) 
   const dir = mkdtempSync(join(tmpdir(), 'mh-rw-'));
   const tailscale = opts.tailscale ?? new FakeTailscale({ running: true, dnsName: HOST, tailnetId: 'T1', selfNodeId: 'nSELF', https: true });
   for (const id of [phone, laptop]) tailscale.identities.set(id.addresses[0]!, id);
-  const target: RemoteTarget = opts.target ?? (POSIX ? { kind: 'socket', path: join(dir, 'run', 'r.sock') } : { kind: 'loopback', port: 0 });
+  // Windows has no socket target: a loopback port (a fixed one per test process; serve needs a real port).
+  const target: RemoteTarget = opts.target ?? (POSIX ? { kind: 'socket', path: join(dir, 'run', 'r.sock') } : { kind: 'loopback', port: freePort() });
   const access = new RemoteAccess({ dir: join(dir, 'remote'), tailscale, target });
   const webDir = join(dir, 'web');
   mkdirSync(webDir);
@@ -37,13 +38,20 @@ function setup(opts: { target?: RemoteTarget; tailscale?: FakeTailscale } = {}) 
 }
 
 const PORT = 7443;
+let nextPort = 20000 + (process.pid % 20000);
+/** A loopback port for a test listener (the remote target's port must be a real one, not 0). */
+function freePort(): number {
+  return nextPort++;
+}
+/** The Host serve sends: `localhost` to a socket target, the tailnet name to a port target. */
+let serveHost = 'localhost';
 function headers(from: Identity, extra: Record<string, string> = {}): Record<string, string> {
-  return { host: 'localhost', 'x-forwarded-host': `${HOST}:${PORT}`, 'x-forwarded-for': from.addresses[0]!, 'x-forwarded-proto': 'https', ...extra };
+  return { host: serveHost, 'x-forwarded-host': `${HOST}:${PORT}`, 'x-forwarded-for': from.addresses[0]!, 'x-forwarded-proto': 'https', ...extra };
 }
 
 function call(target: RemoteTarget, port: number | undefined, path: string, opts: { method?: string; headers?: Record<string, string>; body?: string } = {}) {
   return new Promise<{ status: number; body: string; headers: Record<string, unknown> }>((resolve, reject) => {
-    const where = target.kind === 'socket' ? { socketPath: target.path } : { host: '127.0.0.1', port };
+    const where = target.kind === 'socket' ? { socketPath: target.path } : { host: '127.0.0.1', port: port ?? target.port };
     const req = request({ ...where, path, method: opts.method ?? 'GET', headers: opts.headers }, (res) => {
       let body = '';
       res.on('data', (d) => (body += d));
@@ -138,8 +146,10 @@ test('remote: targets per platform', () => {
   assert.equal(remoteCsp(`https://${HOST}:${PORT}`).includes(`connect-src 'self' wss://${HOST}:${PORT}`), true);
 });
 
-test('remote: pairing end to end, the device socket with its role, revoke', async () => {
-  const { access, app, local, localClient, webDir, target } = setup();
+for (const kind of POSIX ? (['socket', 'loopback'] as const) : (['loopback'] as const))
+test(`remote: pairing end to end, the device socket with its role, revoke (${kind})`, async () => {
+  const { access, app, local, localClient, webDir, target } = setup(kind === 'loopback' ? { target: { kind: 'loopback', port: freePort() } } : {});
+  serveHost = target.kind === 'socket' ? 'localhost' : `${HOST}:${PORT}`;
   await access.setEnabled(true);
   const running = await startRemote(app, access, { webDir });
   try {
@@ -150,6 +160,8 @@ test('remote: pairing end to end, the device socket with its role, revoke', asyn
     }
     // The listener refuses anything that did not come through serve for our name.
     assert.equal((await call(target, port, '/', { headers: { host: 'localhost' } })).status, 403, 'no forwarded headers');
+    assert.equal((await call(target, port, '/', { headers: { host: `${HOST}:${PORT}` } })).status, 403, 'the right Host alone is not enough');
+    assert.equal((await call(target, port, '/', { headers: { ...headers(phone), host: target.kind === 'socket' ? `127.0.0.1` : 'localhost' } })).status, 403, 'a Host serve would not send');
     assert.equal((await call(target, port, '/', { headers: headers(phone, { 'x-forwarded-host': 'evil.example:443' }) })).status, 403);
     assert.equal((await call(target, port, '/', { headers: headers(phone, { host: 'evil.example' }) })).status, 403);
     const page = await call(target, port, '/', { headers: headers(phone) });
@@ -179,7 +191,7 @@ test('remote: pairing end to end, the device socket with its role, revoke', asyn
     const open = (from: Identity, tok: string, origin = `https://${HOST}:${PORT}`) =>
       new Promise<{ ws?: WebSocket; status?: number; got: Array<Record<string, unknown>> }>((resolve) => {
         const got: Array<Record<string, unknown>> = [];
-        const url = target.kind === 'socket' ? `ws+unix:${target.path}:/ws` : `ws://127.0.0.1:${port}/ws`;
+        const url = target.kind === 'socket' ? `ws+unix:${target.path}:/ws` : `ws://127.0.0.1:${target.port}/ws`;
         const ws = new WebSocket(url, ['masthead', `device.${tok}`], { headers: { ...headers(from), origin } });
         ws.on('message', (d) => got.push(JSON.parse(d.toString())));
         ws.on('open', () => setTimeout(() => resolve({ ws, got }), 50));
@@ -246,6 +258,7 @@ test('remote: a local session without remote access gets a clear error; devices 
 
 test('remote: page files are served without a whois; a hijacking second request gets nothing', async () => {
   const { access, app, webDir, target, tailscale } = setup();
+  serveHost = target.kind === 'socket' ? 'localhost' : `${HOST}:${PORT}`;
   let lookups = 0;
   const orig = tailscale.whois.bind(tailscale);
   tailscale.whois = async (a: string) => (lookups++, orig(a));

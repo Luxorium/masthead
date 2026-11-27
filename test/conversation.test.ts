@@ -830,15 +830,16 @@ test('usage limit: agents\' messages to a paused agent are held and sent in orde
   assert.equal(sent.length, 0, 'but nothing wakes bravo into the limit');
   assert.equal(bravo.live, true);
   conv.userSend('from the person', undefined, bravo.id);
-  assert.deepEqual(sent, ['from the person'], 'the person goes through at once');
+  // The person goes through at once, after what agents sent meanwhile, in order.
+  assert.equal(sent.length, 4);
+  assert.match(String(sent[0]), /from="charlie"[\s\S]*report from charlie/);
+  assert.match(String(sent[2]), /from="echo"/);
+  assert.equal(sent[3], 'from the person');
   limitTurn(conv, bravo, c.t + 10 * 60_000);
   assert.equal(notices(items, 'bravo', /Paused at the usage limit/).length, 2, 'and that counts as a pause');
   minutes(11);
   tickNow();
-  assert.equal(sent.length, 5);
-  assert.match(String(sent[1]), /from="charlie"[\s\S]*report from charlie/);
-  assert.match(String(sent[3]), /from="echo"/);
-  assert.equal(sent[4], 'The usage limit has reset. Carry on from where you stopped.');
+  assert.deepEqual(sent.slice(4), ['The usage limit has reset. Carry on from where you stopped.']);
 });
 
 test('background: a sub-agent waiting only on background work is finished after 10 minutes; the lead is not', async () => {
@@ -948,4 +949,81 @@ test('prompts: a backend without background tracking gets one line about it', ()
   const settings = defaultSettings();
   assert.match(systemAppend({ tier: 'opus', name: 'b', parentName: 'a', settings, background: false }), /will not wake you when it ends/);
   assert.doesNotMatch(systemAppend({ tier: 'opus', name: 'b', parentName: 'a', settings }), /will not wake you/);
+});
+
+// ---- review fixes (echo's review of Core 3b) ----
+
+test('fix: shutdown ends working agents through the machine; every end frees the slot once', () => {
+  const { conv, host, block, byName, items } = setup();
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  let releases = 0;
+  const release = host.scheduler.release.bind(host.scheduler);
+  host.scheduler.release = (t, id) => {
+    if (id === bravo.id) releases++;
+    release(t, id);
+  };
+  const before = items.length;
+  conv.shutdown();
+  assert.equal(bravo.status, 'stopped');
+  assert.equal(bravo.info.error, 'Masthead was closed while this agent was working.');
+  assert.equal(items.slice(before).filter((x) => x.agent === 'bravo' && x.item.kind === 'notice').length, 0, 'nothing is shown at shutdown');
+  assert.equal(releases, 1);
+  assert.match(conv.list(conv.lead), /- bravo: Opus 5\.5, stopped/);
+  assert.match(conv.message(conv.lead, 'bravo', 'go on'), /^Delivered/, 'not marked as stopped by the person');
+});
+
+test('shell invariants: random team activity never leaves a sub-agent waiting on nothing, the lead ended, or an ended agent holding a slot', async () => {
+  let seed = 5;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff), seed);
+  for (let trial = 0; trial < 25; trial++) {
+    const { conv, host, settings, block } = setup();
+    const { minutes, tickNow } = withClock(host);
+    Object.assign(settings, { maxRunMinutes: 30 });
+    block('opus');
+    block('sonnet');
+    for (let i = 0; i < 3; i++) conv.spawn(conv.lead, `T${i}`, 'task', undefined);
+    const states = (conv as unknown as { states: Map<string, import('../server/core/machine.ts').AgentState> }).states;
+    const active = (host.scheduler as unknown as { active: Map<string, Map<string, string>> }).active;
+    for (let step = 0; step < 40; step++) {
+      const agents = [...conv.agents.values()];
+      const a = agents[rnd() % agents.length]!;
+      const liveSubs = agents.filter((x) => x.live && x !== conv.lead);
+      const pick = liveSubs[rnd() % Math.max(1, liveSubs.length)];
+      switch (rnd() % 9) {
+        case 0: if (pick) conv.spawn(pick, 'c', 'task', undefined); break;
+        case 1: endTurn(conv, a, { text: 'done' }); break;
+        case 2: if (pick) conv.message(pick, 'parent', 'q?', true); break;
+        case 3: if (pick) conv.stop(conv.lead, pick.name); break;
+        case 4: if (pick) conv.processLost(pick, 'lost'); break;
+        case 5: if (pick) limitTurn(conv, pick); break;
+        case 6: minutes(6); tickNow(); break;
+        case 7: conv.userSend('hi', undefined, a.id); break;
+        case 8: if (pick) conv.stopAgent(pick.id, 'Stopped by the person.'); break;
+      }
+      await tick();
+      assert.notEqual(['done', 'failed', 'stopped'].includes(conv.lead.status), true, 'the lead never ends');
+      for (const x of conv.agents.values()) {
+        const st = states.get(x.id);
+        if (!st || x === conv.lead) continue;
+        if (st.phase === 'waiting' && !x.busy) {
+          const h = st.holds;
+          const holds = [...conv.agents.values()].some((c) => c.info.parentId === x.id && c.live) || h.answer || h.pause || h.background > 0;
+          assert.ok(holds, `"${x.name}" waits on nothing (trial ${trial}, step ${step})`);
+        }
+        if (['done', 'failed', 'stopped'].includes(x.status)) assert.equal(active.get(x.tier)?.has(x.id) ?? false, false, `"${x.name}" ended but holds a slot`);
+      }
+    }
+  }
+});
+
+test('sleep notice: a working conversation\'s lead is told when and how long the computer slept', () => {
+  const { conv, block, items } = setup();
+  block('opus');
+  conv.wokeFromSleep(new Date(2026, 10, 27, 0, 42).getTime(), new Date(2026, 10, 27, 7, 34).getTime());
+  assert.equal(notices(items, 'alpha', /asleep/).length, 0, 'not working: nothing to say');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  conv.wokeFromSleep(new Date(2026, 10, 27, 0, 42).getTime(), new Date(2026, 10, 27, 7, 34).getTime());
+  assert.deepEqual(notices(items, 'alpha', /asleep/).map((x) => (x.item as { text: string }).text), ['This computer was asleep from 00:42 to 07:34; work carried on afterwards.']);
 });

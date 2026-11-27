@@ -49,7 +49,7 @@ jobs:
     # The page in a real browser (Playwright's Chromium) against a server on the fake backend:
     # no Claude account, no Claude Code. scripts/ci-e2e.mjs makes fresh folders and a free port.
     name: browser / ${{ matrix.os }}
-    needs: test
+    # Independent of the unit jobs, so one system's unit failure does not hide the others' browser results.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

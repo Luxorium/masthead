@@ -3,6 +3,7 @@
   import Composer from './lib/Composer.svelte';
   import FirstRun from './lib/FirstRun.svelte';
   import PermissionCard from './lib/PermissionCard.svelte';
+  import SettingsView from './lib/SettingsView.svelte';
   import Sidebar from './lib/Sidebar.svelte';
   import TeamMap from './lib/TeamMap.svelte';
   import TeamPanel from './lib/TeamPanel.svelte';
@@ -117,7 +118,10 @@
 <div class="sr-only" aria-live="polite">{announce}</div>
 <div class="shell" class:narrow={ui.narrow} class:phone={ui.phone} class:team-col={showPanel && ui.wide} style:grid-template-columns={columns}>
   {#if ui.sidebarOpen}
-    <Sidebar onhide={() => (ui.sidebarOpen = false)} onpick={() => ui.narrow && (ui.sidebarOpen = false)} />
+    <Sidebar onhide={() => (ui.sidebarOpen = false)} onpick={() => {
+      ui.settingsOpen = false;
+      if (ui.narrow) ui.sidebarOpen = false;
+    }} />
   {/if}
 
   <main inert={drawerOpen}>
@@ -165,7 +169,9 @@
       </div>
     {/if}
 
-    {#if store.app && !store.canRun}
+    {#if ui.settingsOpen}
+      <SettingsView />
+    {:else if store.app && !store.canRun}
       <FirstRun />
     {:else if store.view === 'map' && store.conv && hasTeam && !ui.narrow}
       <TeamMap />
