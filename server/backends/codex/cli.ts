@@ -100,6 +100,8 @@ export interface CatalogModel {
   slug: string;
   display_name?: string;
   context_window?: number;
+  /** The model picker's order (1 first); not a capability rank. */
+  priority?: number;
   visibility?: string;
   multi_agent_version?: string | null;
   [k: string]: unknown;

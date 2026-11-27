@@ -6,6 +6,9 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+
+// NTFS has no POSIX modes; file privacy there is checked by the Windows-specific code paths.
+const POSIX = process.platform !== 'win32';
 import { BlobError, BlobStore, MAX_BLOB_BYTES, blobsOf } from '../server/storage/blobs.ts';
 import { sniffImage } from '../server/storage/images.ts';
 import { FORMAT, migrateConversation } from '../server/storage/migrate.ts';
@@ -68,8 +71,8 @@ test('blobs: stored once by hash, 0600, type from the bytes; mislabelled, polygl
   assert.equal(again.blob, ref.blob);
   const dir = join(root, 'conv-1', 'blobs');
   assert.deepEqual(readdirSync(dir), [`${ref.blob}.png`]);
-  assert.equal(statSync(join(dir, `${ref.blob}.png`)).mode & 0o777, 0o600);
-  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  if (POSIX) assert.equal(statSync(join(dir, `${ref.blob}.png`)).mode & 0o777, 0o600);
+  if (POSIX) assert.equal(statSync(dir).mode & 0o777, 0o700);
   // A JPEG sent as PNG.
   assert.throws(() => blobs.put('conv-1', jpeg(2, 2), 'image/png'), (e: BlobError) => e.code === 'invalid');
   // SVG, with or without a claimed image type.

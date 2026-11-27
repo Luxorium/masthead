@@ -1,12 +1,4 @@
 <script lang="ts">
-  import { T } from './text.ts';
-
-  /** Puts an example in the message box and focuses it, so the person can edit before sending. */
-  async function useExample(text: string) {
-    store.composerFor(store.composerKey).text = text;
-    await tick();
-    document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus();
-  }
   import { tick } from 'svelte';
   import type { Item } from '../../../shared/protocol.ts';
   import { handleCopyClick } from './markdown.ts';
@@ -19,6 +11,14 @@
   import ThinkingItem from './transcript/ThinkingItem.svelte';
   import ToolItem from './transcript/ToolItem.svelte';
   import UserItem from './transcript/UserItem.svelte';
+  import { T } from './text.ts';
+
+  /** Puts an example in the message box and focuses it, so the person can edit before sending. */
+  async function useExample(text: string) {
+    store.composerFor(store.composerKey).text = text;
+    await tick();
+    document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus();
+  }
 
   let scroller = $state<HTMLDivElement | null>(null);
   let pinned = $state(true);
@@ -28,6 +28,25 @@
   const agent = $derived(store.viewAgent);
   // A tool that is still running already says what the agent is doing.
   const toolRunning = $derived(items.some((i) => i.kind === 'tool' && !i.done));
+
+  /**
+   * Long chats render only their newest items; "Show earlier" adds a page at a time. Together with
+   * content-visibility on each item this keeps a chat of thousands of items quick to open.
+   */
+  const PAGE = 80;
+  let limit = $state(PAGE);
+  const start = $derived(Math.max(0, items.length - limit));
+  const visible = $derived(start > 0 ? items.slice(start) : items);
+
+  /** Shows the previous page, keeping what the reader was looking at in place. */
+  async function showEarlier() {
+    const el = scroller;
+    const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+    limit += PAGE;
+    await tick();
+    if (el) el.scrollTop = el.scrollHeight - fromBottom;
+  }
+
 
   function onScroll() {
     if (!scroller) return;
@@ -46,11 +65,12 @@
     }
   });
 
-  // Opening another agent or conversation starts at the bottom.
+  // Opening another agent or conversation starts at the bottom, with the newest page only.
   $effect(() => {
     void store.viewAgentId;
     void store.convId;
     pinned = true;
+    limit = PAGE;
   });
 
   function toBottom() {
@@ -79,7 +99,14 @@
       <p class="muted center">{T.empty.nothingYet}</p>
     {/if}
 
-    {#each items as item (key(item))}
+    {#if start > 0}
+      <button class="earlier" onclick={showEarlier}>{T.transcript.earlier(start)}</button>
+    {/if}
+
+    {#each visible as item (key(item))}
+      <!-- Off-screen items are skipped by layout and paint (content-visibility), except tool lines,
+           whose negative margins need them to stay in normal flow. -->
+      <div class="item" class:cv={item.kind !== 'tool'}>
       {#if item.kind === 'user'}
         <UserItem {item} />
       {:else if item.kind === 'text'}
@@ -93,6 +120,7 @@
       {:else if item.kind === 'notice'}
         <NoticeItem {item} />
       {/if}
+      </div>
     {/each}
 
     {#if draft}
@@ -125,6 +153,23 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+  }
+  .item.cv {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 120px;
+  }
+  .earlier {
+    align-self: center;
+    min-height: 32px;
+    padding: 4px 14px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .earlier:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
   }
   .hello {
     margin: 18vh 0 8px;

@@ -161,3 +161,17 @@ test('settings v2: a whole settings object whose compatibility view was edited a
   assert.equal(out.profiles[0]!.tiers[1]!.lean, false);
   assert.equal(out.profiles[0]!.tiers[2]!.lean, true, 'unchanged fields stay');
 });
+
+test('settings v2: generated built-in profiles are added once; a stored copy wins', async () => {
+  const { withBuiltInProfiles } = await import('../server/settings/settings.ts');
+  const codex = { id: 'codex', label: 'Codex', builtIn: true, tiers: [0, 1].map((i) => ({ id: `codex:${i}`, label: `M${i}`, backend: 'codex', model: `m-${i}`, effort: 'medium' as const, max: i ? 3 : 1, lean: i > 0, colour: 'amber' as const })) };
+  const s = withBuiltInProfiles(defaultSettings(), [codex]);
+  const p = s.profiles.find((x) => x.id === 'codex')!;
+  assert.equal(p.builtIn, true);
+  assert.deepEqual(p.tiers.map((t) => t.id), ['codex:0', 'codex:1']);
+  assert.equal(p.tiers[1]!.backend, 'codex');
+  const edited = sanitizeSettings({ profiles: s.profiles.map((x) => (x.id === 'codex' ? { ...x, tiers: [x.tiers[0], { ...x.tiers[1], max: 1 }] } : x)) }, s);
+  const again = withBuiltInProfiles(edited, [codex]);
+  assert.equal(again.profiles.find((x) => x.id === 'codex')!.tiers[1]!.max, 1);
+  assert.equal(again.profiles.find((x) => x.id === 'codex')!.builtIn, true);
+});

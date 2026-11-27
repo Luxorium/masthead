@@ -170,14 +170,17 @@ export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
   });
 }
 
-function attach(app: ServedApp, ws: WebSocket, tokens: BlobTokens): void {
+/** Connects a socket to the app. A remote device's socket gets its role; `onClient` lets the remote side track it. */
+export function attach(app: ServedApp, ws: WebSocket, tokens: BlobTokens, remote?: { role: Client['role']; onClient?: (c: Client) => void }): void {
   const blobToken = tokens.issue();
   const client: Client = {
     blobToken,
+    ...(remote ? { role: remote.role } : {}),
     send(msg: ServerMsg) {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
     },
   };
+  remote?.onClient?.(client);
   app.connect(client);
   ws.on('message', (data) => {
     let parsed: unknown;
@@ -216,7 +219,8 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-function serveStatic(root: string, pathname: string, req: IncomingMessage, res: ServerResponse): void {
+/** Serves the built page. `csp` differs on the remote listener (wss to the tailnet name). */
+export function serveStatic(root: string, pathname: string, req: IncomingMessage, res: ServerResponse, csp: string = CSP): void {
   let rel: string;
   try {
     rel = normalize(decodeURIComponent(pathname));

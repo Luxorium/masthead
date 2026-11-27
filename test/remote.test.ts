@@ -5,6 +5,9 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+
+// NTFS has no POSIX modes; file privacy there is checked by the Windows-specific code paths.
+const POSIX = process.platform !== 'win32';
 import { allowedMessage, authorise } from '../server/remote/authorise.ts';
 import { DeviceRegistry, refusalFor } from '../server/remote/registry.ts';
 import { CliTailscale, FakeTailscale, addCommand, identityFrom, removeCommand, serveStateFrom, type Identity } from '../server/remote/tailscale.ts';
@@ -63,8 +66,8 @@ test('remote: allow issues the token once, only to the node that asked, and only
   const file = readFileSync(join(dir, 'devices.json'), 'utf8');
   assert.ok(c.state === 'allowed' && !file.includes(c.token), 'the token is not on disk');
   assert.equal(JSON.parse(file).version, 1);
-  assert.equal(statSync(join(dir, 'devices.json')).mode & 0o777, 0o600);
-  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  if (POSIX) assert.equal(statSync(join(dir, 'devices.json')).mode & 0o777, 0o600);
+  if (POSIX) assert.equal(statSync(dir).mode & 0o777, 0o700);
   assert.equal(registry.allow(r.request.id), null, 'a request cannot be allowed twice');
 });
 
@@ -132,7 +135,7 @@ test('remote: the audit log records each step, privately', () => {
   registry.revoke(phone.nodeId);
   const events = registry.readAudit().map((e) => e.event);
   assert.deepEqual(events, ['request', 'allow', 'collect', 'revoke']);
-  assert.equal(statSync(join(dir, 'audit.jsonl')).mode & 0o777, 0o600);
+  if (POSIX) assert.equal(statSync(join(dir, 'audit.jsonl')).mode & 0o777, 0o600);
   assert.ok(registry.readAudit().every((e) => e.nodeId === 'nPHONE' && typeof e.ts === 'number'));
 });
 

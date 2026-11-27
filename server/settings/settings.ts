@@ -146,7 +146,7 @@ function parseProfiles(raw: unknown[], prev: TeamProfile[]): TeamProfile[] {
       if (tiers.some((t) => !t.model)) continue;
     }
     const label = typeof r.label === 'string' && r.label.trim() ? r.label.trim().slice(0, 40) : (before?.label ?? id);
-    out.push({ id, label, builtIn: id === CLAUDE_PROFILE, tiers });
+    out.push({ id, label, builtIn: id === CLAUDE_PROFILE || (before?.builtIn ?? false), tiers });
     seen.add(id);
   }
   if (!seen.has(CLAUDE_PROFILE)) out.unshift(prev.find((p) => p.id === CLAUDE_PROFILE) ?? claudeProfile());
@@ -240,4 +240,20 @@ export function tierLimit(s: Settings, tier: string): number {
     if (i > 0) return p.tiers[i]!.max;
   }
   return 0;
+}
+
+/**
+ * Adds generated built-in profiles (e.g. Codex, from the installed CLI) that the settings do not hold
+ * yet. A stored copy (the person edited it) wins and is kept as it is. Ids must follow
+ * `<profile>:<index>` from 0; the result is validated like any other settings.
+ */
+export function withBuiltInProfiles(s: Settings, generated: TeamProfile[]): Settings {
+  const extra = generated.filter((g) => !s.profiles.some((p) => p.id === g.id));
+  if (!extra.length) return s;
+  const out = sanitizeSettings({ profiles: [...s.profiles, ...extra] }, s);
+  for (const g of extra) {
+    const p = out.profiles.find((x) => x.id === g.id);
+    if (p) p.builtIn = true;
+  }
+  return out;
 }

@@ -20,6 +20,8 @@ export interface BackendInfo {
   minVersion?: string;
   /** Shown on the page when the backend cannot be used (missing, too old, signed out). */
   error?: string;
+  /** Usable, but worth saying (e.g. a version Masthead has not been tested with). */
+  warning?: string;
 }
 
 export interface ModelInfo {
@@ -31,6 +33,10 @@ export interface ModelInfo {
   nativeEffort: Partial<Record<Effort, string>>;
   contextWindow?: number;
   default?: boolean;
+  /** The backend's own one-line description, as it shows it. */
+  description?: string;
+  /** The backend's picker order (lower first). Says nothing about capability. */
+  order?: number;
 }
 
 export interface BackendCaps {

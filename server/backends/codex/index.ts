@@ -146,7 +146,7 @@ export class CodexBackend implements Backend {
     } catch (e) {
       return { ...base, available: false, path, version, signedIn, error: (e as Error).message };
     }
-    return { ...base, available: true, path, version, signedIn };
+    return { ...base, available: true, path, version, signedIn, ...(this.warning ? { warning: this.warning } : {}) };
   }
 
   async models(): Promise<ModelInfo[]> {
@@ -161,7 +161,7 @@ export class CodexBackend implements Backend {
         const nativeEffort: Partial<Record<Effort, string>> = {};
         for (const e of efforts) nativeEffort[e] = e;
         const cat = server.catalog.find((c) => c.slug === m.model || c.slug === m.id);
-        out.push({ id: m.id, label: m.displayName || m.id, efforts, nativeEffort, ...(cat?.context_window ? { contextWindow: cat.context_window } : {}), ...(m.isDefault ? { default: true } : {}) });
+        out.push({ id: m.id, label: m.displayName || m.id, efforts, nativeEffort, ...(cat?.context_window ? { contextWindow: cat.context_window } : {}), ...(m.description ? { description: m.description } : {}), ...(typeof cat?.priority === 'number' ? { order: cat.priority } : {}), ...(m.isDefault ? { default: true } : {}) });
       }
       cursor = r.nextCursor ?? null;
     } while (cursor);

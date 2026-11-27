@@ -37,14 +37,14 @@ export interface FakeCodexOptions {
 
 export const FAKE_CATALOG = {
   models: [
-    { slug: 'fake-astra', display_name: 'Fake Astra', context_window: 272000, visibility: 'list', multi_agent_version: 'v2' },
-    { slug: 'fake-luna', display_name: 'Fake Luna', context_window: 128000, visibility: 'list', multi_agent_version: 'v2' },
+    { slug: 'fake-astra', priority: 2, display_name: 'Fake Astra', context_window: 272000, visibility: 'list', multi_agent_version: 'v2' },
+    { slug: 'fake-luna', priority: 8, display_name: 'Fake Luna', context_window: 128000, visibility: 'list', multi_agent_version: 'v2' },
     { slug: 'fake-hidden', display_name: 'Hidden', visibility: 'hide', multi_agent_version: 'v1' },
   ],
 };
 
 export const FAKE_MODEL_LIST = [
-  { id: 'fake-astra', model: 'fake-astra', displayName: 'Fake Astra', hidden: false, isDefault: true, defaultReasoningEffort: 'low',
+  { id: 'fake-astra', model: 'fake-astra', displayName: 'Fake Astra', description: 'Our most capable model.', hidden: false, isDefault: true, defaultReasoningEffort: 'low',
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((reasoningEffort) => ({ reasoningEffort, description: '' })) },
   { id: 'fake-luna', model: 'fake-luna', displayName: 'Fake Luna', hidden: false, isDefault: false, defaultReasoningEffort: 'medium',
     supportedReasoningEfforts: ['low', 'medium', 'high', 'max'].map((reasoningEffort) => ({ reasoningEffort, description: '' })) },

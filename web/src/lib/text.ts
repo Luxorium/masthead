@@ -97,6 +97,7 @@ export const T = {
 
   transcript: {
     jump: 'Jump to latest',
+    earlier: (n: number) => `Show earlier (${plural(n, 'more item', 'more items')})`,
     askedBy: 'Asked by',
     finished: (name: string) => `${name} finished`,
     says: (name: string) => `${name} says`,

@@ -64,6 +64,7 @@ test('codex detect: too old, signed out, untested version, switch not working', 
   const newer = make({ version: '0.180.0' });
   assert.equal((await newer.backend.detect()).available, true);
   assert.match(newer.backend.warning ?? '', /not been tested/);
+  assert.match((await newer.backend.detect()).warning ?? '', /not been tested/);
   const broken = await make({ catalogIgnored: true }).backend.detect();
   assert.equal(broken.available, false);
   assert.match(broken.error ?? '', /could not be switched off/);
@@ -85,6 +86,9 @@ test('codex models: from model/list, hidden left out, never max or ultra, contex
   assert.equal(models[0]!.nativeEffort.xhigh, 'xhigh');
   assert.equal(models[0]!.default, true);
   assert.equal(models[0]!.contextWindow, 272000);
+  assert.equal(models[0]!.description, 'Our most capable model.');
+  assert.equal(models[0]!.order, 2);
+  assert.equal(models[1]!.order, 8);
   assert.ok(fake.server.args.some((a) => a.startsWith('model_catalog_json=')), 'app-server started with the catalogue');
 });
 
