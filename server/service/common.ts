@@ -1,4 +1,4 @@
-import { DEFAULT_PORT } from '../paths.js';
+import { DEFAULT_PORT, appDirs } from '../paths.js';
 import type { InstallOptions, RunResult } from './types.js';
 import { ServiceError } from './types.js';
 
@@ -23,17 +23,44 @@ function dirOf(p: string): string {
 }
 
 /**
+ * Refuses a value with a line break or NUL: in a unit, plist or task XML it would start a new line
+ * (a new directive) or be cut short. Throws a ServiceError naming the variable.
+ */
+export function checkValue(name: string, value: string): string {
+  if (/[\n\r\0]/.test(value)) {
+    throw new ServiceError(`${name} contains a line break or NUL character, which a service file cannot hold safely: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/** The folder variables passed on to a POSIX service, in the order paths.ts reads them. */
+export const DIR_VARS = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'MASTHEAD_CONFIG_DIR', 'MASTHEAD_DATA_DIR'] as const;
+
+/**
  * The variables a POSIX service gets: PATH with node's and claude's folders first, MASTHEAD_CLAUDE,
- * XDG_CONFIG_HOME/XDG_DATA_HOME when set (settings, conversations and the secret must be where the
- * `masthead` command looks), MASTHEAD_PORT when not the default.
+ * XDG_CONFIG_HOME/XDG_DATA_HOME and MASTHEAD_CONFIG_DIR/MASTHEAD_DATA_DIR when set (settings,
+ * conversations and the secret must be where the `masthead` command looks), MASTHEAD_PORT when not
+ * the default. Every value is checked with `checkValue`.
  */
 export function serviceEnv(o: InstallOptions, tail: readonly string[]): [string, string][] {
   const path = cleanPath([dirOf(o.node), o.claudePath ? dirOf(o.claudePath) : null, o.env.PATH, ...tail]);
   const vars: [string, string][] = [['PATH', path]];
   if (o.claudePath) vars.push(['MASTHEAD_CLAUDE', o.claudePath]);
-  for (const k of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME']) if (o.env[k]) vars.push([k, o.env[k]!]);
+  for (const k of DIR_VARS) if (o.env[k]) vars.push([k, o.env[k]!]);
   if (o.port !== undefined && o.port !== DEFAULT_PORT) vars.push(['MASTHEAD_PORT', String(o.port)]);
+  for (const [k, v] of vars) checkValue(k, v);
   return vars;
+}
+
+/**
+ * The data folder an installed service uses, from the environment it was given, and a note when it
+ * differs from the one this shell would use (so a mismatch is visible in `status`).
+ */
+export function dataDirNote(platform: NodeJS.Platform, serviceVars: Record<string, string>, shellEnv: Record<string, string | undefined>, home: string): { dataDir: string; note: string } {
+  const pick = (e: Record<string, string | undefined>) => Object.fromEntries(DIR_VARS.filter((k) => e[k]).map((k) => [k, e[k]]));
+  const dataDir = appDirs(platform, pick(serviceVars), home).data;
+  const mine = appDirs(platform, pick(shellEnv), home).data;
+  return { dataDir, note: dataDir === mine ? `data ${dataDir}` : `data ${dataDir} (this shell uses ${mine})` };
 }
 
 /** A port from text, or null when it is not one the server would accept. */

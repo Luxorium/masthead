@@ -98,6 +98,10 @@ Every page in this wiki for Masthead 0.2.0, grouped. Start at [Home](Home.md). T
 - [Web store](Source-Web-Store.md): `store.svelte.ts`, everything the page knows, kept in step over the WebSocket.
 - [Web components](Source-Web-Components.md): the Svelte components in `web/src/lib/`.
 - [Web styles](Source-Web-Styles.md): `app.css`, the layout grid, the tab icon and the page's build config.
+- [Web text](Source-Web-Text.md): every word the page shows (`text.ts`) and the words built for statuses, sizes and paths (`words.ts`).
+- [Web images](Source-Web-Images.md): how the page attaches, uploads and shows pictures.
+- [Web settings and remote access](Source-Web-Settings-and-Remote.md): the settings view, teams, agent programs and the remote-access section.
+- [Web tests](Source-Web-Tests.md): the page's Vitest unit and component tests in `web/test/`, and the browser test `test/ui.e2e.mjs`.
 
 ## Walkthroughs
 

@@ -311,10 +311,13 @@ test('config: the secret is created once, private, and kept', () => {
   const replaced = loadSecret(file);
   assert.notEqual(replaced, s);
   assert.match(replaced, /^[0-9a-f]{64}$/);
-  // A valid secret that others can read (an old copy, a restore) is made private again, not replaced.
-  chmodSync(file, 0o644);
-  assert.equal(loadSecret(file), replaced);
-  if (POSIX) assert.equal(statSync(file).mode & 0o777, 0o600);
+  // A valid secret that others could read (an old copy, a restore) is replaced: it may already have been read.
+  if (POSIX) {
+    chmodSync(file, 0o644);
+    const fresh = loadSecret(file);
+    assert.notEqual(fresh, replaced);
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+  }
 });
 
 test('app: on Windows `~\\` expands too, and drive roots lead to the drive list', () => {

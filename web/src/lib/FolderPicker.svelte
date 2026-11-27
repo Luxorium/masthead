@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { T } from './text.ts';
   import { onMount } from 'svelte';
   import { shortPath, store } from './store.svelte.ts';
   import { childPath } from './words.ts';
@@ -30,19 +31,19 @@
   }
 </script>
 
-<div class="picker" role="dialog" aria-label="Choose a folder">
+<div class="picker" role="dialog" aria-label={T.folder.dialog}>
   <form
     onsubmit={(e) => {
       e.preventDefault();
       go(typed);
     }}
   >
-    <input class="mono" bind:value={typed} spellcheck="false" aria-label="Folder path" />
+    <input class="mono" bind:value={typed} spellcheck="false" aria-label={T.folder.path} />
   </form>
   <div class="list">
     {#if store.dirs?.parent}
       <!-- On Windows a drive root's parent is the sentinel 'drives:', the list of drives. -->
-      <button onclick={() => go(store.dirs!.parent!)}>‹ Up to {store.dirs.parent === DRIVES ? 'Drives' : shortPath(store.dirs.parent, store.app?.home)}</button>
+      <button onclick={() => go(store.dirs!.parent!)}>{T.folder.up(store.dirs.parent === DRIVES ? T.folder.drives : shortPath(store.dirs.parent, store.app?.home))}</button>
     {/if}
     {#if store.dirs?.error}
       <p class="err">{store.dirs.error}</p>
@@ -50,13 +51,13 @@
       {#each store.dirs?.entries ?? [] as name (name)}
         <button onclick={() => go(store.dirs!.path === DRIVES ? name : childPath(store.dirs!.path, name))}>{name}</button>
       {:else}
-        <p class="muted">No folders inside.</p>
+        <p class="muted">{T.folder.empty}</p>
       {/each}
     {/if}
   </div>
   <div class="actions">
-    <button class="btn ghost" onclick={onclose}>Cancel</button>
-    <button class="btn primary" disabled={!store.dirs || !!store.dirs.error || store.dirs.path === DRIVES} onclick={choose}>Use this folder</button>
+    <button class="btn ghost" onclick={onclose}>{T.folder.cancel}</button>
+    <button class="btn primary" disabled={!store.dirs || !!store.dirs.error || store.dirs.path === DRIVES} onclick={choose}>{T.folder.use}</button>
   </div>
 </div>
 

@@ -18,8 +18,8 @@ Six jobs: a matrix of `ubuntu-latest`, `macos-latest` and `windows-latest`, each
 
 | Step | What it does |
 |---|---|
-| `actions/checkout@v4` | Gets the code. |
-| `actions/setup-node@v4` | Installs Node 22 or 24, with npm's download cache (keyed on `package-lock.json`). |
+| `actions/checkout` (pinned to a commit, `# v4`) | Gets the code. Every action is pinned by commit hash, not by tag, so a moved tag cannot change what runs. |
+| `actions/setup-node` (pinned, `# v4`) | Installs Node 22 or 24, with npm's download cache (keyed on `package-lock.json`). |
 | `npm ci` | A plain install of everything in the lock file. See below. |
 | `npm run check` | Type-checks the server and the page. |
 | `npm test` | The unit tests (`test/*.test.ts`). |
@@ -63,10 +63,10 @@ Plain Node with no shell, so it runs the same on all three systems. It needs a b
 2. Writes `config/settings.json`: `permissionMode: "default"` (so the fake's approval request shows a card), `defaultCwd` = the `work` folder, and tier limits Opus 3, Sonnet 2, Haiku 2.
 3. Asks the system for a free port on `127.0.0.1` (`listen(0)`). If it ever gets 7717, it asks again: the installed Masthead's port is never used.
 4. Builds the environment: the current one plus `MASTHEAD_BACKEND=fake`, `MASTHEAD_ALLOW_FAKE=1`, `MASTHEAD_DATA_DIR` and `MASTHEAD_CONFIG_DIR`. It removes `XDG_DATA_HOME` and `XDG_CONFIG_HOME`, so nothing points back at real folders. The fake backend runs only when both fake variables are set (`server/backends/registry.ts`, [Fake backend](Source-Backend-Fake.md)).
-5. Starts `node dist/server/main.js serve --port <port>` with that environment (`windowsHide`, its output shown).
+5. Copies `dist/` and `package.json` into the temporary folder and links the checkout's `node_modules` next to them (a junction on Windows), then starts `node <copy>/dist/server/main.js serve --port <port>` with that environment (`windowsHide`, its output shown). Running a copy means a rebuild in the checkout meanwhile (`npm run build` empties `dist/`) cannot pull files from under the server, which made local runs flaky when several builds and tests shared one checkout.
 6. Polls `/api/health` every 250 ms until it answers with `name: "masthead"`. It gives up after 30 s, or at once if the server exits.
 7. Runs `node test/ui.e2e.mjs <base url> <shots>` with the same environment plus `MASTHEAD_E2E_BACKEND=fake`. That tells the test the server answers scripted phrases, not a model: it builds the team one tool call per message and skips the checks that need a model's own writing. The test finds the key through `MASTHEAD_DATA_DIR/secret`.
-8. Whatever happened, stops the server as `masthead stop` does: reads `data/secret` and posts to `/api/shutdown` with the headers `x-masthead: 1` and `x-masthead-key: <secret>`. If the server is still running 3 s later, it kills it.
+8. Whatever happened, stops the server as `masthead stop` does: reads `data/secret` and posts to `/api/shutdown` with the headers `x-masthead: 1` and `x-masthead-key: <secret>`. The request has a 3 s time limit; if the server is still running 3 s later, it kills it. Then it deletes the temporary folder (retrying briefly; a file Windows still holds is left for the system's temp clean-up).
 9. Prints `browser test passed`, or `browser test failed (<code>); screenshots in <folder>`, and exits with the test's code.
 
 The temporary folder is not deleted.

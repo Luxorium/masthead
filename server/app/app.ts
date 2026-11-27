@@ -19,7 +19,7 @@ import {
 import type { Agent } from '../runtime/agent.js';
 import { HOME, SETTINGS_FILE } from '../paths.js';
 import { findClaude, type ClaudeInfo } from '../backends/claude/env.js';
-import { loadSettings, resetProfile, sanitizeSettings, saveSettings, tierLimit, withBuiltInProfiles } from '../settings/settings.js';
+import { chatsUsing, deleteProfile, loadSettings, resetProfile, sanitizeSettings, settingsProblem, saveSettings, tierLimit, withBuiltInProfiles } from '../settings/settings.js';
 import { findTier } from '../../shared/protocol.js';
 import { Conversation, type ConversationHost } from '../core/conversation.js';
 import { Scheduler } from '../core/scheduler.js';
@@ -269,6 +269,15 @@ export class App implements ConversationHost {
     }
   }
 
+  /** Plain-language notes about saved files this run leaves alone. */
+  private problems(): Array<{ what: 'settings' | 'devices'; message: string }> {
+    const out: Array<{ what: 'settings' | 'devices'; message: string }> = [];
+    const s = settingsProblem(this.settingsFile);
+    if (s) out.push({ what: 'settings', message: s });
+    if (this.remote?.registry.newerFile) out.push({ what: 'devices', message: 'The list of allowed devices was saved by a newer version of Masthead. Remote access stays off here so that list is not changed.' });
+    return out;
+  }
+
   /** Remote access over Tailscale, when this server offers it. */
   private remote: RemoteAccess | null;
 
@@ -278,7 +287,9 @@ export class App implements ConversationHost {
     // Version 2 pages read `backends`; version 1 pages ignore it.
     // The type check keeps the page's copy (BackendStatusV2) in step with the registry's.
     const backends = client && this.hub.isV2(client) ? { backends: this.registry.status() satisfies BackendStatusV2[] } : {};
-    return { ...remote, ...backends, ...(client?.blobToken ? { blobToken: client.blobToken } : {}), version: VERSION, settings: this.currentSettings, conversations: this.metas(), claude: this.claude, home: HOME, pending: [...this.pending.values()].map((p) => p.request), usage: [...this.usage.values()] };
+    // Files this Masthead will not write over (written by a newer version, or unreadable), said plainly.
+    const problems = client && this.hub.isV2(client) ? this.problems() : [];
+    return { ...remote, ...backends, ...(problems.length ? { problems } : {}), ...(client?.blobToken ? { blobToken: client.blobToken } : {}), version: VERSION, settings: this.currentSettings, conversations: this.metas(), claude: this.claude, home: HOME, pending: [...this.pending.values()].map((p) => p.request), usage: [...this.usage.values()] };
   }
 
   /** Every tab, in the protocol version it speaks; see clients.ts. */
@@ -364,6 +375,20 @@ export class App implements ConversationHost {
       case 'device_role': {
         const m = msg as { nodeId?: unknown; role?: unknown };
         this.requireRemote().setRole(String(m.nodeId ?? ''), m.role);
+        return true;
+      }
+      case 'delete_profile': {
+        const id = String(msg.id ?? '');
+        if (!this.currentSettings.profiles.some((p) => p.id === id)) throw new ClientError('not_found', 'There is no such team.');
+        const chats = chatsUsing(id, [...this.conversations.values()].map((c) => c.meta.profileId));
+        if (chats > 0 && msg.force !== true) {
+          // The page asks the person first; it sends the same request again with force.
+          client.send({ t: 'error', code: 'refused', message: `${chats} chat${chats === 1 ? '' : 's'} use this team.`, inUse: { id, chats } } as ServerMsg);
+          return true;
+        }
+        const next = deleteProfile(this.currentSettings, id);
+        if (next === this.currentSettings) throw new ClientError('refused', 'This team cannot be deleted.');
+        this.updateSettings(next);
         return true;
       }
       case 'reset_profile': {

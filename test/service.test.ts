@@ -2,10 +2,10 @@
 // launchctl or schtasks or writes outside the fake.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cleanPath } from '../server/service/common.ts';
-import { serviceFor, type Deps, type RunResult } from '../server/service/index.ts';
-import { LABEL, launchdPortFrom, plistContent } from '../server/service/launchd.ts';
-import { execQuote, unitContent, unitPortFrom, unitQuote } from '../server/service/systemd.ts';
+import { checkValue, cleanPath } from '../server/service/common.ts';
+import { ServiceError, serviceFor, type Deps, type RunResult } from '../server/service/index.ts';
+import { LABEL, launchdEnvFrom, launchdPortFrom, plistContent } from '../server/service/launchd.ts';
+import { execQuote, unitContent, unitEnvFrom, unitPortFrom, unitQuote } from '../server/service/systemd.ts';
 import { parseTaskQuery, taskAction, taskXml, utf16le, winQuote } from '../server/service/taskscheduler.ts';
 
 type Call = [string, ...string[]];
@@ -23,6 +23,7 @@ function fake(results: (cmd: string, args: readonly string[]) => Partial<RunResu
       writeFile: (p, d) => void (files.set(p, d), ops.push(`write ${p}`)),
       mkdir: (p) => void ops.push(`mkdir ${p}`),
       rm: (p) => void (files.delete(p), ops.push(`rm ${p}`)),
+      exists: (p) => files.has(p),
     },
     home: '/home/a b',
     env: {},
@@ -73,23 +74,34 @@ WantedBy=default.target
   assert.match(plain, /^Environment="PATH=\/usr\/bin:\/x:\/h\/.local\/bin:\/usr\/local\/bin:\/bin"$/m);
 });
 
-test('systemd: install writes the unit, then daemon-reload, enable, restart', async () => {
-  const f = fake(undefined, { env: { XDG_CONFIG_HOME: '/cfg' } });
+const UNIT_FILE = '/home/a b/.config/systemd/user/masthead.service';
+
+test('systemd: install writes ~/.config/systemd/user (not the shell XDG_CONFIG_HOME), checks with cat, enables, restarts', async () => {
+  const f = fake((_c, a) => (a[1] === 'cat' ? { stdout: `# ${UNIT_FILE}\n[Unit]\n` } : {}), { env: { XDG_CONFIG_HOME: '/cfg' } });
   const svc = serviceFor('linux', f.deps)!;
   assert.equal(svc.kind, 'systemd');
   const lines = await svc.install(base);
   assert.ok(lines.length > 0);
-  assert.ok(f.files.has('/cfg/systemd/user/masthead.service'));
-  assert.deepEqual(f.ops, ['mkdir /cfg/systemd/user', 'write /cfg/systemd/user/masthead.service']);
+  assert.ok(f.files.has(UNIT_FILE));
+  assert.deepEqual(f.ops, ['mkdir /home/a b/.config/systemd/user', `write ${UNIT_FILE}`]);
   assert.deepEqual(f.calls, [
     ['systemctl', '--user', 'show-environment'],
     ['systemctl', '--user', 'daemon-reload'],
+    ['systemctl', '--user', 'cat', 'masthead.service'],
     ['systemctl', '--user', 'enable', '--quiet', 'masthead.service'],
     ['systemctl', '--user', 'restart', 'masthead.service'],
   ]);
-  const h = fake();
-  await serviceFor('linux', h.deps)!.install(base);
-  assert.ok(h.files.has('/home/a b/.config/systemd/user/masthead.service'));
+});
+
+test('systemd: a unit systemd cannot find, or reads from elsewhere, is rolled back', async () => {
+  const lost = fake((_c, a) => (a[1] === 'cat' ? { status: 1, stderr: 'No files found for masthead.service.' } : {}));
+  await assert.rejects(serviceFor('linux', lost.deps)!.install(base), (e: Error) => e instanceof ServiceError && e.message.includes(UNIT_FILE) && /search path/.test(e.message));
+  assert.equal(lost.files.size, 0, 'the written unit is removed');
+  assert.ok(!lost.calls.some((c) => c[2] === 'enable'));
+  assert.deepEqual(lost.calls.slice(-2), [['systemctl', '--user', 'disable', '--now', 'masthead.service'], ['systemctl', '--user', 'daemon-reload']]);
+  const other = fake((_c, a) => (a[1] === 'cat' ? { stdout: '# /x/systemd/user/masthead.service\n' } : {}));
+  await assert.rejects(serviceFor('linux', other.deps)!.install(base), /reads masthead.service from \/x\/systemd\/user/);
+  assert.equal(other.files.size, 0);
 });
 
 test('systemd: install refuses without user services, and fails loudly when systemctl fails', async () => {
@@ -98,16 +110,31 @@ test('systemd: install refuses without user services, and fails loudly when syst
   assert.equal(none.files.size, 0, 'nothing written');
   const bad = fake((_c, a) => (a[1] === 'restart' ? { status: 1, stderr: 'boom' } : {}));
   await assert.rejects(serviceFor('linux', bad.deps)!.install(base), /restart.*boom/);
+  assert.equal(bad.files.size, 0, 'a failed restart rolls the unit back');
+  assert.deepEqual(bad.ops.slice(-1), [`rm ${UNIT_FILE}`]);
+  const reload = fake((_c, a) => (a[1] === 'daemon-reload' && reload.files.size ? { status: 1, stderr: 'nope' } : {}));
+  await assert.rejects(serviceFor('linux', reload.deps)!.install(base), /daemon-reload.*nope/);
+  assert.equal(reload.files.size, 0);
 });
 
-test('systemd: uninstall disables, removes the unit, reloads', async () => {
-  const f = fake((_c, a) => (a[1] === 'disable' ? { status: 5 } : {}));
-  await serviceFor('linux', f.deps)!.uninstall();
+test('systemd: uninstall disables, removes the unit (and an old $XDG_CONFIG_HOME one), reloads', async () => {
+  const f = fake((_c, a) => (a[1] === 'disable' ? { status: 5 } : {}), { env: { XDG_CONFIG_HOME: '/cfg' } });
+  f.files.set(UNIT_FILE, 'x');
+  f.files.set('/cfg/systemd/user/masthead.service', 'x');
+  const lines = await serviceFor('linux', f.deps)!.uninstall();
   assert.deepEqual(f.calls, [
     ['systemctl', '--user', 'disable', '--now', 'masthead.service'],
     ['systemctl', '--user', 'daemon-reload'],
   ]);
-  assert.deepEqual(f.ops, ['rm /home/a b/.config/systemd/user/masthead.service']);
+  assert.deepEqual(f.ops, [`rm ${UNIT_FILE}`, 'rm /cfg/systemd/user/masthead.service']);
+  assert.ok(lines.includes(`Removed ${UNIT_FILE}`));
+});
+
+test('systemd: uninstall with nothing installed is a no-op', async () => {
+  const f = fake((_c, a) => (a[1] === 'show' ? { stdout: 'LoadState=not-found\n' } : {}));
+  assert.deepEqual(await serviceFor('linux', f.deps)!.uninstall(), ['Nothing was installed.']);
+  assert.ok(!f.calls.some((c) => c[2] === 'disable'));
+  assert.deepEqual(f.ops, []);
 });
 
 test('systemd: status and serves read systemctl show', async () => {
@@ -115,7 +142,13 @@ test('systemd: status and serves read systemctl show', async () => {
   let out = 'LoadState=loaded\nActiveState=active\nEnvironment="PATH=/home/a b/bin" MASTHEAD_PORT=7731\n';
   const f = fake(() => ({ stdout: out }));
   const svc = serviceFor('linux', f.deps)!;
-  assert.deepEqual(await svc.status(), { installed: true, running: true, port: 7731, detail: 'masthead.service active, port 7731' });
+  assert.deepEqual(await svc.status(), {
+    installed: true,
+    running: true,
+    port: 7731,
+    dataDir: '/home/a b/.local/share/masthead',
+    detail: 'masthead.service active, port 7731, data /home/a b/.local/share/masthead',
+  });
   assert.deepEqual(f.calls[0], show);
   assert.equal(svc.serves(7731), true);
   assert.equal(svc.serves(7717), false);
@@ -128,6 +161,48 @@ test('systemd: status and serves read systemctl show', async () => {
   const broken = serviceFor('linux', fake(() => ({ status: 1, stderr: 'no bus' })).deps)!;
   assert.deepEqual(await broken.status(), { installed: false, running: null, port: null, detail: 'systemctl failed: no bus' });
   assert.equal(broken.serves(7717), false);
+});
+
+test('systemd/launchd: MASTHEAD_*_DIR are passed on and status shows the data folder the service uses', async () => {
+  const env = { PATH: '/usr/bin', MASTHEAD_DATA_DIR: '/srv/m data', MASTHEAD_CONFIG_DIR: '/etc/m' };
+  const unit = unitContent({ ...base, env }, '/h');
+  assert.match(unit, /^Environment="MASTHEAD_CONFIG_DIR=\/etc\/m"$/m);
+  assert.match(unit, /^Environment="MASTHEAD_DATA_DIR=\/srv\/m data"$/m);
+  const xml = plistContent({ ...base, env }, '/Users/a');
+  assert.match(xml, /<key>MASTHEAD_DATA_DIR<\/key>\s*<string>\/srv\/m data<\/string>/);
+  assert.match(xml, /<key>MASTHEAD_CONFIG_DIR<\/key>\s*<string>\/etc\/m<\/string>/);
+  assert.deepEqual(unitEnvFrom('Environment="PATH=/a b" "MASTHEAD_DATA_DIR=/srv/m \\"d\\"" XDG_DATA_HOME=/x\n'), { PATH: '/a b', MASTHEAD_DATA_DIR: '/srv/m "d"', XDG_DATA_HOME: '/x' });
+  const show = 'LoadState=loaded\nActiveState=active\nEnvironment="MASTHEAD_DATA_DIR=/srv/m data"\n';
+  const same = await serviceFor('linux', fake(() => ({ stdout: show }), { env: { MASTHEAD_DATA_DIR: '/srv/m data' } }).deps)!.status();
+  assert.equal(same.dataDir, '/srv/m data');
+  assert.match(same.detail, /data \/srv\/m data$/);
+  const differs = await serviceFor('linux', fake(() => ({ stdout: show })).deps)!.status();
+  assert.match(differs.detail, /data \/srv\/m data \(this shell uses \/home\/a b\/.local\/share\/masthead\)/, 'a mismatch is visible');
+  const print = `gui/501/${LABEL} = {\n\tstate = running\n\tenvironment = {\n\t\tXDG_DATA_HOME => /xd\n\t}\n\tinherited environment = {\n\t\tMASTHEAD_DATA_DIR => /no\n\t}\n}\n`;
+  assert.deepEqual(launchdEnvFrom(print), { XDG_DATA_HOME: '/xd' });
+  const mac = await serviceFor('darwin', fake(() => ({ stdout: print }), { uid: 501, home: '/Users/a' }).deps)!.status();
+  assert.equal(mac.dataDir, '/xd/masthead');
+});
+
+test('service: a line break or NUL in any value is refused, naming the variable', async () => {
+  assert.throws(() => checkValue('X', 'a\nb'), (e: Error) => e instanceof ServiceError && /^X contains a line break/.test(e.message));
+  assert.throws(() => checkValue('X', 'a\rb'), ServiceError);
+  assert.throws(() => checkValue('X', 'a\0b'), ServiceError);
+  assert.equal(checkValue('X', 'a b'), 'a b');
+  const evil = { ...base, env: { PATH: '/usr/bin:/x\nExecStartPre=/bin/evil' } };
+  assert.throws(() => unitContent(evil, '/h'), /PATH contains a line break/);
+  assert.throws(() => plistContent(evil, '/h'), /PATH contains a line break/);
+  assert.throws(() => unitContent({ ...base, mainJs: '/m\n/main.js' }, '/h'), /main\.js path contains/);
+  assert.throws(() => unitContent({ ...base, env: { MASTHEAD_DATA_DIR: '/d\r' } }, '/h'), /MASTHEAD_DATA_DIR contains/);
+  assert.throws(() => taskXml({ ...base, node: 'C:\\n\node.exe' }, 'u'), /node path contains/);
+  assert.throws(() => taskXml(base, 'PC\\a\0'), /user name contains/);
+  const f = fake();
+  await assert.rejects(serviceFor('linux', f.deps)!.install(evil), ServiceError);
+  assert.equal(f.files.size, 0, 'nothing written');
+  const w = fake(undefined, { tmpdir: 'T' });
+  await assert.rejects(serviceFor('win32', w.deps)!.install({ ...base, mainJs: 'C:\\m\n.js' }), ServiceError);
+  assert.deepEqual(w.ops, []);
+  assert.deepEqual(w.calls, []);
 });
 
 test('systemd: the port parser matches the launcher one', () => {
@@ -172,13 +247,28 @@ test('launchd: install boots out the old agent (ignoring failure) then bootstrap
   assert.ok(!f.files.has(plist));
   const bad = fake((_c, a) => (a[0] === 'bootstrap' ? { status: 5, stderr: 'Bootstrap failed: 5' } : {}), { uid: 501 });
   await assert.rejects(serviceFor('darwin', bad.deps)!.install(base), /Bootstrap failed/);
+  assert.equal(bad.files.size, 0, 'a failed bootstrap removes the plist');
+  assert.deepEqual(bad.calls.at(-1), ['launchctl', 'bootout', `gui/501/${LABEL}`]);
+});
+
+test('launchd: uninstall with nothing installed is a no-op', async () => {
+  const f = fake((_c, a) => (a[0] === 'print' ? { status: 113 } : {}), { uid: 501 });
+  assert.deepEqual(await serviceFor('darwin', f.deps)!.uninstall(), ['Nothing was installed.']);
+  assert.deepEqual(f.calls, [['launchctl', 'print', `gui/501/${LABEL}`]]);
+  assert.deepEqual(f.ops, []);
 });
 
 test('launchd: status and serves read launchctl print', async () => {
   const print = `gui/501/${LABEL} = {\n\tactive count = 1\n\tstate = running\n\tenvironment = {\n\t\tPATH => /usr/bin\n\t\tMASTHEAD_PORT => 7725\n\t}\n}\n`;
   const f = fake(() => ({ stdout: print }), { uid: 501 });
   const svc = serviceFor('darwin', f.deps)!;
-  assert.deepEqual(await svc.status(), { installed: true, running: true, port: 7725, detail: `${LABEL} running, port 7725` });
+  assert.deepEqual(await svc.status(), {
+    installed: true,
+    running: true,
+    port: 7725,
+    dataDir: '/home/a b/Library/Application Support/Masthead',
+    detail: `${LABEL} running, port 7725, data /home/a b/Library/Application Support/Masthead`,
+  });
   assert.deepEqual(f.calls[0], ['launchctl', 'print', `gui/501/${LABEL}`]);
   assert.equal(svc.serves(7725), true);
   assert.equal(svc.serves(7717), false);
@@ -238,6 +328,19 @@ test('taskscheduler: install writes the XML to a temp file, creates and runs the
   await assert.rejects(serviceFor('win32', bad.deps)!.install(base), /access denied/);
   assert.equal(bad.files.size, 0, 'temp file removed after a failure too');
   assert.ok(!bad.calls.some((c) => c[1] === '/Run'));
+  assert.deepEqual(bad.calls.at(-1), ['schtasks', '/Delete', '/TN', 'Masthead', '/F']);
+  const run = fake((_c, a) => (a[0] === '/Run' ? { status: 1, stderr: 'ERROR: cannot run' } : {}), { tmpdir: 'T' });
+  await assert.rejects(serviceFor('win32', run.deps)!.install(base), /cannot run/);
+  assert.deepEqual(run.calls.at(-1), ['schtasks', '/Delete', '/TN', 'Masthead', '/F'], 'a task that cannot run is deleted');
+  assert.equal(run.files.size, 0);
+});
+
+test('taskscheduler: uninstall with no task is a no-op; other /Delete failures still throw', async () => {
+  const missing = { status: 1, stderr: 'ERROR: The system cannot find the file specified.' };
+  const none = fake((_c, a) => (a[0] === '/End' || a[0] === '/Delete' || a[0] === '/Query' ? missing : {}));
+  assert.deepEqual(await serviceFor('win32', none.deps)!.uninstall(), ['Nothing was installed.']);
+  const denied = fake((_c, a) => (a[0] === '/Delete' ? { status: 1, stderr: 'ERROR: Access is denied.' } : {}));
+  await assert.rejects(serviceFor('win32', denied.deps)!.uninstall(), /Access is denied/);
 });
 
 test('taskscheduler: uninstall ends and deletes; status and serves read the query', async () => {

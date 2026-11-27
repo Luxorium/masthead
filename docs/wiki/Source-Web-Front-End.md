@@ -1,120 +1,191 @@
 # Web front end
 
-The page you use in the browser. It is a **Svelte 5** app in `web/`, built by Vite into `dist/web/` and served by the Masthead server. **Svelte** is a framework that compiles components (`.svelte` files holding markup, script and style together) into plain JavaScript. Svelte 5 uses **runes** to mark reactive state: `$state` (a value the page redraws when it changes), `$derived` (a value computed from others) and `$effect` (code that reruns when what it reads changes).
+The page you use in the browser. It is a **Svelte 5** app in `web/`, built by Vite into `dist/web/` and served by the Masthead server. **Svelte** compiles components (`.svelte` files holding markup, script and style together) into plain JavaScript. Svelte 5 marks reactive state with **runes**: `$state` (a value the page redraws when it changes), `$derived` (a value computed from others) and `$effect` (code that reruns when what it reads changes).
 
-The page holds no authority. Everything it shows comes from the server over one WebSocket, and everything it does is a protocol message ([Browser/server protocol](Browser-Server-Protocol.md)). This page describes version 0.1.4.
+The page holds no authority. Everything it shows comes from the server over one WebSocket, and everything it does is a protocol message ([Browser/server protocol](Browser-Server-Protocol.md)), apart from image uploads and the remote-device sign-in, which use HTTP. This page describes version 0.2.0.
 
-## Signing in
-
-The page itself holds no secret and is served to anyone who may reach the server; the socket is what needs a key. `masthead` opens `http://127.0.0.1:PORT/#key=<secret>`: the key is in the URL fragment, which the browser never sends to the server. The page also accepts `?key=<secret>` from older launchers. On load the store takes the key out of the address bar at once with `history.replaceState` (from the query and from the fragment; any other part of the fragment is kept), so it is not left in history or bookmarks. A key from the address is only a **candidate**: it replaces the key stored in `localStorage` under `masthead.key` only once a socket opened with it has been accepted. If the server refuses it and a key is already stored, the page forgets the candidate and connects with the stored key, without showing the sign-in page, so a link to `…/#key=junk` cannot sign a browser out. While the server does not answer at all, the candidate is kept. Pasting the sign-in address into an open tab changes only the fragment; the `hashchange` handler then takes the key the same way and reconnects. The socket is then opened with the subprotocols `masthead` and `key.<secret>`; the server checks the key and answers with plain `masthead`.
-
-- **No stored key:** the page does not try to connect. It shows a full-page message: "Open Masthead with the `masthead` command (or its launcher entry) to sign this browser in."
-- **Refused:** when a socket closes before it opened, the page asks `/api/health` (which needs no key) whether the server is up. Only if it answers does the close count as a refusal; after three in a row the same message appears with "Masthead did not accept this browser's key. Open it with the `masthead` command to sign in again." and a **Try again** button. While the server does not answer (a restart or update in progress), the page keeps reconnecting with the normal back-off for as long as it takes, showing the "Reconnecting…" banner. A drop after a socket did open keeps the normal reconnect. (A real restart was not re-tested in a browser for 0.1.4.)
+The 0.2.0 aim for the page (`docs/plans/0.2.0/web.md` section 0) is "simple by default": a first-time person sees a chat app with one message box, and nothing about tiers, effort or permissions until they want it. The code follows this with a Simple/Advanced switch, a team view that appears only once helpers exist, plain words in one file, and errors rewritten with a next step.
 
 ## Files
 
-| File | Role |
-|---|---|
-| `web/index.html` | The page shell (below). |
-| `web/src/main.ts` | The entry script (below). |
-| `web/src/App.svelte` | The layout and header (below). |
-| `web/src/app.css` | Global styles: colour tokens for light and dark, tier colours, status dots, buttons, Markdown styles. See [web/src/app.css](Source-Web-Styles.md). |
-| `web/src/lib/store.svelte.ts` | The single store: connection, all state, every protocol message. See [Web store](Source-Web-Store.md). |
-| `web/src/lib/Sidebar.svelte`, `Transcript.svelte`, `Composer.svelte`, `FolderPicker.svelte`, `PermissionCard.svelte`, `TeamPanel.svelte`, `TeamMap.svelte`, `SettingsMenu.svelte`, `StopControl.svelte` | The components. See [Web components](Source-Web-Components.md). |
-| `web/src/lib/markdown.ts` | Safe Markdown rendering (below). |
-| `web/src/lib/tools.ts` | Re-exports `toolLine` and the `ToolLine` type from `shared/toolline.ts` (below). |
-| `web/public/favicon.svg` | The tab icon, copied as-is into the build. |
+| File | What it is | Page |
+|---|---|---|
+| `web/index.html` | The page shell | [below](#the-page-shell-indexhtml) |
+| `web/public/favicon.svg` | The icon | [Styles](Source-Web-Styles.md#webpublicfaviconsvg) |
+| `web/src/main.ts` | Entry script | [below](#the-entry-script-maints) |
+| `web/src/App.svelte` | Layout, banners, sign-in screens | [below](#layout-appsvelte) |
+| `web/src/app.css` | Colours, palette, shared classes | [Styles](Source-Web-Styles.md#websrcappcss) |
+| `web/src/lib/store.svelte.ts` | All server state; protocol client | [Web store](Source-Web-Store.md) |
+| `web/src/lib/state/pure.ts` | Pure store helpers | [Web store](Source-Web-Store.md#pure-helpers-websrclibstatepurets) |
+| `web/src/lib/signin.ts` | Key, device token, whoami | [below](#signing-in) |
+| `web/src/lib/ui.svelte.ts` | Simple/Advanced, theme, widths, panels | [below](#simple-and-advanced-uisveltets) |
+| `web/src/lib/text.ts`, `words.ts` | Every word the page shows | [Text and words](Source-Web-Text.md) |
+| `web/src/lib/tiers.ts` | Tier colours and profiles | [Styles](Source-Web-Styles.md#tier-colours-tiersts) |
+| `web/src/lib/markdown.ts` | Safe Markdown, draft rendering | [below](#rendering-markdown-safely-markdownts) |
+| `web/src/lib/tools.ts` | Tool-line words | [below](#toolsts) |
+| `web/src/lib/images.ts`, `images/*.svelte` | Pictures | [Images](Source-Web-Images.md) |
+| `web/src/lib/*.svelte`, `transcript/`, `team/` | Components | [Web components](Source-Web-Components.md) |
+| `web/src/lib/SettingsView.svelte`, `settings/`, `remote/` | Settings view, teams, agent programs, remote access | [Settings and remote access](Source-Web-Settings-and-Remote.md) |
+| `web/vitest.config.ts`, `web/test/*` | Page tests | [Page tests](Source-Web-Tests.md) |
+
+## Signing in
+
+`web/src/lib/signin.ts` holds what the page needs to sign in, with no Svelte state, so it is tested on its own.
+
+### The key on this computer
+
+The page itself holds no secret and is served to anyone who may reach the server; the socket is what needs a key. `masthead` opens `http://127.0.0.1:PORT/#key=<secret>`. The key is in the URL fragment, which the browser never sends to the server or its logs. `?key=` from older launchers still works.
+
+- `takeKey()` reads `key` from the fragment or the query and removes it from the address bar at once with `history.replaceState`, so it is not left in history or bookmarks. The rest of the fragment is kept as written (for example `#/c/<id>`), because `URLSearchParams` would re-encode it. It returns `{ key, untried }`.
+- A key from the address is only a **candidate**. It replaces the key stored in `localStorage` under `masthead.key` only once a socket opened with it (`keepCandidate()`). `dropCandidate()` forgets a refused one. So a link to `…/#key=junk` cannot sign a browser out ([Connecting](Source-Web-Store.md#connecting)).
+- `storedKey()` reads `localStorage` again each time, because another tab may have signed in with a newer key. If storage is refused (private mode), the key still works for this page load.
+- `serverUp()` asks `/api/health`, which needs no key, to tell "refused" from "server down".
+- `idFromHash()` reads `#/c/<id>`. `hasCandidate()` and `resetSignin()` are for tests.
+
+The socket is opened with the subprotocols `masthead` and `key.<secret>`; the server checks the key and answers with plain `masthead`.
+
+### Remote devices
+
+A phone or other computer reaches Masthead only through the person's own Tailscale `serve`, over https ([Remote access](Remote-Access.md)). The local page is always plain http, so `isRemoteDevice()` is simply `location.protocol === 'https:'`.
+
+- **Device token.** A device never has the key. Once the person approves it on the computer, it gets a token, kept in `localStorage` under `masthead.device` (`deviceToken()`, `saveDeviceToken()`, `forgetDeviceToken()`). The socket uses the subprotocol `device.<token>`. Image uploads send it in the `x-masthead-device` header.
+- **`whoami()`** asks `/api/remote/whoami` with the token and returns `{state:'approved', role}`, `{state:'unknown'}` (no token, revoked or expired), `{state:'refused'}` (by policy), or `null` when it could not ask. A missing role reads as `read`.
+- **Forget this device.** `forgetDevice()` removes the token and any pairing request in progress (`sessionStorage` key `masthead.pairing`). The store's `forgetThisDevice()` also tells the server (`forget_me`) and goes back to the pairing screen. The button is in Settings > This device, shown only on a device.
+- **Roles.** `full`, `approve` or `read` (`DeviceRole`). The store turns them into `mayAct` and `mayAnswer` ([Web store](Source-Web-Store.md#connecting)). A device that may not send sees one plain line in place of the message box.
+
+The pairing screen is `remote/RemoteSignIn.svelte` ([Settings and remote access](Source-Web-Settings-and-Remote.md#remotesigninsvelte)).
 
 ## The page shell (`index.html`)
 
-`web/index.html` is 14 lines. It holds:
-
-- `<meta charset="utf-8">` and a `viewport` tag (`width=device-width, initial-scale=1`) so the page fits a narrow window.
-- `<meta name="color-scheme" content="light dark">`. This tells the browser the page supports both schemes, so built-in parts (scroll bars, form controls, the blank page before the CSS loads) follow the system setting. The colours themselves switch in `app.css` ([web/src/app.css](Source-Web-Styles.md#light-and-dark)).
-- The title "Masthead" (`App.svelte` replaces it once a conversation is open) and the favicon `/favicon.svg`.
-- An empty `<div id="app">` and one module script, `/src/main.ts`. Vite rewrites this tag to the built, hashed bundle when building.
-
-There is no inline script or inline style and no Content-Security-Policy `<meta>` tag. The policy is sent as an HTTP header by the server instead (`CSP` in `server/http.ts`; see [Security model](Security-Model.md)). It allows scripts only from the server itself, which is why the page has no inline script. It allows inline styles (`style-src 'self' 'unsafe-inline'`), which Svelte and highlight.js may need. Images may come only from the server, `data:` or `blob:`.
+`web/index.html` is the HTML Vite starts from. It sets `lang="en"`, UTF-8, a viewport with `viewport-fit=cover` (so the page can reach under a phone's rounded corners and home bar; the dock pads itself with `env(safe-area-inset-bottom)`), `color-scheme: light dark`, the title "Masthead" and the SVG icon. The body is one `<div id="app">` and the module script `/src/main.ts`.
 
 ## The entry script (`main.ts`)
 
-`web/src/main.ts` is 6 lines and exports nothing. It:
-
-1. imports `app.css`, so the global styles load once for the whole page;
-2. imports highlight.js's `github-dark.min.css`, the colours for highlighted code. A dark theme is used in both light and dark mode because code blocks always have a dark background (`--code-bg`);
-3. calls Svelte 5's `mount(App, { target: document.getElementById('app')! })`.
-
-It does not connect to the server. `App.svelte` does that in `onMount` by calling `store.connect()`.
+`web/src/main.ts` mounts `App` into `#app` with Svelte's `mount`, and imports `app.css` and highlight.js's `github-dark` theme. Code blocks stay dark in both schemes so that theme fits ([Styles](Source-Web-Styles.md#light-and-dark)).
 
 ## `tools.ts`
 
-`web/src/lib/tools.ts` is one line: `export { toolLine, type ToolLine } from '../../../shared/toolline.ts'`. It keeps no state. It exists so components import tool wording from `./tools.ts` instead of reaching into `shared/` themselves. `toolLine` is used by `Transcript.svelte` (tool lines in a chat), `TeamMap.svelte` (what each card is doing) and `PermissionCard.svelte` (the approval card). Nothing in `web/src` imports the `ToolLine` type at present. See [shared/toolline.ts](Source-Shared-Toolline.md) for what it returns.
+One line: it re-exports `toolLine` and the `ToolLine` type from `shared/toolline.ts` ([Tool lines](Source-Shared-Toolline.md)). `toolLine(name, input, running?)` turns a tool call into a verb and a target, such as "Reading" and a file path. `ToolItem`, `TeamMap` and `PermissionCard` use it.
 
 ## Layout (`App.svelte`)
 
-`App.svelte` is the root component. It keeps four pieces of local state: `showSidebar` and `showPanel` (whether each side column is shown), `renaming` (whether the title is being edited) and `titleDraft` (the text in the rename box). Everything else comes from `store` ([Web store](Source-Web-Store.md)). It also derives `path`: when the open agent is not the lead, `store.pathTo(id)` gives the chain from the lead down to it, for the breadcrumbs.
+`App.svelte` is the root. On mount it calls `store.connect()` and listens for `hashchange`: a pasted sign-in address goes to `store.keyFromAddress()`, and `#/c/<id>` of a known chat opens it. An effect sets the tab title to "<chat title> · Masthead".
 
 ### Signed-out screen
 
-If `store.signedOut` is set, `App.svelte` shows only a centred box and none of the layout below. The box has the heading "Masthead" and the line asking the person to open Masthead with the `masthead` command. When `store.signedOut` is `'refused'` it adds the note that the key was not accepted and a **Try again** button that calls `store.retryConnect()`. See [Signing in](#signing-in).
+- `signedOut` is `'device'` or `'withdrawn'`: the remote pairing screen, `RemoteSignIn`, with `withdrawn` set in the second case.
+- Any other `signedOut` (`'nokey'`, `'refused'`): a centred box with "Masthead" and `T.signIn.open`. For `'refused'` it adds `T.signIn.refused` and a Try again button (`store.retryConnect()`). Backticks in these strings are shown as `<code>` by a small `code` snippet.
 
 ### Signed-in layout
 
-```mermaid
-flowchart LR
-  subgraph Shell[".shell grid"]
-    SB["Sidebar<br/>(conversations)"]
-    subgraph Main["main"]
-      H["header: title (click to rename) · folder · Chat / Team map tabs · settings gear · panel toggle"]
-      BN["banners: Claude Code missing · reconnecting · usage limit"]
-      V{"view"}
-      V -- chat --> CR["breadcrumbs (when a sub-agent is open)"] --> T[Transcript] --> D1["dock: PermissionCards + Composer"]
-      V -- map --> TM[TeamMap] --> D2["dock: PermissionCards"]
-    end
-    TP["TeamPanel<br/>(tier limits, usage, context, agents)"]
-  end
-```
+From top to bottom, inside `div.shell`:
 
-- **Grid:** `.shell` is a CSS grid of three columns: sidebar 264 px, main area `minmax(0, 1fr)`, team panel 316 px. The classes `no-sidebar` and `no-panel` drop a column. On mount, the panel starts hidden below 1100 px of window width and the sidebar below 760 px (checked once, not on resize). Below 900 px the grid has one column and both side columns (`aside`) become fixed overlays with a shadow, the team panel on the right. Hiding the sidebar shows a ☰ button in the header; the ◧ button toggles the panel. (Layout not re-checked in a browser for 0.1.3.)
-- **`onMount`** calls `store.connect()` and listens for `hashchange`: it first passes the address to `store.keyFromAddress()` (a pasted sign-in address), then, when the hash is `#/c/<id>` for a known conversation other than the open one, it opens it, so the browser's back and forward buttons can switch conversations. The listener is removed when the component goes away.
-- **`$effect`** keeps the document title as "<conversation title> · Masthead", or "Masthead" with none open.
-- **Header**, left to right: ☰ (only when the sidebar is hidden); the title button and the working folder (`shortPath`, full path in its tooltip), or "New conversation"; the **Chat / Team map** tabs (`role="tablist"`, only with a conversation open), the map tab carrying `store.liveCount` live sub-agents as a badge; the settings gear; the panel toggle.
-- **Renaming:** clicking the title turns it into a text box (`autofocus`, at most 120 characters). Enter or leaving the box calls `finishRename(true)`, which sends `{t:'rename'}` only if the trimmed text is non-empty and different; Escape calls `finishRename(false)`. `finishRename` returns at once when `renaming` is already false, because removing the box fires a blur that would otherwise save after Escape.
-- **Settings gear:** at the top right of the header, next to the panel toggle, so it stays reachable when the sidebar is hidden. It opens `SettingsMenu.svelte` ([Web components](Source-Web-Components.md)).
-- The Composer sits in a `{#key store.composerKey}` block, so it is rebuilt for each conversation and agent and shows that pair's unsent draft.
-- **Main area by view:** in the map view (`store.view === 'map'` with a conversation open) it shows `TeamMap` and, if the open conversation has approval requests (`store.convPending`), a dock of `PermissionCard`s. Otherwise it shows the breadcrumbs, `Transcript`, and a dock with the cards above the `Composer`.
-- **Breadcrumbs:** when a sub-agent's chat is open (`path` has more than one agent), the chain from the lead down is shown with `displayName` (e.g. "Alpha / Bravo / Charlie · its title"; later rounds read "Alpha II"), each name a button that opens that agent, plus "Back to Alpha".
-- **Banners:**
-  - Claude Code was not found (`AppState.claude.error`), in red;
-  - the connection was lost ("Lost the connection to Masthead. Reconnecting…"), shown only once a `state` has been received (`!store.connected && store.app`);
-  - a usage limit is near ("You are close to your Claude usage limit.") or reached (in red), with "Resets <weekday, time>" from `resetsAt` (seconds) and a **Dismiss** button (`store.dismissLimit()`). `store.rateLimit` is derived from `store.usage`, so the banner is right straight after a page load as well as after a live notice: it is the worst usage window known (any `rejected`, else any `allowed_warning`). Dismiss hides it until that worst notice changes (its window, status or reset time).
-- A **toast** (`role="alert"`) at the bottom shows `store.error`; the store clears it after 8 seconds.
+- A skip link, "Skip to the message box", to `#message` (the composer's textarea), and a polite live region (see [Accessibility](#accessibility)).
+- `Sidebar` (the chat list), when `ui.sidebarOpen`.
+- `main`, made `inert` while a drawer is open:
+  - **Header:** ☰ (shown when the chat list is hidden or the screen is narrow), the chat title (a button; clicking it renames in place, Enter saves, Escape cancels, blur saves), or "New chat". Then, only when the chat has helpers, the **Team** button: "Team · 2 working" ("Team · 2" on a phone), which toggles the team panel.
+  - **Banners:** "Lost the connection to Masthead. Reconnecting…" while disconnected after a first state; the usage banner (`store.rateLimit`): "You've reached your Claude usage limit." or "You are close to…", the reset time, and Dismiss.
+  - **The view**, first match wins: `SettingsView` when `ui.settingsOpen`; `FirstRun` when the state says no backend can run (`!store.canRun`); `TeamMap` when `store.view === 'map'`, the chat has helpers and the screen is not narrow (with approval cards under it); otherwise the breadcrumbs (when a helper is on screen: the chain of agents and "Back to Alpha"), `Transcript`, and the dock.
+  - **Dock:** remote device requests (`DeviceRequestCard`, local page only), approval cards (`PermissionCard`, if `mayAnswer`), and the `Composer` (if `mayAct`) inside `{#key store.composerKey}`, so each chat and helper gets its own composer with its own unsent text. Without `mayAct`, a note says what the device's role allows.
+- `TeamPanel`, when the chat has helpers and `ui.teamOpen`.
+- A backdrop button while a drawer is open; tapping it closes the drawers.
+- The toast (`role="alert"`), showing `friendlyError(store.error)` ([Text](Source-Web-Text.md#friendlyerror)).
+
+The map view's dock has approval cards but no device-request cards.
+
+**When the team panel opens.** `hasTeam` is true when any agent other than the lead exists. In Simple, the panel stays closed until the person presses Team. In Advanced on a wide screen, an effect opens it when the first helper starts, unless the person has already opened or closed it (`ui.teamTouched`).
+
+## Simple and Advanced (`ui.svelte.ts`)
+
+`web/src/lib/ui.svelte.ts` holds page-only state that is not the server's business. It is kept per device in `localStorage`, because a phone and a desktop may want different things. One instance, `ui`, is exported.
+
+| Field | Meaning |
+|---|---|
+| `advanced` | "Show team controls" (Settings > General). Stored as `masthead.advanced` = `'1'`/`'0'`; Simple (off) is the default. |
+| `theme` | `'system'`, `'light'` or `'dark'`, stored as `masthead.theme`. `applyTheme()` sets `data-theme` on `<html>`, or removes it for system. |
+| `teamOpen`, `teamTouched` | Whether the team panel is open, and whether the person opened or closed it themselves (then the page leaves it alone). |
+| `narrow` | Width under 900 px (`max-width: 899px`). |
+| `wide` | Width 1280 px or more. |
+| `phone` | Width under 600 px. |
+| `sidebarOpen` | The chat list is shown; starts closed on narrow screens. |
+| `settingsOpen` | The settings view replaces the chat. |
+
+The three widths are live `matchMedia` queries, re-evaluated on change, not read once. Where `matchMedia` is missing (tests) they read false.
+
+Methods: `openSettings()` (closes the chat-list drawer on narrow screens), `closeSettings()` (focus returns to the ⚙ button, `#settings-gear`), `setAdvanced()`, `setTheme()`, `toggleTeam(open?)`.
+
+What Advanced changes, and nothing else (the plan says it is only what is on screen):
+
+- The team panel shows the levels with helpers at a time and thinking time (`TierControls`), and the memory line shows tokens.
+- The team panel opens by itself on wide screens when the first helper starts.
+- Under the message box, a line with the model, its thinking time and the "when to ask" mode.
+- Settings > General shows "Let them decide how long to think".
+
+Approval cards show in both modes.
+
+## Layout per width
+
+The grid columns come from the script, not from CSS: chat list `264px` when it is open and the screen is not narrow, the chat `minmax(0, 1fr)`, and the team panel `340px` when it is open and the screen is wide. The team panel's own `aside` is 316 px wide, so it does not fill that column (not checked in a browser).
+
+| Width | Chat list | Team panel |
+|---|---|---|
+| 1280 px and wider | Column | Column beside the chat |
+| 900–1279 px | Column | Drawer from the right |
+| Under 900 px | Drawer from the left, starts closed; choosing a chat closes it | Drawer from the right |
+| Under 600 px (phone) | As above | As above; header 56 px, shorter Team label |
+
+A drawer is the `aside` made `position: fixed` with a shadow, at most 88% of the width. While one is open, `main` is `inert`, a backdrop covers the chat, and Escape closes it (unless a `role="dialog"` element is open). The team map is not offered on narrow screens. The phone layout is exercised by the browser test at 390 × 844; the other widths were only read from the code.
+
+## Accessibility
+
+- **Skip link** (`a.skip`, `app.css`): off screen until focused, then jumps to the message box.
+- **Live region:** a polite `.sr-only` region announces "Alpha replied." when the lead stops running, and "Question from Bravo" or "Permission request from Bravo" when a new card appears in the open chat.
+- **Focus:** approval and device-request cards take focus when they appear, unless the person pressed a key in the last 1.5 s, has text in the field they are in, or is already on another card. Focus goes to the card, not to Allow, so a stray Enter answers nothing. The settings view focuses its first control and Escape closes it; the image viewer focuses itself and gives focus back to the thumbnail. `:focus-visible` draws a 2 px accent outline.
+- **Coarse pointers (touch):** `.btn` and many component controls get at least 44 px height; inputs, selects and textareas get 16 px text so iOS does not zoom. Stop buttons show their word on touch screens (there is no hover).
+- **Reduced motion:** animations and transitions are cut to 0.01 ms and smooth scrolling is turned off; the running dot does not pulse.
+- **Contrast:** `--faint` is the lightest grey that the comment says still passes WCAG AA (4.6:1 on `--bg`); palette colours are each at least 4.5:1 on the background per their comment.
+- **Labels:** icon buttons have `aria-label`s; the transcript's live controls use `aria-expanded`; usage bars are `role="progressbar"`.
+- **Checked by:** the browser test runs axe-core's WCAG 2 A/AA rules on the first load, the settings view, a chat with the team panel and the phone layout, and fails on serious or critical problems ([Page tests](Source-Web-Tests.md#browser-test-testuie2emjs)).
+
+The contrast figures come from code comments and were not measured here.
 
 ## Rendering Markdown safely (`markdown.ts`)
 
-Agents write Markdown, and their output is untrusted: it can quote web pages, files and tool results that an attacker wrote. `markdown.ts` turns it into HTML that cannot run script, restyle the page or imitate Masthead's own controls. How this fits the rest of Masthead's protections: [Safety model](Safety-Model.md). It exports two functions, `renderMarkdown` and `handleCopyClick`, and is used only by `Transcript.svelte` (assistant text, thinking, inbound tasks/reports/messages, and the live draft).
+Agents write Markdown, and their output is untrusted: it can quote web pages, files and tool results that an attacker wrote. `markdown.ts` turns it into HTML that cannot run script, restyle the page or imitate Masthead's own controls. How this fits the rest of Masthead's protections: [Safety model](Safety-Model.md). It exports `renderMarkdown`, `splitDraft`, `renderDraft` and `handleCopyClick`. `TextItem`, `ThinkingItem`, `InboundItem` and `DraftView` render with it; `Transcript` sets the copy handler.
 
 `renderMarkdown(text)` runs these steps, in this order:
 
-1. **Parse.** A private `Marked` instance parses the text with `gfm: true` (tables, strikethrough, task lists, autolinks) and `breaks: false` (a single line break is not a `<br>`). `marked.parse(text, { async: false })`.
-2. **Raw HTML becomes text.** The renderer's `html` hook receives every piece of HTML written in the Markdown, block or inline, and returns it escaped with `escapeHtml` (`&`, `<`, `>`, `"` replaced), wrapped in `<p>` when it is a block. So `<a href=… style=…>Allow</a>` or a hand-written `<div class="code-block"><button data-copy>` appears literally as text. The only markup that reaches the next step is what marked and this renderer generate. A side effect: an agent writing `<br>`, `<details>` or `<kbd>` sees the tag as text.
-3. **Code blocks.** The `code` hook takes the first word of the info string as the language. If highlight.js knows it (`hljs.getLanguage`), the code is highlighted (`hljs.highlight(text, { language }).value`, which escapes the code itself); otherwise, or if highlighting throws, the code is escaped with `escapeHtml`. The block is `<div class="code-block">` with an optional `<span class="code-lang">` (the escaped language name), a `<button class="code-copy" type="button" data-copy>Copy</button>`, and `<pre><code class="hljs">…</code></pre>`. highlight.js is the `common` build (36 common languages).
-4. **Sanitize with DOMPurify**, as a second line of defence: `DOMPurify.sanitize(html, config)` with
-   - DOMPurify's defaults (no `<script>`, no event-handler attributes such as `onclick`, no `javascript:` or other unsafe URLs in `href`/`src`), plus
-   - `FORBID_TAGS: ['style', 'form', 'input', 'iframe']` (GFM task-list checkboxes are therefore dropped),
-   - `FORBID_ATTR: ['style', 'id', 'name']` (no inline styling, no ids or names that could clash with the page's own),
-   - `ADD_ATTR: ['data-copy']` (the one extra attribute the Copy button needs).
-5. **Class filter.** A DOMPurify `uponSanitizeAttribute` hook checks every `class` attribute against `OWN_CLASS`, `^(code-block|code-lang|code-copy|hljs(-[\w-]+)?|language-[\w-]+|[\w-]+_)$`, and keeps only the matching class names: Masthead's own code-block classes, highlight.js token classes (`hljs`, `hljs-keyword`, and its trailing-underscore sub-scope classes such as `function_`) and `language-…`. If none match, the attribute is removed. Because of step 2 nothing agent-written reaches a `class` attribute anyway; the filter makes sure app classes such as `btn primary` or `toast` could not be borrowed even if that changed.
-6. **Links.** An `afterSanitizeAttributes` hook sets `target="_blank"` and `rel="noopener noreferrer"` on every `<a>`, so a link opens in a new tab, cannot reach back into Masthead through `window.opener`, and sends no referrer.
+1. **Parse.** A private `Marked` instance parses the text with `gfm: true` (tables, strikethrough, task lists, autolinks) and `breaks: false` (a single line break is not a `<br>`).
+2. **Raw HTML becomes text.** The renderer's `html` hook gets every piece of HTML written in the Markdown, block or inline, and returns it escaped (`&`, `<`, `>`, `"`), wrapped in `<p>` when it is a block. So a hand-written `<a style=…>Allow</a>` or `<div class="code-block"><button data-copy>` appears literally as text. Only markup that marked and this renderer generate reaches the next step. A side effect: `<br>`, `<details>` or `<kbd>` written by an agent show as text.
+3. **Code blocks.** The `code` hook takes the first word of the info string as the language. If highlight.js (its `common` build) knows it, the code is highlighted, which escapes it; otherwise, or if highlighting throws, the code is escaped. The block is `<div class="code-block">` with an optional `<span class="code-lang">`, a `<button class="code-copy" type="button" data-copy>Copy</button>`, and `<pre><code class="hljs">…</code></pre>`.
+4. **Sanitize with DOMPurify**, as a second line of defence: DOMPurify's defaults (no `<script>`, no event-handler attributes, no `javascript:` URLs), plus `FORBID_TAGS: ['style', 'form', 'input', 'iframe']` (so GFM task-list checkboxes are dropped), `FORBID_ATTR: ['style', 'id', 'name']`, and `ADD_ATTR: ['data-copy']`.
+5. **Class filter.** An `uponSanitizeAttribute` hook keeps only class names matching `OWN_CLASS`, `^(code-block|code-lang|code-copy|hljs(-[\w-]+)?|language-[\w-]+|[\w-]+_)$`: Masthead's code-block classes, highlight.js classes (including sub-scope classes such as `function_`) and `language-…`. If none match, the attribute is removed. Step 2 already keeps agent text out of `class`; this makes sure classes such as `btn primary` or `toast` could not be borrowed even if that changed.
+6. **Links.** An `afterSanitizeAttributes` hook sets `target="_blank"` and `rel="noopener noreferrer"` on every `<a>`.
 
-The DOMPurify hooks are added once, when the module loads, to DOMPurify's shared instance; nothing else in the page uses DOMPurify.
+The hooks are added once, when the module loads, to DOMPurify's shared instance; nothing else in the page uses DOMPurify.
 
-Other limits come from outside this file: the server's Content-Security-Policy header (`img-src 'self' data: blob:`) stops a Markdown image from loading anything from another site, so an image cannot be used as a tracking pixel ([Security model](Security-Model.md)).
+The server's Content-Security-Policy (`img-src 'self' data: blob:`) stops a Markdown image from loading anything from another site, so it cannot be a tracking pixel ([Security model](Security-Model.md)). Pictures the person sends and tool images are not Markdown; they are `<img>` elements pointing at `/blob/…` ([Images](Source-Web-Images.md)).
 
-The result is inserted with Svelte's `{@html}`. Everything else the page shows from agents or tools (the person's own messages, tool input and results, notices, permission-card text, previews on the map) is inserted as plain text, which Svelte escapes.
+The result is inserted with `{@html}`. Everything else from agents or tools (the person's own messages, tool input and results, notices, card text, map previews) is inserted as text, which Svelte escapes.
 
-**`handleCopyClick(ev)`** is one click handler, set on the transcript's column, that serves every Copy button: it finds the nearest `[data-copy]` element, copies the `textContent` of the `<code>` in the same block with `navigator.clipboard.writeText`, and shows "Copied" for 1.2 seconds. Clicks elsewhere are ignored. (Clipboard access needs a secure context; `127.0.0.1` and `localhost` count as one. Not re-checked in a browser for 0.1.3.)
+**Drafts.** `renderDraft(text)` renders a reply that grows every 70 ms. `splitDraft(text)` cuts it into finished blocks (each ending at a blank line outside a code fence, or where a fence closes) and the unfinished tail, and says whether the tail is inside an open fence. Finished blocks go through `renderMarkdown`, so each is rendered once and then comes from the cache. The tail is rendered with the same steps each time; a tail inside an unclosed fence is shown as escaped plain code with no highlighting until the fence closes. Because blocks are rendered apart, a list broken by a blank line can look split until the reply ends; the finished item is then rendered whole.
+
+**`handleCopyClick(ev)`** is one click handler, set on the transcript column, that serves every Copy button. It finds the nearest `[data-copy]`, copies the text of the `<code>` in the same block with `navigator.clipboard.writeText`, and shows "Copied" for 1.2 s. Clipboard access needs a secure context; `127.0.0.1`, `localhost` and the https remote address count as one (not checked in a browser).
+
+## Rendering speed
+
+Measures in the code that keep big chats and big teams quick:
+
+- **Markdown cache.** `renderMarkdown` keeps up to 500 results by their text, most recently used last. Transcripts are rebuilt on reload, reconnect and when a chat is opened; without the cache every text item would be parsed, highlighted and sanitised again.
+- **Incremental drafts.** `renderDraft` renders only the unfinished tail per update (above). `DraftView` renders at most once per animation frame however fast updates come. The server sends draft deltas, not the whole text ([Draft deltas](Source-Web-Store.md#draft-deltas)).
+- **Windowing.** `Transcript` renders only the newest 80 items; "Show earlier" adds 80 at a time and keeps the reading position. Each item except tool lines has `content-visibility: auto` with `contain-intrinsic-size: auto 120px`, so off-screen items skip layout and paint. Tool lines are left out because their negative margins need normal flow.
+- **Paging from the server.** The store loads 100 items at a time and asks for older pages only when the window reaches the start of what is loaded ([Paged transcripts](Source-Web-Store.md#paged-transcripts)).
+- **Clipped items.** Very long tool input or results arrive cut to 16 KiB and are fetched whole only when opened ([Clipped items](Source-Web-Store.md#clipped-items)).
+- **One chat at a time.** In version 2 the page subscribes only to the open chat, so other chats' drafts and items do not reach it.
+- **Images** load lazily, decode asynchronously and carry their width and height, so the layout does not jump.
+
+`web/test/draft.test.ts` checks that a draft update costs far less than a full re-render; `transcript.test.ts` checks the windowing. Nothing here was timed in a browser.
 
 ## Related pages
 
-[Web store](Source-Web-Store.md) · [Web components](Source-Web-Components.md) · [Styles and web build files](Source-Web-Styles.md) · [Browser/server protocol](Browser-Server-Protocol.md) · [Security model](Security-Model.md) · [Safety model](Safety-Model.md) · [Build configuration](Source-Build-Config.md)
+[Web store](Source-Web-Store.md) · [Web components](Source-Web-Components.md) · [Text and words](Source-Web-Text.md) · [Images](Source-Web-Images.md) · [Settings and remote access](Source-Web-Settings-and-Remote.md) · [Styles and web build files](Source-Web-Styles.md) · [Page tests](Source-Web-Tests.md) · [Browser/server protocol](Browser-Server-Protocol.md) · [Security model](Security-Model.md) · [Safety model](Safety-Model.md) · [Build configuration](Source-Build-Config.md)

@@ -136,6 +136,8 @@ test('characterisation: protocol v1 state, conversation and items messages keep 
   assert.deepEqual(Object.keys((state as Extract<ServerMsg, { t: 'state' }>).state).sort(), ['claude', 'conversations', 'home', 'pending', 'settings', 'usage', 'version']);
   assert.deepEqual(shape((state as Extract<ServerMsg, { t: 'state' }>).state.conversations[0]), {
     busy: 'boolean', createdAt: 'number', cwd: 'string', id: 'string', leadId: 'string', title: 'string', updatedAt: 'number',
+    // Added on purpose in 0.2.0: each conversation's copy of its team's tiers (bravo's data-safety review).
+    team: [{ backend: 'string', colour: 'string', effort: 'string', id: 'string', label: 'string', lean: 'boolean', max: 'number', model: 'string' }],
   });
   const opened = send({ t: 'open', convId: 'conv-a' });
   assert.deepEqual(opened.map((m) => m.t), ['conversation']);

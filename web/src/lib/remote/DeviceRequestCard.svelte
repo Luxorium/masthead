@@ -5,6 +5,7 @@
 </script>
 
 <script lang="ts">
+  import { T } from '../text.ts';
   // A device on the tailnet asks to use Masthead: the person compares the code and decides.
   import { onMount } from 'svelte';
   import { store } from '../store.svelte.ts';
@@ -33,7 +34,7 @@
   <h3>{RT.request.heading(request.nodeName)}</h3>
   <p class="muted small">{RT.request.from(request.os, request.user?.login, request.address)}</p>
   <p id="dr-{request.id}">{RT.request.codeLead}</p>
-  <p class="code mono" aria-label="Code {request.code.split('').join(' ')}">{spacedCode(request.code)}</p>
+  <p class="code mono" aria-label={T.images.code(request.code)}>{spacedCode(request.code)}</p>
   <p class="warn">{RT.request.warning}</p>
   <label class="role">
     <span>{RT.request.role}</span>

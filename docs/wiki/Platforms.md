@@ -12,7 +12,7 @@ Most of these functions take the platform, environment or file checks as argumen
 | Data folder (conversations, secret) | `~/.local/share/masthead` | same folder as settings | `%LOCALAPPDATA%\Masthead` |
 | Sign-in file folder | `$XDG_RUNTIME_DIR/masthead`, else `<data>/open` | `$TMPDIR/masthead`, else `<data>/open` | `<data>\open` |
 | Opens the browser with | `xdg-open`, else `gio open` | `open` | `explorer.exe` |
-| Secret kept private by | file mode 0600 | file mode 0600 | `icacls` (owner only) |
+| Secret kept private by | file mode 0600 | file mode 0600 | `icacls` by the user's SID, checked |
 | Background service | systemd user unit | launchd agent | Task Scheduler logon task |
 | Keep-awake | `systemd-inhibit` | `caffeinate` | PowerShell + `SetThreadExecutionState` |
 | Stop signals handled | SIGINT, SIGTERM, SIGHUP | SIGINT, SIGTERM, SIGHUP | the same plus SIGBREAK (SIGTERM never arrives) |
@@ -71,7 +71,8 @@ On Windows, environment names are matched without regard to case, `PATH` is spli
 
 `makePrivate()` in `server/transport/auth.ts`:
 - **Linux and macOS**: if the file's mode lets the group or others in (`mode & 0o077`), it is set to 0600.
-- **Windows**: modes mean nothing on NTFS. It runs `icacls <file> /inheritance:r /grant:r <DOMAIN\user>:F`: inherited entries are removed and only the current user (`USERDOMAIN\USERNAME`) gets full access. If `USERNAME` is not set, nothing is run.
+- **Windows**: modes mean nothing on NTFS. The current user's SID is read with `whoami /user` (a SID cannot be faked through environment variables). The data folder is made private first (`makeDirPrivate`: `icacls <dir> /inheritance:r /grant:r *<SID>:(OI)(CI)F`), so a file created inside it is private from the moment it exists; the file then gets `*<SID>:F` as well. Every `icacls` result is checked: if it fails, `loadSecret()` throws and Masthead does not start. `isPrivate()` reads the ACL back (`icacls <file>`: exactly one entry, not inherited, no group such as Everyone or Users); `masthead doctor` uses it.
+- On every platform a secret that others could read is **replaced**, not tightened: it may already have been read. The sign-in file's folder is made private the same way before the file is written (`writeSignInFile`).
 
 `loadSecret()` creates the secret once, atomically, with a hard link. File systems without hard links (FAT, exFAT, some network and synced folders: codes `EPERM`, `ENOTSUP`, `EXDEV`, `EINVAL`, `ENOSYS`) fall back to an exclusive create (`flag: 'wx'`). Details: [Transport auth](Source-Transport-Auth.md).
 

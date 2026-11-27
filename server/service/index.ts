@@ -1,6 +1,6 @@
 // The background service for this platform: `serviceFor(process.platform)`.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { launchdService } from './launchd.js';
 import { systemdService } from './systemd.js';
@@ -21,6 +21,7 @@ export function systemDeps(): Deps {
       writeFile: (p, data) => writeFileSync(p, data),
       mkdir: (p) => void mkdirSync(p, { recursive: true }),
       rm: (p) => rmSync(p, { force: true }),
+      exists: (p) => existsSync(p),
     },
     home: homedir(),
     env: process.env,

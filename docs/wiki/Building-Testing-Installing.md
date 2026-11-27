@@ -50,7 +50,7 @@ masthead --version
 | `npm run build` | `build:server`, then `build:web` | Full build into `dist/`. |
 | `npm run build:server` | `tsc -p tsconfig.server.json` | Compiles `server/` and `shared/` into `dist/server/` and `dist/shared/`. |
 | `npm run build:web` | `vite build` | Bundles the page from `web/` into `dist/web/`. |
-| `npm run dev:web` | `vite` | The page with hot reload on `MASTHEAD_DEV_WEB_PORT` (default 7718), forwarding `/ws` and `/api` to `127.0.0.1:<MASTHEAD_PORT>` (default 7717). Stops if the port is taken or a port value is invalid. |
+| `npm run dev:web` | `vite` | The page with hot reload on `MASTHEAD_DEV_WEB_PORT` (default 7718), forwarding `/ws`, `/api` and `/blob` (pictures) to `127.0.0.1:<MASTHEAD_PORT>` (default 7717). Stops if the port is taken or a port value is invalid. |
 | `npm run check` | `tsc … --noEmit` and `svelte-check` | Type-checks the server and the page without writing files. |
 | `npm test` | `node --import tsx --test test/*.test.ts` | Server unit tests. No Claude Code needed. |
 | `npm run test:web` | `vitest run --config web/vitest.config.ts` | Page tests in happy-dom (some in jsdom). No browser needed. |

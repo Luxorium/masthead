@@ -1,4 +1,4 @@
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { appendFileSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { AgentInfo, ConversationMeta, Item } from '../../shared/protocol.js';
 import { CONVERSATIONS_DIR } from '../paths.js';
@@ -106,14 +106,45 @@ export class Store {
     writeFileAtomic(file, JSON.stringify({ ...conv, format: FORMAT }));
   }
 
+  /** Transcript files already checked to end with a newline in this run. */
+  private lineEnded = new Set<string>();
+
   appendItem(convId: string, agentId: string, item: Item): void {
     const file = this.itemsFile(convId, agentId);
+    // After a crash mid-line the file ends without a newline; without one, this item would join the
+    // torn line and be lost with it. Checked once per file per run.
+    let lead = '';
+    if (!this.lineEnded.has(file)) {
+      lead = endsWithoutNewline(file) ? '\n' : '';
+      this.lineEnded.add(file);
+    }
     try {
-      appendFileSync(file, JSON.stringify(item) + '\n', { mode: 0o600 });
+      appendFileSync(file, lead + JSON.stringify(item) + '\n', { mode: 0o600 });
     } catch {
       mkdirSync(join(this.dir(convId), 'items'), { recursive: true, mode: 0o700 });
-      appendFileSync(file, JSON.stringify(item) + '\n', { mode: 0o600 });
+      appendFileSync(file, lead + JSON.stringify(item) + '\n', { mode: 0o600 });
     }
+  }
+
+  /** Whether a transcript of the conversation has a line that does not parse (a torn write). */
+  hasTornLine(convId: string): boolean {
+    let names: string[] = [];
+    try {
+      names = readdirSync(join(this.dir(convId), 'items')).filter((n) => n.endsWith('.jsonl'));
+    } catch {
+      return false;
+    }
+    for (const n of names) {
+      for (const line of readFileSync(join(this.dir(convId), 'items', n), 'utf8').split('\n')) {
+        if (!line) continue;
+        try {
+          JSON.parse(line);
+        } catch {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   loadItems(convId: string, agentId: string): Item[] {
@@ -151,8 +182,20 @@ export class Store {
     return refs;
   }
 
-  /** Removes the conversation's images that no item refers to. */
+  private tornLogged = new Set<string>();
+
+  /**
+   * Removes the conversation's images that no item refers to. A transcript with a torn line may have
+   * lost a reference: then nothing is removed (logged once).
+   */
   collectBlobs(convId: string): number {
+    if (this.hasTornLine(convId)) {
+      if (!this.tornLogged.has(convId)) {
+        this.tornLogged.add(convId);
+        console.error(`Masthead: conversation ${convId} has a damaged transcript line; its images are all kept.`);
+      }
+      return 0;
+    }
     return this.blobs.collect(convId, this.referencedBlobs(convId));
   }
 
@@ -160,5 +203,24 @@ export class Store {
   deleteConversation(convId: string): void {
     // Retries cover Windows, where a file still open elsewhere makes the removal fail for a moment.
     rmSync(this.dir(convId), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
+/** True when the file exists, is not empty and its last byte is not a newline. */
+function endsWithoutNewline(file: string): boolean {
+  let fd: number;
+  try {
+    fd = openSync(file, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    if (size === 0) return false;
+    const b = Buffer.alloc(1);
+    readSync(fd, b, 0, 1, size - 1);
+    return b[0] !== 0x0a;
+  } finally {
+    closeSync(fd);
   }
 }

@@ -45,6 +45,7 @@ export interface RemoteState {
   requests: Array<{ id: string; nodeName: string; os: string; user?: { login: string; name: string }; address: string; code: string; createdAt: number }>;
 }
 
+const NEWER_DEVICES = 'The list of allowed devices was saved by a newer version of Masthead. Remote access stays off here so that list is not changed; use the newer version.';
 const DEFAULTS: RemoteConfig = { version: 1, enabled: false, port: DEFAULT_REMOTE_PORT, allowOtherTailnets: false, allowTagged: false };
 
 /** The fix for "only root or the operator may change serve config". */
@@ -84,6 +85,7 @@ export class RemoteAccess {
       },
     });
     this.provider = new CachedWhois(opts.tailscale, { now: opts.now });
+    if (this.registry.newerFile) this.config.enabled = false;
   }
 
   private provider: TailscaleProvider;
@@ -164,6 +166,7 @@ export class RemoteAccess {
   }
 
   private problemFor(kind: RemoteState['serve']): { text: string; command?: string } | null {
+    if (this.registry.newerFile) return { text: NEWER_DEVICES };
     if (!this.tailnet?.https) return { text: 'HTTPS certificates are switched off for this tailnet; turn on HTTPS in the Tailscale admin console.' };
     if (kind === 'funnel') return { text: `Port ${this.config.port} is published to the internet with Tailscale Funnel. Masthead will not serve there; turn Funnel off or choose another port.` };
     if (kind === 'elsewhere') return { text: `Port ${this.config.port} on Tailscale already serves something else. Choose another port.` };
@@ -173,6 +176,11 @@ export class RemoteAccess {
 
   /** The switch. Adds or removes only Masthead's own serve entry; refusals come back as a problem. */
   async setEnabled(on: boolean): Promise<{ ok: boolean; problem?: string; command?: string }> {
+    if (on && this.registry.newerFile) {
+      this.problem = { text: NEWER_DEVICES };
+      this.changed();
+      return { ok: false, problem: NEWER_DEVICES };
+    }
     await this.refresh();
     if (!this.tailnet?.running) {
       // Off must always work: the listener closes now, and the leftover entry goes at the next start

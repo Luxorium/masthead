@@ -79,6 +79,7 @@
           <span class="swatch" aria-hidden="true"></span>
           <span class="title">{ST.level.title(i + 1, t.label || t.model || '…')}</span>
         </div>
+        {#if t.unusable}<p class="unusable" role="note">{t.unusable}</p>{/if}
         <div class="grid">
           {#if i === 0}
             <label class="field" for={fid(i, 'program')}>
@@ -186,6 +187,11 @@
     border-radius: 50%;
     background: var(--tier);
     flex: none;
+  }
+  .unusable {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: var(--warn);
   }
   .grid {
     display: grid;

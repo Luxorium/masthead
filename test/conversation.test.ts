@@ -1027,3 +1027,34 @@ test('sleep notice: a working conversation\'s lead is told when and how long the
   conv.wokeFromSleep(new Date(2026, 10, 27, 0, 42).getTime(), new Date(2026, 10, 27, 7, 34).getTime());
   assert.deepEqual(notices(items, 'alpha', /asleep/).map((x) => (x.item as { text: string }).text), ['This computer was asleep from 00:42 to 07:34; work carried on afterwards.']);
 });
+
+test('data safety: a chat keeps working on its copy of a team that was deleted', async () => {
+  const { conv, host, settings } = setup();
+  const { deleteProfile, tierLimit } = await import('../server/settings/settings.ts');
+  Object.assign(settings, sanitizeSettings({ profiles: [...settings.profiles, { id: 'duo', label: 'Duo', tiers: [{ model: 'claude-opus-5-5' }, { model: 'claude-haiku-5-5', max: 2 }] }] }, settings));
+  host.scheduler = new Scheduler((t) => tierLimit(settings, t));
+  const chat = Conversation.create(host, '/tmp', 'duo');
+  assert.deepEqual(chat.meta.team!.map((t) => t.id), ['duo:0', 'duo:1']);
+  Object.assign(settings, deleteProfile(settings, 'duo'));
+  chat.settingsChanged();
+  assert.deepEqual(chat.meta.team!.map((t) => t.id), ['duo:0', 'duo:1'], 'the copy stays once the team is gone');
+  assert.match(chat.spawn(chat.lead, 'A', 'task', undefined), /^Started Haiku 5\.5 agent "bravo"/, 'it can still start helpers from its copy');
+  assert.equal(tierLimit(settings, 'duo:1'), 2);
+  void conv;
+});
+
+test('data safety: older 0.2.0 data whose team is gone, with no copy, falls back to the Claude team with a notice', async () => {
+  const { host, items, settings } = setup();
+  const { tierLimit } = await import('../server/settings/settings.ts');
+  host.scheduler = new Scheduler((t) => tierLimit(settings, t)); // as the app does
+  const stored = {
+    meta: { id: 'c-old', title: 'x', cwd: '/tmp', createdAt: 1, updatedAt: 1, leadId: 'l', profileId: 'gone' },
+    agents: [{ info: { id: 'l', convId: 'c-old', name: 'alpha', tier: 'gone:0', parentId: null, title: '', task: '', status: 'idle', model: 'm', effort: 'low', createdAt: 1, usage: { context: 0, contextMax: 1, output: 0, costUsd: 0, turns: 0 } }, sessionId: null, owesReport: false }],
+  };
+  const chat = Conversation.restore(host, stored as never);
+  await tick();
+  assert.deepEqual(chat.meta.team!.map((t) => t.id), ['gone:0', 'gone:1', 'gone:2', 'gone:3']);
+  assert.equal(chat.meta.team![1]!.model, 'claude-opus-5-5');
+  assert.equal(notices(items, 'alpha', /team "gone" no longer exists, so this chat now runs on the built-in Claude team/).length, 1);
+  assert.match(chat.spawn(chat.lead, 'A', 'task', undefined), /^Started Opus 5\.5 agent "bravo"/);
+});

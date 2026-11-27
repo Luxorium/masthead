@@ -16,7 +16,7 @@
 import { join } from 'node:path/win32';
 import { tmpdir } from 'node:os';
 import { DEFAULT_PORT } from '../paths.js';
-import { NODE_FLAGS, must, portOf, xmlEscape } from './common.js';
+import { NODE_FLAGS, checkValue, must, portOf, xmlEscape } from './common.js';
 import type { Deps, InstallOptions, ServiceManager, ServiceStatus } from './types.js';
 
 export const TASK = 'Masthead';
@@ -55,6 +55,9 @@ export function taskUser(env: Record<string, string | undefined>): string {
 }
 
 export function taskXml(o: InstallOptions, user: string): string {
+  checkValue('node path', o.node);
+  checkValue('main.js path', o.mainJs);
+  checkValue('user name', user);
   const { command, args } = taskAction(o);
   const u = xmlEscape(user);
   return `<?xml version="1.0" encoding="UTF-16"?>
@@ -124,16 +127,21 @@ export function taskSchedulerService(deps: Deps): ServiceManager {
   return {
     kind: 'taskscheduler',
     async install(o) {
+      const xml = utf16le(taskXml(o, taskUser(deps.env)));
       const file = join(deps.tmpdir ?? tmpdir(), `masthead-task-${process.pid}.xml`);
-      deps.fs.writeFile(file, utf16le(taskXml(o, taskUser(deps.env))));
+      deps.fs.writeFile(file, xml);
       // /Create /F replaces the definition but leaves a running copy on the old one; ends harmlessly when none runs.
       deps.run('schtasks', ['/End', '/TN', TASK]);
       try {
         must(deps.run, 'schtasks', ['/Create', '/TN', TASK, '/XML', file, '/F']);
+        must(deps.run, 'schtasks', ['/Run', '/TN', TASK]);
+      } catch (e) {
+        // Leave nothing half-installed.
+        deps.run('schtasks', ['/Delete', '/TN', TASK, '/F']);
+        throw e;
       } finally {
         deps.fs.rm(file);
       }
-      must(deps.run, 'schtasks', ['/Run', '/TN', TASK]);
       const lines = [`Created the scheduled task "${TASK}" (runs at logon, no admin rights).`, 'Masthead is running and will start when you log in.'];
       // An explicit MASTHEAD_CLAUDE, MASTHEAD_*_DIR or XDG_* in this shell would be lost; claudePath alone is not, PATH finds claude.
       const lost = ['MASTHEAD_CLAUDE', 'MASTHEAD_DATA_DIR', 'MASTHEAD_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'].filter((k) => o.env[k]);
@@ -142,8 +150,13 @@ export function taskSchedulerService(deps: Deps): ServiceManager {
     },
     async uninstall() {
       deps.run('schtasks', ['/End', '/TN', TASK]);
-      must(deps.run, 'schtasks', ['/Delete', '/TN', TASK, '/F']);
-      return [`Stopped and deleted the scheduled task "${TASK}".`];
+      const del = deps.run('schtasks', ['/Delete', '/TN', TASK, '/F']);
+      if (del.status === 0) return [`Stopped and deleted the scheduled task "${TASK}".`];
+      // The task does not exist (any display language: the query fails too), so there is nothing to undo.
+      const q = del.status === null ? del : query();
+      if (q.status !== 0 && q.status !== null) return ['Nothing was installed.'];
+      must(() => del, 'schtasks', ['/Delete', '/TN', TASK, '/F']);
+      return [];
     },
     async status(): Promise<ServiceStatus> {
       const r = query();

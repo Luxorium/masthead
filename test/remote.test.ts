@@ -381,3 +381,30 @@ test('tailscale: a failed whois is not cached', async () => {
   await cached.whois('100.64.0.2');
   assert.equal(calls, 2, 'the answer is cached');
 });
+
+test('remote: an unreadable devices file is kept aside before it is written over; a newer one is never written', async () => {
+  const { readdirSync } = await import('node:fs');
+  const dir = join(mkdtempSync(join(tmpdir(), 'masthead-remote-')), 'remote');
+  const { mkdirSync: mk } = await import('node:fs');
+  mk(dir, { recursive: true });
+  writeFileSync(join(dir, 'devices.json'), '{"version":1,"devices":[{"nodeId":"nOLD"');
+  const reg = new DeviceRegistry({ dir, now: () => 42 });
+  const kept = readdirSync(dir).filter((n) => n.startsWith('devices.json.unreadable-'));
+  assert.deepEqual(kept, ['devices.json.unreadable-42']);
+  assert.match(readFileSync(join(dir, kept[0]!), 'utf8'), /nOLD/);
+  const r = reg.request(phone, '100.64.0.2');
+  assert.ok(!('refused' in r));
+  reg.allow(r.request.id); // writes a fresh file; the old one stays in the copy
+  assert.match(readFileSync(join(dir, kept[0]!), 'utf8'), /nOLD/);
+
+  const dir2 = join(mkdtempSync(join(tmpdir(), 'masthead-remote-')), 'remote');
+  mk(dir2, { recursive: true });
+  const newer = JSON.stringify({ version: 2, devices: [{ nodeId: 'nNEW' }] });
+  writeFileSync(join(dir2, 'devices.json'), newer);
+  const reg2 = new DeviceRegistry({ dir: dir2 });
+  assert.equal(reg2.newerFile, true);
+  const r2 = reg2.request(phone, '100.64.0.2');
+  assert.ok(!('refused' in r2));
+  assert.throws(() => reg2.allow(r2.request.id), /newer Masthead/);
+  assert.equal(readFileSync(join(dir2, 'devices.json'), 'utf8'), newer, 'untouched');
+});

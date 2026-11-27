@@ -90,23 +90,76 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 
 | File | Explained on | Also see |
 |---|---|---|
-| `web/index.html` | [Web front end: the page shell](Source-Web-Front-End.md#the-page-shell-indexhtml) |
-| `web/public/favicon.svg` | [Web styles](Source-Web-Styles.md#webpublicfaviconsvg) |
-| `web/src/App.svelte` | [Web front end: layout](Source-Web-Front-End.md#layout-appsvelte); grid in [Web styles](Source-Web-Styles.md#layout-regions-websrcappsvelte) |
-| `web/src/app.css` | [Web styles](Source-Web-Styles.md#websrcappcss) |
-| `web/src/lib/Composer.svelte` | [Web components](Source-Web-Components.md#composersvelte) |
-| `web/src/lib/FolderPicker.svelte` | [Web components](Source-Web-Components.md#folderpickersvelte) |
-| `web/src/lib/PermissionCard.svelte` | [Web components](Source-Web-Components.md#permissioncardsvelte) |
-| `web/src/lib/SettingsMenu.svelte` | [Web components](Source-Web-Components.md#settingsmenusvelte) |
-| `web/src/lib/Sidebar.svelte` | [Web components](Source-Web-Components.md#sidebarsvelte) |
-| `web/src/lib/StopControl.svelte` | [Web components](Source-Web-Components.md#stopcontrolsvelte) |
-| `web/src/lib/TeamMap.svelte` | [Web components](Source-Web-Components.md#teammapsvelte) |
-| `web/src/lib/TeamPanel.svelte` | [Web components](Source-Web-Components.md#teampanelsvelte) |
-| `web/src/lib/Transcript.svelte` | [Web components](Source-Web-Components.md#transcriptsvelte) |
-| `web/src/lib/markdown.ts` | [Web front end: rendering Markdown safely](Source-Web-Front-End.md#rendering-markdown-safely-markdownts) |
-| `web/src/lib/store.svelte.ts` | [Web store](Source-Web-Store.md) |
-| `web/src/lib/tools.ts` | [Web front end: tools.ts](Source-Web-Front-End.md#toolsts) |
-| `web/src/main.ts` | [Web front end: the entry script](Source-Web-Front-End.md#the-entry-script-maints) |
+| `web/index.html` | [Web Front End](Source-Web-Front-End.md#the-page-shell-indexhtml) |  |
+| `web/public/favicon.svg` | [Web Styles](Source-Web-Styles.md#webpublicfaviconsvg) |  |
+| `web/src/App.svelte` | [Web Front End](Source-Web-Front-End.md#layout-appsvelte) |  |
+| `web/src/app.css` | [Web Styles](Source-Web-Styles.md#websrcappcss) |  |
+| `web/src/lib/Composer.svelte` | [Web Components](Source-Web-Components.md#composersvelte) |  |
+| `web/src/lib/FirstRun.svelte` | [Web Components](Source-Web-Components.md#firstrunsvelte) |  |
+| `web/src/lib/FolderPicker.svelte` | [Web Components](Source-Web-Components.md#folderpickersvelte) |  |
+| `web/src/lib/PermissionCard.svelte` | [Web Components](Source-Web-Components.md#permissioncardsvelte) |  |
+| `web/src/lib/SettingsMenu.svelte` | [Web Components](Source-Web-Components.md#settingsmenusvelte) |  |
+| `web/src/lib/SettingsView.svelte` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#settingsviewsvelte) |  |
+| `web/src/lib/Sidebar.svelte` | [Web Components](Source-Web-Components.md#sidebarsvelte) |  |
+| `web/src/lib/StopControl.svelte` | [Web Components](Source-Web-Components.md#stopcontrolsvelte) |  |
+| `web/src/lib/TeamMap.svelte` | [Web Components](Source-Web-Components.md#teammapsvelte) |  |
+| `web/src/lib/TeamPanel.svelte` | [Web Components](Source-Web-Components.md#teampanelsvelte) |  |
+| `web/src/lib/Transcript.svelte` | [Web Components](Source-Web-Components.md#transcriptsvelte) |  |
+| `web/src/lib/UsageMeter.svelte` | [Web Components](Source-Web-Components.md#usagemetersvelte) |  |
+| `web/src/lib/images.ts` | [Web Images](Source-Web-Images.md#imagests) |  |
+| `web/src/lib/images/ImageViewer.svelte` | [Web Images](Source-Web-Images.md#imageviewersvelte) |  |
+| `web/src/lib/images/Thumbs.svelte` | [Web Images](Source-Web-Images.md#thumbssvelte) |  |
+| `web/src/lib/markdown.ts` | [Web Front End](Source-Web-Front-End.md#rendering-markdown-safely-markdownts) |  |
+| `web/src/lib/remote/DeviceRequestCard.svelte` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#devicerequestcardsvelte) |  |
+| `web/src/lib/remote/RemoteSection.svelte` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#remotesectionsvelte) |  |
+| `web/src/lib/remote/RemoteSignIn.svelte` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#remotesigninsvelte) |  |
+| `web/src/lib/remote/text.ts` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#remotetextts) |  |
+| `web/src/lib/remote/types.ts` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#remotetypests) |  |
+| `web/src/lib/settings/BackendsSection.svelte` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#backendssectionsvelte) |  |
+| `web/src/lib/settings/ProfileChip.svelte` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#profilechipsvelte) |  |
+| `web/src/lib/settings/ProfilesSection.svelte` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#profilessectionsvelte) |  |
+| `web/src/lib/settings/TeamEditor.svelte` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#teameditorsvelte) |  |
+| `web/src/lib/settings/logic.ts` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#settingslogicts) |  |
+| `web/src/lib/settings/text.ts` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#settingstextts) |  |
+| `web/src/lib/settings/types.ts` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#settingstypests) |  |
+| `web/src/lib/signin.ts` | [Web Front End](Source-Web-Front-End.md#signing-in) |  |
+| `web/src/lib/state/pure.ts` | [Web Store](Source-Web-Store.md#pure-helpers-websrclibstatepurets) |  |
+| `web/src/lib/store.svelte.ts` | [Web Store](Source-Web-Store.md#web-store-websrclibstoresveltets) |  |
+| `web/src/lib/team/TierControls.svelte` | [Web Components](Source-Web-Components.md#tiercontrolssvelte) |  |
+| `web/src/lib/text.ts` | [Web Text](Source-Web-Text.md#textts) |  |
+| `web/src/lib/tiers.ts` | [Web Styles](Source-Web-Styles.md#tier-colours-tiersts) |  |
+| `web/src/lib/tools.ts` | [Web Front End](Source-Web-Front-End.md#toolsts) |  |
+| `web/src/lib/transcript/DraftView.svelte` | [Web Components](Source-Web-Components.md#transcript-items) |  |
+| `web/src/lib/transcript/InboundItem.svelte` | [Web Components](Source-Web-Components.md#transcript-items) |  |
+| `web/src/lib/transcript/NoticeItem.svelte` | [Web Components](Source-Web-Components.md#transcript-items) |  |
+| `web/src/lib/transcript/StatusLine.svelte` | [Web Components](Source-Web-Components.md#transcript-items) |  |
+| `web/src/lib/transcript/TextItem.svelte` | [Web Components](Source-Web-Components.md#transcript-items) |  |
+| `web/src/lib/transcript/ThinkingItem.svelte` | [Web Components](Source-Web-Components.md#transcript-items) |  |
+| `web/src/lib/transcript/ToolItem.svelte` | [Web Components](Source-Web-Components.md#transcript-items) |  |
+| `web/src/lib/transcript/UserItem.svelte` | [Web Components](Source-Web-Components.md#transcript-items) |  |
+| `web/src/lib/ui.svelte.ts` | [Web Front End](Source-Web-Front-End.md#simple-and-advanced-uisveltets) |  |
+| `web/src/lib/words.ts` | [Web Text](Source-Web-Text.md#wordsts) |  |
+| `web/src/main.ts` | [Web Front End](Source-Web-Front-End.md#the-entry-script-maints) |  |
+| `web/test/device.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/no-inline-text.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/draft.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/markdown.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/permission-card.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/pure.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/remote-section.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/remote-signin.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/settings-components.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/settings-fixtures.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/settings-logic.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/setup.ts` | [Web Tests](Source-Web-Tests.md#vitestconfigts-and-setupts) |  |
+| `web/test/signin.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/store-v2.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/store.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/text.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/tiers.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/transcript.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/words.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/vitest.config.ts` | [Web Tests](Source-Web-Tests.md#vitestconfigts-and-setupts) |  |
 
 ## Build, install, packaging and CI
 
@@ -135,6 +188,7 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 
 | File | Explained on | Also see |
 |---|---|---|
+| `test/ui.e2e.mjs` | [Web tests](Source-Web-Tests.md) | [Tests](Source-Tests.md) |
 | `test/agent.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 | `test/app.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 | `test/awake-app.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
@@ -167,7 +221,6 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `test/settings.test.ts` | [Tests](Source-Tests.md) | [Source-Settings](Source-Settings.md) |
 | `test/storage-wiring.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 | `test/storage.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
-| `test/ui.e2e.mjs` | [Browser test (`test/ui.e2e.mjs`)](Source-Tests.md#browser-test-testuie2emjs) | [Source-Tests](Source-Tests.md) |
 | `test/unit.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 
 ## Related pages

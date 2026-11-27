@@ -49,6 +49,15 @@ In **Settings → Remote access**, under **Allowed devices**:
 
 **Show recent activity** lists who asked, who was allowed or removed, and who connected.
 
+## On the phone itself
+
+In the phone's Settings, **This device** says: "This browser stays signed in to Masthead until you
+forget it here, or the computer removes it." If the device may only follow along, it says so (for
+example "This device can follow the chats but not change anything.").
+
+**Forget this device** signs this browser out and removes it from the computer's list. Use it on a
+phone or computer that is not yours.
+
 ## Turn it off
 
 Turn off **Allow my other devices to connect**. Masthead removes only its own entry from Tailscale;

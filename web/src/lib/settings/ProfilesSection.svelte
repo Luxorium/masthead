@@ -32,13 +32,26 @@
     editing = copy.id;
   }
 
+
+  function sendDelete(p: TeamProfile, force: boolean): void {
+    store.request({ t: 'delete_profile', id: p.id, ...(force ? { force: true } : {}) });
+  }
+
   function remove(p: TeamProfile): void {
     if (p.builtIn || !confirm(ST.teams.removeConfirm(p.label))) return;
-    store.updateSettings((s) => {
-      s.profiles = s.profiles.filter((x) => x.id !== p.id);
-      if (s.defaultProfile === p.id) s.defaultProfile = CLAUDE_PROFILE;
-    });
+    sendDelete(p, false);
   }
+
+  $effect(() =>
+    // The server refuses to delete a team that chats use and says how many; asked again, it goes ahead
+    // and those chats keep running on their stored copy of the team.
+    store.listen('error', (m) => {
+      const inUse = m.inUse as { id?: unknown; chats?: unknown } | undefined;
+      if (!inUse || typeof inUse.id !== 'string') return;
+      const p = profiles.find((x) => x.id === inUse.id);
+      if (p && confirm(ST.teams.inUseConfirm(p.label, Number(inUse.chats) || 0))) sendDelete(p, true);
+    }),
+  );
 
   function reset(p: TeamProfile): void {
     if (store.request({ t: 'reset_profile', id: p.id })) editing = null;
@@ -102,7 +115,7 @@
         {:else}
           <ol class="mini">
             {#each p.tiers as t, i (t.id)}
-              <li class="pal-{t.colour}"><span class="dot" aria-hidden="true"></span>{ST.level.title(i + 1, t.label || t.model)}</li>
+              <li class="pal-{t.colour}"><span class="dot" aria-hidden="true"></span>{ST.level.title(i + 1, t.label || t.model)}{#if t.unusable}<span class="warn tier-note"> — {t.unusable}</span>{/if}</li>
             {/each}
           </ol>
           <div class="actions">

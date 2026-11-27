@@ -9,7 +9,7 @@ export interface InstallOptions {
   mainJs: string;
   /** The port to serve on; omitted or 7717 means the default. */
   port?: number;
-  /** The environment to take PATH and XDG_* from (normally process.env). */
+  /** The environment to take PATH, XDG_* and MASTHEAD_*_DIR from (normally process.env). */
   env: Record<string, string | undefined>;
   /** The Claude Code found by the caller, passed on as MASTHEAD_CLAUDE. */
   claudePath?: string | null;
@@ -21,6 +21,8 @@ export interface ServiceStatus {
   running: boolean | null;
   /** The port the service serves, when installed. */
   port: number | null;
+  /** The data folder the installed service uses, when it can be told (not on Windows). */
+  dataDir?: string;
   detail: string;
 }
 
@@ -46,6 +48,7 @@ export interface ServiceFs {
   mkdir(path: string): void;
   /** No error when it is missing. */
   rm(path: string): void;
+  exists(path: string): boolean;
 }
 
 export interface Deps {

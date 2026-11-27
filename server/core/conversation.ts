@@ -27,6 +27,7 @@ import { messageEnvelope, reportEnvelope } from './prompts.js';
 import type { Scheduler } from './scheduler.js';
 import type { StoredConversation } from '../storage/store.js';
 import { teamToolDefs, type TeamActions } from './tools.js';
+import { rememberTeam } from '../settings/settings.js';
 
 /** What a conversation needs from the app around it. */
 export interface ConversationHost {
@@ -196,7 +197,8 @@ export class Conversation implements AgentHost, TeamActions {
     const s = host.settings();
     const profile = s.profiles.find((p) => p.id === profileId) ?? s.profiles.find((p) => p.id === s.defaultProfile) ?? s.profiles.find((p) => p.id === CLAUDE_PROFILE)!;
     const leadTier = profile.tiers[0]!;
-    const conv = new Conversation({ id, title: 'New conversation', cwd, createdAt: now, updatedAt: now, leadId, profileId: profile.id }, host);
+    const conv = new Conversation({ id, title: 'New conversation', cwd, createdAt: now, updatedAt: now, leadId, profileId: profile.id, team: structuredClone(profile.tiers) }, host);
+    rememberTeam(profile.tiers);
     conv.addAgent(
       // `as Tier`: AgentInfo.tier keeps the Claude union for the page until web W7; profile tier ids are strings.
       new Agent(conv.newInfo({ id: leadId, name: agentName(0), tier: leadTier.id as Tier, parentId: null, title: '', task: '', status: 'idle', effort: s.autoEffort ? 'low' : leadTier.effort }), conv),
@@ -224,10 +226,34 @@ export class Conversation implements AgentHost, TeamActions {
     }
     const sent = stored.agentMessages;
     if (typeof sent === 'number' && Number.isFinite(sent)) conv.agentMessages = Math.min(MAX_AGENT_MESSAGES, Math.max(0, Math.trunc(sent)));
+    const lost = conv.adoptTeam();
     const note = conv.restartNote();
     // Deferred: the app only keeps items of a conversation it has registered, which happens after this returns.
-    if (note) queueMicrotask(() => conv.lead.addItem({ kind: 'notice', level: 'info', text: note.text }));
+    queueMicrotask(() => {
+      if (lost) conv.lead.addItem({ kind: 'notice', level: 'info', text: lost });
+      if (note) conv.lead.addItem({ kind: 'notice', level: 'info', text: note.text });
+    });
     return conv;
+  }
+
+  /**
+   * Makes sure the conversation has its team's tiers: a fresh copy while the profile exists; its stored
+   * copy once the profile is gone; and for older 0.2.0 data with neither, the built-in Claude team's
+   * tiers under this conversation's tier ids. Returns a notice for that last case.
+   */
+  private adoptTeam(): string | undefined {
+    const s = this.host.settings();
+    const pid = this.meta.profileId ?? CLAUDE_PROFILE;
+    const profile = s.profiles.find((p) => p.id === pid);
+    let notice: string | undefined;
+    if (profile) this.meta.team = structuredClone(profile.tiers);
+    else if (!this.meta.team?.length) {
+      const claude = s.profiles.find((p) => p.id === CLAUDE_PROFILE)!;
+      this.meta.team = claude.tiers.map((t, i) => ({ ...structuredClone(t), id: `${pid}:${i}` }));
+      notice = `The team "${pid}" no longer exists, so this chat now runs on the built-in Claude team.`;
+    }
+    rememberTeam(this.meta.team ?? []);
+    return notice;
   }
 
   /**
@@ -306,7 +332,19 @@ export class Conversation implements AgentHost, TeamActions {
    * its name, so its agents still show and can be stopped but no new ones start.
    */
   private spec(tier: string): TierSpec {
-    return findTier(this.host.settings(), tier) ?? { id: tier, label: tier, backend: 'claude-code', model: '', effort: 'low', max: 0, lean: true, colour: 'slate' };
+    return (
+      findTier(this.host.settings(), tier) ??
+      this.meta.team?.find((t) => t.id === tier) ?? { id: tier, label: tier, backend: 'claude-code', model: '', effort: 'low', max: 0, lean: true, colour: 'slate' }
+    );
+  }
+
+  /** The tier after `tier`: from its profile, or from the conversation's copy once the profile is gone. */
+  private nextTier(tier: string): Tier | null {
+    const live = childTierOf(this.host.settings(), tier);
+    if (live || findTier(this.host.settings(), tier)) return live as Tier | null;
+    const team = this.meta.team ?? [];
+    const i = team.findIndex((t) => t.id === tier);
+    return i >= 0 ? ((team[i + 1]?.id ?? null) as Tier | null) : null;
   }
 
   private isAncestor(ancestor: Agent, agent: Agent): boolean {
@@ -500,6 +538,10 @@ export class Conversation implements AgentHost, TeamActions {
   /** Settings changed: running agents take what they can at once (effort ceiling, model of the lead, …). */
   settingsChanged(): void {
     const s = this.host.settings();
+    // The team copy follows the profile while it exists, and stays as it was once the profile is gone.
+    const before = JSON.stringify(this.meta.team);
+    this.adoptTeam();
+    if (JSON.stringify(this.meta.team) !== before) this.host.metaChanged(this);
     for (const a of this.agents.values()) (a as { applySettings?: (s: Settings) => void }).applySettings?.(s);
     // A run-time limit set now applies to agents already running, from the next tick.
     this.ensureTimer();
@@ -734,7 +776,7 @@ export class Conversation implements AgentHost, TeamActions {
   }
 
   childTier(tier: Tier): Tier | null {
-    return childTierOf(this.host.settings(), tier) as Tier | null;
+    return this.nextTier(tier);
   }
 
   /** The name of the model a tier is set to, as agents and people read it. */
@@ -743,7 +785,7 @@ export class Conversation implements AgentHost, TeamActions {
   }
 
   spawn(parent: Agent, rawTitle: string, task: string, effort: Effort | undefined): string {
-    const tier = childTierOf(this.host.settings(), parent.tier) as Tier | null;
+    const tier = this.nextTier(parent.tier);
     if (!tier) return `Error: ${this.label(parent.tier)} agents cannot start other agents.`;
     const s = this.host.settings();
     const cap = this.spec(tier).max;

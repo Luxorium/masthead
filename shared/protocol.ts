@@ -1,6 +1,6 @@
 // Types shared by the server and the browser. Nothing in here may import Node or DOM APIs.
 
-export const VERSION = '0.1.4';
+export const VERSION = '0.2.0-beta.1';
 
 /** The four levels of the team. `lead` is the agent the person talks to. */
 export type Tier = 'lead' | 'opus' | 'sonnet' | 'haiku';
@@ -39,6 +39,8 @@ export interface TierSpec {
   /** Skip the person's own MCP servers. */
   lean: boolean;
   colour: PaletteColour;
+  /** Why agents of this tier cannot start (e.g. an agent program name that is not valid); kept as found. */
+  unusable?: string;
 }
 
 export interface TeamProfile {
@@ -288,6 +290,11 @@ export interface ConversationMeta {
   leadId: string;
   /** The team profile it runs on (0.2.0); missing in 0.1.x files, which means `claude`. */
   profileId?: string;
+  /**
+   * A copy of that profile's tiers, taken when the conversation starts and refreshed while the profile
+   * exists, so the conversation keeps working if the profile is deleted or shrinks.
+   */
+  team?: TierSpec[];
   /** True while any agent in it is working. Filled in when the list is sent; not stored. */
   busy?: boolean;
 }
@@ -393,6 +400,11 @@ export type ClientMsg =
   | { t: 'settings'; settings: SettingsPatch }
   /** Put a built-in team profile back to its defaults (claude; codex from the installed CLI). */
   | { t: 'reset_profile'; id: string }
+  /**
+   * Delete a team profile. Refused with code `refused` and `inUse: { id, chats }` while conversations
+   * use it, unless `force` (they then keep running on their copy of its tiers).
+   */
+  | { t: 'delete_profile'; id: string; force?: boolean }
   | { t: 'rename'; convId: string; title: string }
   | { t: 'delete'; convId: string }
   | { t: 'dirs'; path: string };
@@ -413,4 +425,4 @@ export type ServerMsg =
   | { t: 'settings'; settings: Settings }
   | { t: 'rate_limit'; notice: RateLimitNotice }
   | { t: 'dirs'; path: string; parent: string | null; entries: string[]; error?: string }
-  | { t: 'error'; message: string; code?: 'too_large' | 'invalid' | 'not_found' | 'refused' | 'protocol'; /** The `ref` of the refused `send`, if it had one. */ ref?: string };
+  | { t: 'error'; message: string; code?: 'too_large' | 'invalid' | 'not_found' | 'refused' | 'protocol'; /** The `ref` of the refused `send`, if it had one. */ ref?: string; /** A refused delete_profile: how many conversations use the profile. */ inUse?: { id: string; chats: number } };

@@ -76,7 +76,9 @@ export function claudeCandidates(d: Pick<FindDeps, 'platform' | 'env' | 'home'>)
  * ("%dp0%\node_modules\...\claude.exe" or a .js file); that target is what Masthead runs.
  */
 export function resolveShim(shim: string, text: string): string | null {
-  const m = /"%~?dp0%?\\?([^"]+?\.(?:exe|js|cjs|mjs))"/i.exec(text);
+  // Only the target that the arguments (%*) follow, as npm's read-cmd-shim does: a shim for a .js file
+  // also names "%dp0%\node.exe" (the node it prefers), which is not Claude Code.
+  const m = /"%(?:~dp0|dp0%)\\?([^"]+?\.(?:exe|js|cjs|mjs))"\s+%\*/i.exec(text);
   return m ? win32.join(win32.dirname(shim), m[1]!) : null;
 }
 

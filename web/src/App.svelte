@@ -167,6 +167,10 @@
       {/if}
     </header>
 
+    {#each ((store.app as { problems?: { what: string; message: string }[] } | null)?.problems ?? []) as p (p.what)}
+      <!-- Saved files this Masthead leaves alone (from a newer version): the server's sentence, as is. -->
+      <div class="banner bad" role="status">{p.message}</div>
+    {/each}
     {#if !store.connected && store.app}
       <div class="banner" role="status">{T.shell.reconnecting}</div>
     {/if}

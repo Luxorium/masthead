@@ -3,7 +3,7 @@
 // and Playwright's Chromium (`npx playwright-core install chromium`). Never uses port 7717.
 // Usage: node scripts/ci-e2e.mjs [screenshot folder]
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -48,7 +48,14 @@ const env = {
 delete env.XDG_DATA_HOME;
 delete env.XDG_CONFIG_HOME;
 
-const server = spawn(process.execPath, [join(root, 'dist', 'server', 'main.js'), 'serve', '--port', String(port)], {
+// Run a copy of the build, so a rebuild in the checkout meanwhile (`npm run build` empties dist/) cannot
+// pull the files from under the running server. Its imports find the checkout's node_modules through a
+// link next to the copy ('junction' on Windows needs no admin rights).
+const app = join(tmp, 'app');
+cpSync(join(root, 'dist'), join(app, 'dist'), { recursive: true });
+cpSync(join(root, 'package.json'), join(app, 'package.json'));
+symlinkSync(join(root, 'node_modules'), join(app, 'node_modules'), 'junction');
+const server = spawn(process.execPath, [join(app, 'dist', 'server', 'main.js'), 'serve', '--port', String(port)], {
   env,
   stdio: ['ignore', 'inherit', 'inherit'],
   windowsHide: true,
@@ -89,13 +96,27 @@ try {
   // Stop the server the way `masthead stop` does; kill it if that does not work.
   try {
     const key = readFileSync(join(data, 'secret'), 'utf8').trim();
-    await fetch(`${base}/api/shutdown`, { method: 'POST', headers: { 'x-masthead': '1', 'x-masthead-key': key } });
+    await fetch(`${base}/api/shutdown`, { method: 'POST', headers: { 'x-masthead': '1', 'x-masthead-key': key }, signal: AbortSignal.timeout(3000) });
   } catch {
     // not running
   }
-  setTimeout(() => {
-    if (!serverExited) server.kill();
-  }, 3000).unref();
+  // Wait for the server to end (kill it after 3 s), then remove the temporary folders.
+  await new Promise((res) => {
+    if (serverExited) return res();
+    const t = setTimeout(() => {
+      server.kill();
+      res();
+    }, 3000);
+    server.once('exit', () => {
+      clearTimeout(t);
+      res();
+    });
+  });
+  try {
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {
+    // a file still held open (Windows); the system's temp clean-up gets it later
+  }
 }
 console.log(code === 0 ? 'browser test passed' : `browser test failed (${code}); screenshots in ${shots}`);
 process.exitCode = code;

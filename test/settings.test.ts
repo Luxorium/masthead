@@ -201,3 +201,68 @@ test('settings v2: a built-in profile can be reset to its defaults', async () =>
   const withDuo = sanitizeSettings({ profiles: [claudeProfile(), twoTier] });
   assert.equal(resetProfile(withDuo, 'duo'), withDuo, 'user profiles have no defaults');
 });
+
+// ---- data safety (bravo's review) ----
+
+test('data safety: going back to 0.1.4 and returning keeps the teams (the v2 copy)', async () => {
+  const { saveSettings, v2CopyOf } = await import('../server/settings/settings.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'masthead-safety-'));
+  const file = join(dir, 'settings.json');
+  const mine = sanitizeSettings({ profiles: [claudeProfile(), twoTier], defaultProfile: 'duo', keepAwake: false });
+  saveSettings(mine, file);
+  assert.ok(existsSync(v2CopyOf(file)));
+  // 0.1.4 rewrites settings.json in its own shape, with one change the person made there.
+  const v1 = { tiers: { ...mine.tiers, opus: { ...mine.tiers.opus, max: 1 } }, leanSubagents: true, leanOpus: true, permissionMode: 'acceptEdits', autoEffort: true, collapseReports: false, maxRunMinutes: 0, defaultCwd: '/tmp' };
+  writeFileSync(file, JSON.stringify(v1));
+  const back = loadSettings(file);
+  assert.deepEqual(back.profiles.map((p) => p.id), ['claude', 'duo'], 'the teams survive');
+  assert.equal(back.defaultProfile, 'duo');
+  assert.equal(back.keepAwake, false, '0.2.0-only fields come from the copy');
+  assert.equal(back.profiles[0]!.tiers[1]!.max, 1, 'what 0.1.4 changed is kept');
+  assert.equal(back.permissionMode, 'acceptEdits');
+});
+
+test('data safety: an unreadable settings file is kept aside; a newer one is never overwritten', async () => {
+  const { saveSettings, settingsProblem } = await import('../server/settings/settings.ts');
+  const { readdirSync } = await import('node:fs');
+  const dir = mkdtempSync(join(tmpdir(), 'masthead-safety-'));
+  const file = join(dir, 'settings.json');
+  writeFileSync(file, '{ broken');
+  assert.deepEqual(loadSettings(file), defaultSettings());
+  const aside = readdirSync(dir).filter((f) => f.startsWith('settings.json.unreadable-'));
+  assert.equal(aside.length, 1);
+  assert.equal(readFileSync(join(dir, aside[0]!), 'utf8'), '{ broken');
+
+  const newer = JSON.stringify({ version: 3, profiles: [], futureField: 1 });
+  writeFileSync(file, newer);
+  const s = loadSettings(file);
+  assert.deepEqual(s, defaultSettings(), 'runs on defaults in memory');
+  assert.match(settingsProblem(file) ?? '', /newer Masthead/);
+  saveSettings(s, file);
+  assert.equal(readFileSync(file, 'utf8'), newer, 'never written');
+  writeFileSync(file, JSON.stringify(defaultSettings()));
+  loadSettings(file);
+  assert.equal(settingsProblem(file), undefined, 'cleared once the file is one this version can write');
+});
+
+test('data safety: a tier with an invalid program name keeps it and is marked unusable', () => {
+  const s = sanitizeSettings({ profiles: [claudeProfile(), { id: 'cx', tiers: [{ model: 'gpt-x', backend: 'Codex CLI!' }] }] });
+  const t = s.profiles.find((p) => p.id === 'cx')!.tiers[0]!;
+  assert.equal(t.backend, 'Codex CLI!', 'not swapped for claude-code');
+  assert.equal(t.model, 'gpt-x');
+  assert.match(t.unusable ?? '', /not a valid agent program name/);
+  const fixed = sanitizeSettings({ profiles: s.profiles.map((p) => (p.id === 'cx' ? { ...p, tiers: [{ ...p.tiers[0], backend: 'codex' }] } : p)) }, s);
+  assert.equal(fixed.profiles.find((p) => p.id === 'cx')!.tiers[0]!.unusable, undefined);
+});
+
+test('data safety: deleting a team counts the chats using it; the claude team cannot be deleted', async () => {
+  const { chatsUsing, deleteProfile } = await import('../server/settings/settings.ts');
+  const s = sanitizeSettings({ profiles: [claudeProfile(), twoTier], defaultProfile: 'duo' });
+  assert.equal(chatsUsing('duo', ['duo', 'claude', undefined, 'duo']), 2);
+  assert.equal(chatsUsing('claude', ['duo', undefined]), 1, 'no profile id means claude');
+  const after = deleteProfile(s, 'duo');
+  assert.deepEqual(after.profiles.map((p) => p.id), ['claude']);
+  assert.equal(after.defaultProfile, 'claude', 'a deleted default falls back');
+  assert.equal(deleteProfile(s, 'claude'), s);
+  assert.equal(tierLimit(after, 'duo:0'), Infinity, 'a lead of a deleted team is never limited');
+});

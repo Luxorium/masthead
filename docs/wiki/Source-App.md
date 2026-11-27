@@ -93,7 +93,7 @@ Returns true for the types it handles. The comment says these come from the loca
 
 ## dispatch(): the version 1 messages
 
-One `switch` on `msg.t`. The message shapes are on [Browser/server protocol](Browser-Server-Protocol.md#browser--server-clientmsg). Unknown types throw "Unknown request.".
+One `switch` on `msg.t`. The message shapes are on [Browser/server protocol](Browser-Server-Protocol.md#page--server). Unknown types throw "Unknown request.".
 
 - **`hello`** (version 1): `{t:'state', state: state()}`. It is called without the client, so this reply carries no `remote`, `backends` or `blobToken`, unlike the greeting sent on connect.
 - **`open`**: `{t:'conversation'}` with the meta, agent infos and that conversation's pending requests.

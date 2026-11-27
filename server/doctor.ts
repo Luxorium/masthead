@@ -34,6 +34,8 @@ export interface DoctorDeps {
   sdkBinary(): string | null;
   /** The program that keeps the computer awake while agents work (server/service/awake.ts), or null where there is none, and whether it is on PATH. */
   awakeTool?(): { cmd: string | null; found: boolean };
+  /** Windows: whether only the current user can reach a file (icacls). See isPrivate in transport/auth.ts. */
+  isPrivate?(file: string): boolean;
 }
 
 export const MIN_NODE = 22;
@@ -119,10 +121,16 @@ function secretCheck(deps: DoctorDeps): Check {
   if (!s) return { name, ok: true, warn: true, detail: `${file} does not exist yet (made on first start)` };
   if (s.isDirectory) return { name, ok: false, detail: `${file} is a folder`, fix: `Remove ${file}; a new secret is made on the next start.` };
   // Windows has no POSIX modes: the file is private through the ACL of the user's profile folder.
-  if (deps.platform === 'win32') return { name, ok: true, detail: `${file} (private through its folder's ACL; not checked)` };
+  if (deps.platform === 'win32') {
+    // Windows has no POSIX modes: the ACL is read (icacls) through deps.isPrivate.
+    if (!deps.isPrivate) return { name, ok: true, warn: true, detail: `${file} (permissions not checked)` };
+    return deps.isPrivate(file)
+      ? { name, ok: true, detail: `${file} (only you have access)` }
+      : { name, ok: false, detail: `${file} can be reached by others, or its permissions could not be read`, fix: `Delete ${file} and restart Masthead; a new private secret is made.` };
+  }
   const mode = s.mode & 0o777;
   if (mode & 0o077) {
-    return { name, ok: false, detail: `${file} can be read by others (mode ${mode.toString(8).padStart(3, '0')})`, fix: `chmod 600 '${file}'` };
+    return { name, ok: false, detail: `${file} can be read by others (mode ${mode.toString(8).padStart(3, '0')})`, fix: 'Restart Masthead: a secret others could read is replaced with a new one (sign in again with masthead).' };
   }
   return { name, ok: true, detail: `${file} (mode ${mode.toString(8).padStart(3, '0')})` };
 }

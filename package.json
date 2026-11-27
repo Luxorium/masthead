@@ -5,7 +5,7 @@
     "Install with --omit=optional: the Agent SDK's optional platform packages hold a private Claude Code binary that Masthead never uses (it always runs the person's own claude)."
   ],
   "name": "@luxorium/masthead",
-  "version": "0.1.4",
+  "version": "0.2.0-beta.1",
   "description": "A local web app for running a tiered team of Claude agents through the Claude Code already installed on your machine.",
   "license": "MIT",
   "homepage": "https://github.com/Luxorium/masthead#readme",
@@ -30,6 +30,8 @@
   },
   "files": [
     "dist/",
+    "!dist/server/backends/codex/protocol/",
+    "!dist/server/backends/codex/testing/",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -43,7 +45,7 @@
     "win32"
   ],
   "scripts": {
-    "build": "npm run build:server && npm run build:web",
+    "build": "npm run clean && npm run build:server && npm run build:web",
     "build:server": "tsc -p tsconfig.server.json",
     "build:web": "vite build",
     "dev:web": "vite",
@@ -52,7 +54,8 @@
     "start": "node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED dist/server/main.js serve",
     "test:live": "node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED --import tsx test/live.e2e.ts",
     "prepack": "npm run build",
-    "test:web": "vitest run --config web/vitest.config.ts"
+    "test:web": "vitest run --config web/vitest.config.ts",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.332",

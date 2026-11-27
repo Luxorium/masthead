@@ -304,3 +304,19 @@ test('format marker: raised to 2, never lowered from a newer one', () => {
   new Store(root);
   assert.equal(readFileSync(join(data, 'format'), 'utf8').trim(), '2');
 });
+
+test('transcript: after a torn last line the next item starts on its own line; images are all kept while a line is damaged', () => {
+  const root = join(tmp(), 'conversations');
+  const store = new Store(root);
+  store.saveConversation({ meta: { id: 'c', title: 't', cwd: '/', createdAt: 1, updatedAt: 1, leadId: 'l' }, agents: [] });
+  store.appendItem('c', 'l', { id: 'a', ts: 1, kind: 'text', text: 'a' } as never);
+  const file = join(root, 'c', 'items', 'l.jsonl');
+  writeFileSync(file, readFileSync(file, 'utf8') + '{"id":"torn","kind":"te');
+  const ref = store.blobs.put('c', png(2, 2));
+  const fresh = new Store(root); // a new run after the crash
+  fresh.appendItem('c', 'l', { id: 'u', ts: 2, kind: 'user', text: 'pic', images: [ref] } as never);
+  assert.deepEqual(fresh.loadItems('c', 'l').map((i) => i.id), ['a', 'u'], 'the new item survived the torn line');
+  const loose = fresh.blobs.put('c', gif(1, 1));
+  assert.equal(fresh.collectBlobs('c'), 0, 'a damaged transcript: nothing removed');
+  assert.ok(fresh.blobs.find('c', loose.blob));
+});

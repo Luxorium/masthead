@@ -77,8 +77,8 @@
         lines.push({ id: item.id, who: '', text: flat(`${l.verb} ${l.target ?? ''}`, 110), kind: item.kind });
       } else if (item.kind === 'inbound' && item.via !== 'task') {
         // The task itself is shown at the top of the preview.
-        const via = item.via === 'report' ? 'Report from' : 'Message from';
-        lines.push({ id: item.id, who: `${via} ${displayName(item.from)}`, text: flat(item.text, 140), kind: item.kind });
+        const via = item.via === 'report' ? T.map.reportFrom : T.map.messageFrom;
+        lines.push({ id: item.id, who: via(displayName(item.from)), text: flat(item.text, 140), kind: item.kind });
       } else if (item.kind === 'notice') lines.push({ id: item.id, who: '', text: flat(item.text, 120), kind: item.kind });
     }
     return lines.slice(-6);
@@ -106,7 +106,7 @@
         {#if a.title}<span class="title">{a.title}</span>{:else if a.tier === 'lead'}<span class="title lead">{T.team.mainAssistant}</span>{/if}
         <span class="doing" class:bad={a.status === 'failed'}>{doing(a)}</span>
         <span class="meta">
-          {T.effort[a.effort]} thinking · {fmtTokens(a.usage.context)} memory{#if a.tier !== 'lead'} · {elapsed(a)}{/if}
+          {T.map.meta(T.effort[a.effort]!, fmtTokens(a.usage.context))}{#if a.tier !== 'lead'} · {elapsed(a)}{/if}
         </span>
       </button>
       {#if isLive(a) && a.tier !== 'lead'}
@@ -127,7 +127,7 @@
             {/each}
             {#if draft?.text}
               {#if draft.kind === 'thinking'}
-                <div class="p-line thinking live">Thinking… {flat(draft.text.slice(-160), 160)}</div>
+                <div class="p-line thinking live">{T.map.thinking} {flat(draft.text.slice(-160), 160)}</div>
               {:else}
                 <div class="p-line text live"><b>{displayName(a.name)}</b> {flat(draft.text.slice(-220), 220)}</div>
               {/if}
@@ -153,7 +153,7 @@
       {@render node(store.lead)}
     </ul>
     {#if store.agentList.length === 1}
-      <p class="muted hint">Only {displayName(store.lead.name)} so far. Helpers it starts appear under it here, with what each one is doing.</p>
+      <p class="muted hint">{T.map.onlyLead(displayName(store.lead.name))}</p>
     {/if}
   {/if}
 </div>

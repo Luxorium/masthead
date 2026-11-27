@@ -118,15 +118,21 @@ The page saves the key in that browser for this address and removes it from the 
 
 | Platform | Kind | What `install` does |
 |---|---|---|
-| Linux | systemd user unit `masthead.service` | Checks that `systemctl --user` works, writes `~/.config/systemd/user/masthead.service` (under `XDG_CONFIG_HOME` when set), then `daemon-reload`, `enable`, `restart`. |
+| Linux | systemd user unit `masthead.service` | Checks that `systemctl --user` works, writes `~/.config/systemd/user/masthead.service` (always there: that is where `systemctl --user` reads units, whatever this shell's `XDG_CONFIG_HOME` says), then `daemon-reload`, checks with `systemctl --user cat` that systemd sees it, then `enable`, `restart`. |
 | macOS | launchd agent `io.github.luxorium.masthead` | Writes `~/Library/LaunchAgents/io.github.luxorium.masthead.plist`, boots out an old copy, `launchctl bootstrap gui/<uid>`. Logs go to `~/Library/Logs/Masthead/masthead.log`. Not verified on a Mac. |
 | Windows | Task Scheduler task `Masthead` | Writes the task XML to a temporary file, ends a running copy, `schtasks /Create … /F`, removes the file, `schtasks /Run`. Not verified on Windows. |
 | other | none | ``Masthead has no background service for <platform>; run `masthead serve` instead.``, exit 1. |
 
 - `install` first asks the server on the port how many conversations are working (`busy` in `/api/health`). If any are and `--force` is not given: `Masthead has agents working in <n> conversation(s); installing restarts it and stops them. Run again when they have finished, or with --force.`, exit 1.
-- The service gets the port you asked for (`--port` or `MASTHEAD_PORT`) when it is not 7717. On Linux and macOS it also gets a cleaned `PATH`, the Claude Code that was found (`MASTHEAD_CLAUDE`) and `XDG_CONFIG_HOME`/`XDG_DATA_HOME` if set. It does not get `MASTHEAD_CONFIG_DIR` or `MASTHEAD_DATA_DIR`. On Windows only the port is passed; `install` says so when `MASTHEAD_CLAUDE` or `XDG_*` were set, so you can set them with `setx`.
+- The service gets the port you asked for (`--port` or `MASTHEAD_PORT`) when it is not 7717. On Linux and macOS it also gets a cleaned `PATH`, the Claude Code that was found (`MASTHEAD_CLAUDE`) and `MASTHEAD_DATA_DIR`/`MASTHEAD_CONFIG_DIR` and `XDG_CONFIG_HOME`/`XDG_DATA_HOME` if set; `status` shows the data folder the service uses. On Windows only the port is passed; `install` says so when `MASTHEAD_CLAUDE`, `MASTHEAD_*_DIR` or `XDG_*` were set, so you can set them with `setx`.
+- A value containing a line break (or NUL) is refused before anything is written. A step that fails after the file was written removes what was written (and the task or agent) before the error.
+- `uninstall` first turns off Masthead's own Tailscale entry if remote access was on (or prints `tailscale serve --https=<port> off` to run). Uninstalling when nothing is installed says `Nothing was installed.`
 - `status` prints `Installed (<kind>), running|not running|state unknown, port N. <detail>` or `Not installed (<kind>). <detail>`.
 - A step that must succeed and fails prints `<command> <args> failed: <reason>`, exit 1.
+
+## `remote off`
+
+`masthead remote off` turns off Masthead's own `tailscale serve` entry if remote access was on, and nothing else: only an entry on Masthead's port that points at Masthead's own target is removed. If Tailscale refuses, it prints the exact command (`tailscale serve --https=<port> off`). Switching remote access on is done in the page. `scripts/uninstall.sh` runs it.
 
 ## `doctor`
 

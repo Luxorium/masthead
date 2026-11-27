@@ -2,7 +2,7 @@
 // roles, tokens bound to the Tailscale node, expiry, revocation, and an audit log. Pure logic plus a
 // small versioned file; the transport calls it and never decides on its own.
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
-import { appendFileSync, chmodSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, closeSync, copyFileSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Identity } from './tailscale.js';
 import { renameRetry } from '../storage/atomic.js';
@@ -121,19 +121,41 @@ export class DeviceRegistry {
     return (this.opts.tokenDays ?? 30) * DAY;
   }
 
+  /** Set when devices.json was written by a newer Masthead: nothing is written over it. */
+  newerFile = false;
+
   private load(): void {
-    let raw: unknown;
+    let text: string;
     try {
-      raw = JSON.parse(readFileSync(this.file, 'utf8'));
+      text = readFileSync(this.file, 'utf8');
     } catch {
-      return; // none yet, or unreadable: nobody is approved
+      return; // none yet: nobody is approved
     }
-    const r = raw as { version?: number; devices?: Device[] };
-    if (r?.version !== FILE_VERSION || !Array.isArray(r.devices)) return;
+    let r: { version?: number; devices?: Device[] } | null = null;
+    try {
+      r = JSON.parse(text) as { version?: number; devices?: Device[] };
+    } catch {
+      r = null;
+    }
+    if (r && typeof r.version === 'number' && r.version > FILE_VERSION) {
+      // A newer Masthead's devices: keep them untouched; remote access stays off until that is sorted.
+      this.newerFile = true;
+      return;
+    }
+    if (!r || r.version !== FILE_VERSION || !Array.isArray(r.devices)) {
+      // Unreadable: kept aside before anything is written over it, so no approval is lost for good.
+      try {
+        copyFileSync(this.file, `${this.file}.unreadable-${this.now()}`);
+      } catch {
+        // nothing to keep
+      }
+      return;
+    }
     for (const d of r.devices) if (d && typeof d.nodeId === 'string' && typeof d.tokenHash === 'string' && ROLES.includes(d.role)) this.devices.set(d.nodeId, d);
   }
 
   private save(): void {
+    if (this.newerFile) throw new Error('The approved devices were saved by a newer Masthead; this one leaves them as they are.');
     const tmp = `${this.file}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify({ version: FILE_VERSION, devices: [...this.devices.values()] }, null, 2) + '\n', { mode: 0o600 });
     renameRetry(tmp, this.file);

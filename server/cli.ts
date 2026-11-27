@@ -1,10 +1,10 @@
 // Command-line parsing and the sign-in step for `masthead`, kept apart from main.ts so they can be
 // tested without running anything.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, posix, win32 } from 'node:path';
 import { DEFAULT_PORT } from './paths.js';
-import { proofOk } from './transport/auth.js';
+import { makeDirPrivate, proofOk, type Runner } from './transport/auth.js';
 
 /** A mistake in how the command was typed. The message is shown as it is and the exit code is 2. */
 export class UsageError extends Error {}
@@ -117,9 +117,10 @@ function htmlAttr(s: string): string {
  * `target`. Opening this file instead of the address keeps the key out of every process's arguments,
  * which other users on the machine can read. Stale sign-in files are removed first.
  */
-export function writeSignInFile(dir: string, target: string, now = Date.now()): string {
+export function writeSignInFile(dir: string, target: string, now = Date.now(), platform: NodeJS.Platform = process.platform, run?: Runner): string {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
+  // The folder is made private before the file exists (Windows: by an inherited ACL for this user's SID).
+  if (!makeDirPrivate(dir, platform, run)) throw new Error(`could not make ${dir} private to you`);
   for (const name of readdirSync(dir)) {
     if (!name.startsWith(SIGN_IN_PREFIX)) continue;
     try {

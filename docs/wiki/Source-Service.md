@@ -8,7 +8,7 @@
 |---|---|
 | `types.ts` | The shared types and `ServiceError`. |
 | `index.ts` | `serviceFor(platform)` and the real `systemDeps()`. |
-| `common.ts` | Helpers: `NODE_FLAGS`, `cleanPath`, `serviceEnv`, `portOf`, `must`, `xmlEscape`. |
+| `common.ts` | Helpers: `NODE_FLAGS`, `cleanPath`, `checkValue`, `serviceEnv`, `dataDirNote`, `portOf`, `must`, `xmlEscape`. |
 | `systemd.ts` | Linux: a systemd user unit. |
 | `launchd.ts` | macOS: a per-user launchd agent. |
 | `taskscheduler.ts` | Windows: a per-user scheduled task. |
@@ -19,16 +19,16 @@
 | Name | What |
 |---|---|
 | `InstallOptions` | `node` (absolute path of the Node binary, `process.execPath`), `mainJs` (absolute path of `dist/server/main.js`), `port?` (omitted or 7717 means the default), `env` (where `PATH` and `XDG_*` come from, normally `process.env`), `claudePath?` (the Claude Code found by the caller). |
-| `ServiceStatus` | `installed`, `running` (`boolean` or `null` when it cannot be told), `port` (when installed), `detail`. |
+| `ServiceStatus` | `installed`, `running` (`boolean` or `null` when it cannot be told), `port` (when installed), `dataDir?` (the data folder the installed service uses, from its own environment; systemd and launchd only), `detail`. |
 | `ServiceManager` | `kind` (`'systemd' \| 'launchd' \| 'taskscheduler'`), `install(o)` (writes the service, (re)starts it, returns lines to print; throws on failure), `uninstall()`, `status()`, `serves(port)` (whether the installed service serves that port). |
 | `RunResult` | `{ status, stdout, stderr }`; `status` is null when the command could not start. |
-| `ServiceFs` | `writeFile`, `mkdir` (recursive, no error when it exists), `rm` (no error when missing). |
+| `ServiceFs` | `writeFile`, `mkdir` (recursive, no error when it exists), `rm` (no error when missing), `exists`. |
 | `Deps` | `run(cmd, args)` (spawnSync-like, never throws for a non-zero exit), `fs`, `home`, `env`, `uid?` (launchd only), `tmpdir?` (Task Scheduler only). |
 | `ServiceError` | A failure to report to the person; `main.ts` prints its message and exits 1. |
 
 ## index.ts
 
-- `systemDeps()`: the real system. `run` is `spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true })` with `status` null when `spawnSync` reports an error (and that error's message as `stderr` when there is none); `fs` uses `writeFileSync`, `mkdirSync(..., { recursive: true })`, `rmSync(..., { force: true })`; `home` is `os.homedir()`; `env` is `process.env`.
+- `systemDeps()`: the real system. `run` is `spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true })` with `status` null when `spawnSync` reports an error (and that error's message as `stderr` when there is none); `fs` uses `writeFileSync`, `mkdirSync(..., { recursive: true })`, `rmSync(..., { force: true })`, `existsSync`; `home` is `os.homedir()`; `env` is `process.env`.
 - `serviceFor(platform, deps?)`: `linux` → `systemdService`, `darwin` → `launchdService`, `win32` → `taskSchedulerService`, anything else → null (Masthead then runs only in the foreground). Without `deps` it uses `systemDeps()`.
 
 `main.ts` calls `serviceFor(process.platform)` for `masthead service` and for the `Service` check of `masthead doctor`. The launcher's own "does the unit serve this port" test (`unitServes()` in `main.ts`) does not use `serves()`; it runs `systemctl` itself and is Linux only.
@@ -39,7 +39,9 @@
 |---|---|
 | `NODE_FLAGS` | `['--disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED']`, the warning the installed command and unit both silence. |
 | `cleanPath(parts)` | Joins colon-separated pieces into one `PATH`, keeping only absolute entries (starting with `/`) and dropping repeats, in order (the same as `clean_path` in `scripts/path.sh`). A relative entry would be looked up from wherever the service runs. |
-| `serviceEnv(o, tail)` | The variables a POSIX service gets: `PATH` = `cleanPath([folder of node, folder of claude, o.env.PATH, ...tail])`; `MASTHEAD_CLAUDE` when `claudePath` is set; `XDG_CONFIG_HOME` and `XDG_DATA_HOME` when set; `MASTHEAD_PORT` when the port is given and not 7717. `MASTHEAD_CONFIG_DIR` and `MASTHEAD_DATA_DIR` are **not** passed on. |
+| `serviceEnv(o, tail)` | The variables a POSIX service gets: `PATH` = `cleanPath([folder of node, folder of claude, o.env.PATH, ...tail])`; `MASTHEAD_CLAUDE` when `claudePath` is set; `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `MASTHEAD_CONFIG_DIR` and `MASTHEAD_DATA_DIR` when set (`DIR_VARS`); `MASTHEAD_PORT` when the port is given and not 7717. Every value goes through `checkValue`. |
+| `checkValue(name, value)` | Throws `ServiceError('<name> contains a line break or NUL character, …')` when the value has `\n`, `\r` or NUL: in a unit, plist or task XML it would start a new directive. Every generator (`unitContent`, `plistContent`, `taskXml`) checks all its values (node and main.js paths, home, user name, every environment variable) before anything is written. |
+| `dataDirNote(platform, serviceVars, shellEnv, home)` | The data folder the service uses (`appDirs()` from [server/paths.ts](Source-Paths.md) over the service's own `DIR_VARS`) and a `data <dir>` note for `status`, with `(this shell uses <dir>)` added when the current shell would use a different one. |
 | `portOf(raw)` | A port from text (digits only, 1024–65535), else null. |
 | `must(run, cmd, args)` | Runs a command that must succeed. On a non-zero or null status it throws `ServiceError('<cmd> <args> failed: <why>')`, where `why` is stderr, else stdout, else `it could not be started` or `exit code <n>`. |
 | `xmlEscape(s)` | Escapes `& < > " '` for XML. |
@@ -48,7 +50,7 @@
 
 Linux. The same unit that `scripts/install.sh` writes ([Installing](Source-Install-Scripts.md)).
 
-**File:** `unitPath()` = `$XDG_CONFIG_HOME/systemd/user/masthead.service`, else `~/.config/systemd/user/masthead.service`. `unitContent(o, home)`:
+**File:** `unitPath(home)` = `~/.config/systemd/user/masthead.service`, always. Not the shell's `$XDG_CONFIG_HOME`: systemd's user manager searches `$XDG_CONFIG_HOME/systemd/user` only when its own environment has that variable, while `~/.config/systemd/user` is always on its search path. (`scripts/install.sh` still writes under `$XDG_CONFIG_HOME`; `uninstall` also removes a unit found there.) `unitContent(o, home)`:
 
 ```ini
 [Unit]
@@ -70,9 +72,9 @@ WantedBy=default.target
 
 | Action | Commands (all `systemctl --user …`) |
 |---|---|
-| `install` | `show-environment` (a failure throws `systemd user services are not available here; start Masthead with: masthead`), write the file, `daemon-reload`, `enable --quiet masthead.service`, `restart masthead.service` (the last three through `must`). Returns `Wrote <file>` and `Masthead is running as a user service and will start when you log in.` |
-| `uninstall` | `disable --now masthead.service` (its failure is ignored: removing the file is what matters), remove the file, `daemon-reload` (not checked). |
-| `status` | `show -p LoadState -p ActiveState -p Environment masthead.service`. A failing `systemctl` gives `installed: false, running: null` with `systemctl failed: …`. `LoadState` other than `loaded`: `Not installed.`. Otherwise installed, running when `ActiveState` is `active` or `reloading`, port from `unitPortFrom()`, detail `masthead.service <state>, port <n>`. |
+| `install` | `show-environment` (a failure throws `systemd user services are not available here; start Masthead with: masthead`), build the unit (a bad value throws before anything is written), write the file, `daemon-reload`, `cat masthead.service` (non-zero: systemd did not find the unit, the folder is not on its search path; a `# <path>` header naming another file: systemd would run that one instead), `enable --quiet masthead.service`, `restart masthead.service`. Any failure after the write rolls back (`disable --now`, remove the file, `daemon-reload`, results ignored) and rethrows. Returns `Wrote <file>` and `Masthead is running as a user service and will start when you log in.` |
+| `uninstall` | When neither `~/.config/systemd/user/masthead.service` nor one under the shell's `$XDG_CONFIG_HOME` exists and the unit is not loaded: returns `Nothing was installed.` and runs nothing else. Otherwise `disable --now masthead.service` (its failure is ignored: removing the file is what matters), remove the files found, `daemon-reload` (not checked). |
+| `status` | `show -p LoadState -p ActiveState -p Environment masthead.service`. A failing `systemctl` gives `installed: false, running: null` with `systemctl failed: …`. `LoadState` other than `loaded`: `Not installed.`. Otherwise installed, running when `ActiveState` is `active` or `reloading`, port from `unitPortFrom()`, `dataDir` from the unit's `Environment=` (`unitEnvFrom()`), detail `masthead.service <state>, port <n>, data <dir>` plus `(this shell uses <dir>)` on a mismatch. |
 | `serves(port)` | The same `show`, and `unitPortFrom()` equals `port`. |
 
 `unitPortFrom(show)` here is like the one in [server/cli.ts](Source-Cli.md#unitportfromshowoutput): null when not `loaded`, else `MASTHEAD_PORT` from `Environment=` if valid (`portOf`), else 7717.
@@ -89,9 +91,9 @@ macOS. **Unverified without a Mac** (file header): the plist keys follow `launch
 
 | Action | What it does |
 |---|---|
-| `install` | Makes the LaunchAgents and log folders, writes the plist, `launchctl bootout gui/<uid>/<label>` (failure ignored: an agent already loaded keeps its old definition until booted out), `launchctl bootstrap gui/<uid> <file>` (must succeed). Returns `Wrote <file>`, the running message and `Logs: <log>`. |
-| `uninstall` | `bootout` (not checked), removes the plist. |
-| `status` | `launchctl print gui/<uid>/<label>`. Non-zero: not installed. Otherwise running when a `state = running` line is found, `null` when there is no `state =` line; port from `launchdPortFrom()` (a `MASTHEAD_PORT => N` line, else 7717). |
+| `install` | Builds the plist (a bad value throws before anything is written), makes the LaunchAgents and log folders, writes the plist, `launchctl bootout gui/<uid>/<label>` (failure ignored: an agent already loaded keeps its old definition until booted out), `launchctl bootstrap gui/<uid> <file>` (must succeed; on failure `bootout` again and remove the plist before rethrowing). Returns `Wrote <file>`, the running message and `Logs: <log>`. |
+| `uninstall` | No plist and `print` fails: `Nothing was installed.` Otherwise `bootout` (not checked), removes the plist. |
+| `status` | `launchctl print gui/<uid>/<label>`. Non-zero: not installed. Otherwise running when a `state = running` line is found, `null` when there is no `state =` line; port from `launchdPortFrom()` (a `MASTHEAD_PORT => N` line, else 7717); `dataDir` and the detail's `data <dir>` note from the `environment = { … }` block (`launchdEnvFrom()`; `inherited environment` is not read). |
 | `serves(port)` | The same `print`, and the port matches. |
 
 ## taskscheduler.ts
@@ -100,16 +102,16 @@ Windows. **Unverified without a Windows machine** (file header): the XML follows
 
 - Task name `TASK` = `Masthead`.
 - `taskAction(o)`: runs `conhost.exe --headless <node> --disable-warning=… <main.js> serve`, with `--port N` added when the port is not 7717. `conhost --headless` runs Node with no visible console window.
-- **Environment:** a task cannot set environment variables, and wrapping the command in `cmd.exe /c "set …"` breaks on `%`, `^`, `&` and quotes and shows a window (file header). So only the port is passed; otherwise the task inherits the person's logon environment, where `PATH` is the one Claude Code's installer updates. `MASTHEAD_CLAUDE`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are not carried over; `install` adds a note naming any of them set in the current shell and suggests `setx`.
+- **Environment:** a task cannot set environment variables, and wrapping the command in `cmd.exe /c "set …"` breaks on `%`, `^`, `&` and quotes and shows a window (file header). So only the port is passed; otherwise the task inherits the person's logon environment, where `PATH` is the one Claude Code's installer updates. `MASTHEAD_CLAUDE`, `MASTHEAD_CONFIG_DIR`, `MASTHEAD_DATA_DIR`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are not carried over; `install` adds a note naming any of them set in the current shell and suggests `setx`.
 - `winQuote(arg)`: quotes one argument the way `CommandLineToArgvW` and `node.exe` parse it (backslashes before a `"` doubled).
 - `taskUser(env)`: `USERDOMAIN\USERNAME`, or just `USERNAME` (default `user`).
-- `taskXml(o, user)`: UTF-16 task XML with a `LogonTrigger` for that user, principal `InteractiveToken` with `LeastPrivilege` (no admin rights), `MultipleInstancesPolicy` `IgnoreNew`, runs on battery, `Hidden`, no time limit (`PT0S`), priority 7, `RestartOnFailure` every minute up to 3 times, and the `Exec` action from `taskAction()`.
+- `taskXml(o, user)`: refuses a node path, main.js path or user name with a line break or NUL (`checkValue`), then builds UTF-16 task XML with a `LogonTrigger` for that user, principal `InteractiveToken` with `LeastPrivilege` (no admin rights), `MultipleInstancesPolicy` `IgnoreNew`, runs on battery, `Hidden`, no time limit (`PT0S`), priority 7, `RestartOnFailure` every minute up to 3 times, and the `Exec` action from `taskAction()`.
 - `utf16le(text)`: the XML as UTF-16LE with a byte order mark, as `schtasks /XML` wants.
 
 | Action | Commands |
 |---|---|
-| `install` | Writes the XML to `<tmpdir>/masthead-task-<pid>.xml`; `schtasks /End /TN Masthead` (failure ignored: `/Create /F` would leave a running copy on the old definition); `schtasks /Create /TN Masthead /XML <file> /F` (must succeed; the file is removed whatever happens); `schtasks /Run /TN Masthead` (must succeed). |
-| `uninstall` | `schtasks /End /TN Masthead` (not checked), then `schtasks /Delete /TN Masthead /F` (must succeed). |
+| `install` | Writes the XML to `<tmpdir>/masthead-task-<pid>.xml`; `schtasks /End /TN Masthead` (failure ignored: `/Create /F` would leave a running copy on the old definition); `schtasks /Create /TN Masthead /XML <file> /F` and `schtasks /Run /TN Masthead` (both must succeed; if either fails, `schtasks /Delete /TN Masthead /F` runs before rethrowing). The temp file is removed whatever happens. |
+| `uninstall` | `schtasks /End /TN Masthead` (not checked), then `schtasks /Delete /TN Masthead /F`. When `/Delete` fails and `/Query` also fails (the task does not exist, in any display language): `Nothing was installed.` Any other `/Delete` failure throws. |
 | `status` | `schtasks /Query /TN Masthead /FO LIST /V`. Non-zero: not installed. Otherwise `parseTaskQuery()` reads `Status:` (running when it is `Running`, null when missing) and the port from `--port N` in `Task To Run:` (else 7717). |
 | `serves(port)` | The same query, and the port matches. |
 

@@ -16,7 +16,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const wiki = join(root, 'docs', 'wiki');
 const only = process.argv.slice(2).map((p) => p.replace(/\/+$/, ''));
 
-const SOURCES = ['server', 'shared', 'web/src', 'web/index.html', 'web/public', 'scripts', 'packaging', 'test', 'vite.config.ts', 'svelte.config.js', 'tsconfig.server.json', 'tsconfig.web.json', 'package.json', 'package-lock.json', 'web/vitest.config.ts', '.github/workflows'];
+const SOURCES = ['server', 'shared', 'web/src', 'web/test', 'web/index.html', 'web/public', 'scripts', 'packaging', 'test', 'vite.config.ts', 'svelte.config.js', 'tsconfig.server.json', 'tsconfig.web.json', 'package.json', 'package-lock.json', 'web/vitest.config.ts', '.github/workflows'];
 const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--', ...SOURCES], { cwd: root, encoding: 'utf8' })
   .split('\n')
   .filter((f) => f && existsSync(join(root, f)));

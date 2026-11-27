@@ -7,10 +7,10 @@ import { VERSION } from '../shared/protocol.js';
 import { App } from './app/app.js';
 import { UsageError, onPath, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, unitPortFrom, type Opener } from './cli.js';
 import { DATA_DIR, DEFAULT_PORT, SECRET_FILE } from './paths.js';
-import { loadSecret, readSecret } from './transport/auth.js';
+import { isPrivate, loadSecret, readSecret } from './transport/auth.js';
 import { serve } from './transport/http.js';
 import { chooseTarget, startRemote } from './transport/remote.js';
-import { RemoteAccess } from './remote/access.js';
+import { RemoteAccess, targetUrl } from './remote/access.js';
 import { CliTailscale } from './remote/tailscale.js';
 import { serviceFor, ServiceError } from './service/index.js';
 import { Awake, awakeCommand } from './service/awake.js';
@@ -68,6 +68,26 @@ function unitServes(p: number): boolean {
   return r.status === 0 && unitPortFrom(r.stdout ?? '') === p;
 }
 
+/**
+ * Turns off Masthead's own `tailscale serve` entry if remote access was on (used by `service uninstall`
+ * and `masthead remote off`, which uninstall.sh runs). Only our entry, on our port and target, is ever
+ * removed. Returns lines for the person; if Tailscale refuses, the exact command to run instead.
+ */
+async function removeRemoteServe(): Promise<string[]> {
+  const remote = new RemoteAccess({ dir: join(DATA_DIR, 'remote'), tailscale: new CliTailscale(), target: chooseTarget(process.env, DATA_DIR) });
+  if (!remote.enabled) return [];
+  const target = targetUrl(remote.target);
+  const command = `tailscale serve --https=${remote.port} off`;
+  try {
+    const state = await remote.tailscale.serveState(remote.port, target);
+    if (state.kind !== 'ours') return [];
+    await remote.tailscale.removeServe(remote.port, target);
+    return [`Turned off Masthead's Tailscale entry on port ${remote.port}.`];
+  } catch (e) {
+    return [`Could not turn off Masthead's Tailscale entry (${(e as Error).message}). Run: ${command}`];
+  }
+}
+
 /** `masthead service install|uninstall|status`. */
 async function serviceCommand(p: number): Promise<void> {
   const args = process.argv.slice(2).filter((a, i, all) => !a.startsWith('-') && all[i - 1] !== '--port');
@@ -88,6 +108,7 @@ async function serviceCommand(p: number): Promise<void> {
       const claude = findClaude();
       for (const line of await svc.install({ node: process.execPath, mainJs: fileURLToPath(import.meta.url), port: p, env: process.env, claudePath: claude.path })) console.log(line);
     } else if (sub === 'uninstall') {
+      for (const line of await removeRemoteServe()) console.log(line);
       for (const line of await svc.uninstall()) console.log(line);
     } else if (sub === 'status') {
       const st = await svc.status();
@@ -120,6 +141,7 @@ async function doctorCommand(p: number): Promise<void> {
     },
     service: serviceFor(process.platform),
     sdkBinary: () => sdkBinaryPackage(),
+    isPrivate: (file) => isPrivate(file),
     awakeTool: () => {
       const c = awakeCommand(process.platform, process.pid);
       return { cmd: c?.cmd ?? null, found: c ? onPath(c.cmd, process.env, process.platform, existsSync) : false };
@@ -304,6 +326,17 @@ async function main(): Promise<void> {
     case 'doctor':
       await doctorCommand(p);
       return;
+    case 'remote': {
+      // Only `masthead remote off` exists here; switching remote access on is done in the page.
+      const sub = process.argv.slice(2).filter((a) => !a.startsWith('-'))[1];
+      if (sub !== 'off') {
+        console.error('Usage: masthead remote off   (switch remote access on in Settings → Remote access)');
+        process.exit(2);
+      }
+      const lines = await removeRemoteServe();
+      console.log(lines.length ? lines.join('\n') : 'Masthead has no Tailscale entry to turn off.');
+      return;
+    }
     case 'version':
     case '--version':
       console.log(VERSION);
@@ -318,6 +351,7 @@ async function main(): Promise<void> {
   masthead service install|uninstall|status
                       start Masthead at login (systemd, launchd or Task Scheduler)
   masthead doctor     check the set-up and say how to fix what is wrong (--json)
+  masthead remote off turn off Masthead's Tailscale entry (remote access)
 
   --port N            use a port other than ${DEFAULT_PORT} (or set MASTHEAD_PORT)
   --no-browser        with the default command: do not open the browser; print the

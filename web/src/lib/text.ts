@@ -242,6 +242,7 @@ export const T = {
 
   images: {
     viewer: 'Picture',
+    code: (digits: string) => `Code ${digits.split('').join(' ')}`,
     of: (i: number, n: number) => `${i} of ${n}`,
     openTab: 'Open in a new tab',
     close: 'Close the picture',
@@ -404,6 +405,8 @@ export const T = {
     useIt: 'Use it for new chats',
     changeFirst: 'Change it first',
     unusable: (backend: string) => `Needs ${backend}, which is not ready on this computer.`,
+    inUseConfirm: (name: string, chats: number) =>
+      `${chats === 1 ? '1 chat uses' : `${chats} chats use`} the team “${name}”. Remove it anyway? Those chats keep working with the levels they have now.`,
     save: 'Save team',
     saved: 'Team saved.',
     cancel: 'Cancel',
@@ -446,6 +449,35 @@ export const T = {
     menu: 'Choose which AI works on this chat',
   },
 },
+
+  folder: {
+    dialog: 'Choose a folder',
+    path: 'Folder path',
+    empty: 'No folders inside.',
+    cancel: 'Cancel',
+    use: 'Use this folder',
+    up: (where: string) => `‹ Up to ${where}`,
+    drives: 'Drives',
+  },
+
+  wants: {
+    Bash: 'wants to run a command',
+    Write: 'wants to write a file',
+    Edit: 'wants to edit a file',
+    NotebookEdit: 'wants to edit a notebook',
+    Read: 'wants to read a file',
+    WebFetch: 'wants to fetch a web page',
+    WebSearch: 'wants to search the web',
+    other: (tool: string) => `wants to use ${tool}`,
+  } as { [tool: string]: string | ((tool: string) => string); other: (tool: string) => string },
+
+  map: {
+    reportFrom: (name: string) => `Report from ${name}`,
+    messageFrom: (name: string) => `Message from ${name}`,
+    meta: (thinking: string, memory: string) => `${thinking} thinking · ${memory} memory`,
+    thinking: 'Thinking…',
+    onlyLead: (name: string) => `Only ${name} so far. Helpers it starts appear under it here, with what each one is doing.`,
+  },
 
   errors: {
     notConnected: "Masthead isn't answering. Check that it is running, then try again.",

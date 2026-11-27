@@ -341,6 +341,16 @@ export class Agent {
   }
 
   private launch(): void {
+    // A tier the settings mark unusable (e.g. an invalid program name) starts nothing.
+    const marked = findTier(this.host.settings(), this.tier);
+    if (marked?.unusable) {
+      this.starting = false;
+      this.unanswered.clear();
+      this.backlog = [];
+      this.host.scheduler.release(this.tier, this.id);
+      this.host.processLost(this, `This team's ${marked.label || 'helper'} level can't be used: ${marked.unusable} Edit the team in settings.`);
+      return;
+    }
     const backend = this.backendFor();
     if (!backend) {
       this.starting = false;

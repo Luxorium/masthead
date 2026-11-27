@@ -37,8 +37,12 @@ Masthead never listens on another network interface and never uses Tailscale Fun
 - **How it is made.** `loadSecret()` in `server/transport/auth.ts` creates it once: 32 random bytes as
   64 hex characters, written to a temporary file and linked into place, so two processes starting
   together agree on it. It is kept across restarts.
-- **Who can read it.** `makePrivate()`: mode `0600` on Linux and macOS; on Windows `icacls` removes
-  inherited permissions and grants only the current user.
+- **Who can read it.** On Linux and macOS the file is mode `0600`. On Windows the data folder is made
+  private first (`makeDirPrivate()`: `icacls /inheritance:r /grant:r *<SID>:(OI)(CI)F`, with your
+  SID from `whoami /user`), so files made inside are private from the start; every `icacls` result is
+  checked, and if it fails `loadSecret()` throws and Masthead does not start. `isPrivate()` reads the
+  permissions back (also used by `masthead doctor`). On every platform a secret others could read is
+  replaced, not merely tightened. Details: [Platforms](Platforms.md).
 - **The socket.** The page offers the subprotocol `key.<secret>`; the upgrade is refused unless it
   matches (constant-time compare). The answer names only `masthead`, never the key.
 - **Shutdown.** `POST /api/shutdown` needs `x-masthead: 1` and `x-masthead-key: <secret>`. A site
@@ -131,8 +135,9 @@ Details and the pairing flow are on [Remote access](Remote-Access.md). In short:
 | Remote access (devices, audit, config) | `~/.local/share/masthead/remote/` | files `0600`, folder `0700` |
 | Remote socket | `$XDG_RUNTIME_DIR/masthead/remote.sock`, else `/tmp/masthead-<uid>/remote.sock` | socket `0600` in a `0700` folder that must be yours and not a link |
 
-On Windows only the secret is set with `icacls`; the other files rely on the permissions of your own
-`%APPDATA%` and `%LOCALAPPDATA%` folders, which Windows keeps private to your account by default. Folder
+On Windows the data folder and the sign-in folder are set with `icacls` (private to your account,
+inherited by every file inside, so conversations, pictures and remote-access files too); the settings
+folder in `%APPDATA%` relies on Windows keeping your profile private by default. Folder
 modes apply only when Masthead creates the folder.
 
 ## What other users of the computer can and cannot do

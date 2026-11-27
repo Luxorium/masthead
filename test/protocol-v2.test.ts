@@ -399,3 +399,47 @@ test('reset_profile: a built-in team goes back to how it ships; others and lower
     assert.equal(out[0]!.code, 'refused', role);
   }
 });
+
+test('delete_profile: refused with the count while chats use it, deleted with force; problems reach v2 state', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { App } = await import('../server/app/app.ts');
+  const { defaultSettings, sanitizeSettings } = await import('../server/settings/settings.ts');
+  const { Store } = await import('../server/storage/store.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'mh-delprof-'));
+  const settings = sanitizeSettings({ profiles: [...defaultSettings().profiles, { id: 'mini', label: 'Mini', tiers: [{ label: 'Boss', model: 'm1' }] }] }, defaultSettings());
+  const store = new Store(join(dir, 'c'));
+  store.saveConversation({ meta: { id: 'x', title: 't', cwd: dir, createdAt: 1, updatedAt: 1, leadId: 'l', profileId: 'mini' } as never, agents: [] });
+  const app = new App({ store, settingsFile: join(dir, 's.json'), settings, claude: { path: null, version: null } });
+  const got: Array<Record<string, unknown>> = [];
+  const local: Client = { send: (m) => void got.push(m as Record<string, unknown>) };
+  app.connect(local);
+  got.length = 0;
+  app.handle(local, { t: 'delete_profile', id: 'mini' });
+  assert.deepEqual(got[0], { t: 'error', code: 'refused', message: '1 chat use this team.', inUse: { id: 'mini', chats: 1 } });
+  got.length = 0;
+  app.handle(local, { t: 'delete_profile', id: 'mini', force: true });
+  const s = got.find((m) => m.t === 'settings') as { settings: { profiles: Array<{ id: string }> } };
+  assert.equal(s.settings.profiles.some((p) => p.id === 'mini'), false);
+  got.length = 0;
+  app.handle(local, { t: 'delete_profile', id: 'claude' });
+  assert.equal(got[0]!.message, 'This team cannot be deleted.', 'the built-in Claude team stays');
+  const reader: Client = { send: (m) => void got.push(m as Record<string, unknown>), role: 'approve' };
+  app.connect(reader);
+  app.handle(reader, { t: 'hello', protocol: 2 });
+  got.length = 0;
+  app.handle(reader, { t: 'delete_profile', id: 'claude' });
+  assert.equal(got[0]!.code, 'refused');
+  // A settings file from a newer Masthead is reported in the v2 state.
+  const dir2 = mkdtempSync(join(tmpdir(), 'mh-problem-'));
+  writeFileSync(join(dir2, 's.json'), JSON.stringify({ version: 99 }));
+  const { loadSettings } = await import('../server/settings/settings.ts');
+  const app2 = new App({ store: new Store(join(dir2, 'c')), settingsFile: join(dir2, 's.json'), settings: loadSettings(join(dir2, 's.json')), claude: { path: null, version: null } });
+  const out: Array<Record<string, unknown>> = [];
+  const c2: Client = { send: (m) => void out.push(m as Record<string, unknown>) };
+  app2.connect(c2);
+  app2.handle(c2, { t: 'hello', protocol: 2 });
+  const st = out.at(-1)!.state as { problems?: Array<{ what: string }> };
+  assert.deepEqual(st.problems?.map((p) => p.what), ['settings']);
+});

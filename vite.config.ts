@@ -21,6 +21,12 @@ export default defineConfig({
   server: {
     port: webPort,
     strictPort: true,
-    proxy: { '/ws': { target: `ws://127.0.0.1:${serverPort}`, ws: true }, '/api': `http://127.0.0.1:${serverPort}` },
+    // Every path the server answers besides the page itself (server/transport/http.ts): the socket,
+    // /api/* (health, proof, shutdown, remote request and whoami) and /blob (pictures).
+    proxy: {
+      '/ws': { target: `ws://127.0.0.1:${serverPort}`, ws: true },
+      '/api': `http://127.0.0.1:${serverPort}`,
+      '/blob': `http://127.0.0.1:${serverPort}`,
+    },
   },
 });

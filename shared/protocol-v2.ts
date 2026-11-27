@@ -80,7 +80,7 @@ export type Sequenced<T> = T & { seq: number };
 export type ServerMsgV2 =
   /** Version 1's `state` with `protocol: 2`; `pending` holds summaries, not full requests. */
   /** `epoch` changes on every server start; send it back with `subscribe` so an old `seq` is never replayed. */
-  | { t: 'state'; protocol: 2; epoch: string; state: Record<string, unknown> & { pending: ApprovalSummary[]; blobToken?: string; backends?: BackendStatusV2[] } }
+  | { t: 'state'; protocol: 2; epoch: string; state: Record<string, unknown> & { pending: ApprovalSummary[]; blobToken?: string; backends?: BackendStatusV2[]; problems?: Array<{ what: 'settings' | 'devices'; message: string }> } }
   /** Snapshot on subscribe (or when `since` is too old to replay). */
   /** `lastItemIds`: each agent's newest stored item, so a reconnecting page fetches only newer ones. */
   | { t: 'conversation'; conv: ConversationMeta; agents: AgentInfo[]; pending: PermissionRequest[]; drafts: Record<string, Draft & { dseq: number }>; lastItemIds: Record<string, string>; seq: number }

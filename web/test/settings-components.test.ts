@@ -68,17 +68,30 @@ describe('ProfilesSection', () => {
     expect(saved.tiers).toHaveLength(3);
   });
 
-  it('copies, removes a copy, and resets a built-in team through the server', async () => {
+  it('copies; removing asks the server, and a team chats use is removed only after a second yes', async () => {
     window.confirm = vi.fn(() => true);
     const request = vi.spyOn(store, 'request').mockReturnValue(true);
     render(ProfilesSection);
     await fireEvent.click(screen.getAllByRole('button', { name: 'Make a copy' })[0]!);
-    expect(store.settings!.profiles.map((p) => p.label)).toContain('Claude (copy)');
+    const copy = store.settings!.profiles.find((p) => p.label === 'Claude (copy)')!;
+    expect(copy).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Remove team' }));
-    expect(store.settings!.profiles.map((p) => p.label)).not.toContain('Claude (copy)');
+    expect(request).toHaveBeenLastCalledWith({ t: 'delete_profile', id: copy.id });
+    // The server says 3 chats use it; the person confirms again and it is sent with force.
+    (store as unknown as { listeners: Map<string, Set<(m: Record<string, unknown>) => void>> }).listeners.get('error')!.forEach((fn) => fn({ t: 'error', code: 'refused', message: 'in use', inUse: { id: copy.id, chats: 3 } }));
+    expect((window.confirm as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]).toMatch(/^3 chats use the team “Claude \(copy\)”/);
+    expect(request).toHaveBeenLastCalledWith({ t: 'delete_profile', id: copy.id, force: true });
     await fireEvent.click(screen.getAllByRole('button', { name: 'Reset to the built-in team' })[0]!);
-    expect(request).toHaveBeenCalledWith({ t: 'reset_profile', id: 'claude' });
+    expect(request).toHaveBeenLastCalledWith({ t: 'reset_profile', id: 'claude' });
+  });
+
+  it('a level whose program name is invalid shows why', () => {
+    const p = claude();
+    p.tiers[1]!.unusable = 'Unknown agent program “x y”.';
+    store.settings = settings([p, codex()]);
+    render(ProfilesSection);
+    expect(screen.getByText(/Unknown agent program “x y”\./)).toBeTruthy();
   });
 
   it('a team whose program is not ready says so and cannot be the team for new chats', () => {

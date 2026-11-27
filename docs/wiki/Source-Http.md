@@ -23,7 +23,7 @@
 - `ServeOptions`:
   - `port`: the port; 0 picks a free one (the tests use this).
   - `webDir`: the built page (`dist/web`).
-  - `secret`: the local secret (`loadSecret()` in [server/transport/auth.ts](Source-Transport-Auth.md#loadsecretfile)).
+  - `secret`: the local secret (`loadSecret()` in [server/transport/auth.ts](Source-Transport-Auth.md#loadsecretfile--secret_file)).
   - `extraOrigins`: extra page origins allowed to open the socket. `runServer()` in `server/main.ts` passes the Vite development server's two origins in development, and none otherwise.
   - `onShutdown`: called after an authorised `POST /api/shutdown`.
   - `blobs`: the picture store (`app.blobs`). Without it the `/blob` routes are not wired and fall through to static serving.

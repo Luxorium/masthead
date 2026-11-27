@@ -377,3 +377,17 @@ test('remote: switching off works while Tailscale is down; the entry goes at the
   assert.deepEqual(tailscale.commands, [['serve', `--https=${PORT}`, 'off']]);
   void target;
 });
+
+test('remote: with a devices file from a newer Masthead, remote access stays off and says why', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mh-rw-'));
+  mkdirSync(join(dir, 'remote'), { recursive: true });
+  writeFileSync(join(dir, 'remote', 'devices.json'), JSON.stringify({ version: 9, devices: [] }));
+  writeFileSync(join(dir, 'remote', 'config.json'), JSON.stringify({ version: 1, enabled: true, port: 7443, allowOtherTailnets: false, allowTagged: false }));
+  const tailscale = new FakeTailscale({ running: true, dnsName: HOST, tailnetId: 'T1', selfNodeId: 'nSELF', https: true });
+  const access = new RemoteAccess({ dir: join(dir, 'remote'), tailscale, target: { kind: 'loopback', port: freePort() } });
+  assert.equal(access.enabled, false);
+  const r = await access.setEnabled(true);
+  assert.equal(r.ok, false);
+  assert.match(r.problem ?? '', /newer version of Masthead/);
+  assert.deepEqual(tailscale.commands, []);
+});

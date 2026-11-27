@@ -19,7 +19,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$here/scripts/path.sh"
 lib="${HOME}/.local/lib/masthead"
 bin="${HOME}/.local/bin"
-unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+# Always where `systemctl --user` reads units: its own XDG_CONFIG_HOME may differ from this shell's.
+unit_dir="$HOME/.config/systemd/user"
 apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
 
@@ -99,7 +100,8 @@ if ! mv "$stage" "$lib"; then
 fi
 
 # Quoting for the generated files, so paths with spaces or odd characters still work.
-unit_quote() { # one systemd unit word: backslash and double quote escaped, % doubled
+unit_quote() { # one systemd unit word: backslash and double quote escaped, % doubled; no line breaks
+  case "$1" in *$'\n'*|*$'\r'*) echo "A value for the service contains a line break: $1" >&2; exit 1 ;; esac
   local s="${1//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//%/%%}"; printf '"%s"' "$s"
 }
 exec_quote() { # a word on an Exec line also needs $ doubled

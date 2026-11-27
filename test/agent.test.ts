@@ -839,3 +839,18 @@ test('runtime on fake: without mid-turn delivery a message waits for the turn to
   assert.match(turns[0]!.text, /DONE/);
   assert.match(turns[0]!.text, /LATER/, 'one run: both turns in the outcome');
 });
+
+test('runtime on fake: a tier the settings mark unusable starts nothing and says why', async () => {
+  const settings = defaultSettings();
+  for (const p of settings.profiles) for (const t of p.tiers) if (t.id === 'sonnet') t.unusable = '"bad name" is not a valid agent program name.';
+  const sched = new Scheduler(() => 4);
+  const backend = new FakeBackend();
+  const h = fakeHost(sched, () => settings);
+  h.host.backend = () => backend;
+  const a = new Agent(info('bravo'), h.host, { owesReport: true, seed: 'hi' });
+  a.start();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(backend.sessions.length, 0);
+  assert.match(h.lost[0] ?? '', /can't be used: "bad name" is not a valid agent program name\. Edit the team in settings\./);
+  assert.equal(sched.running('sonnet'), 0);
+});

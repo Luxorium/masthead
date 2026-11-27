@@ -21,11 +21,11 @@ The scripts install for the current user. Nothing needs root. Running `install.s
 |---|---|---|
 | The app | `~/.local/lib/masthead` (always under `$HOME`) | `lib` |
 | The `masthead` command | `~/.local/bin/masthead` (always under `$HOME`) | `bin` |
-| The systemd user unit | `$XDG_CONFIG_HOME/systemd/user/masthead.service` (default `~/.config/…`) | `unit_dir` |
+| The systemd user unit | `~/.config/systemd/user/masthead.service` (always: where `systemctl --user` reads units) | `unit_dir` |
 | The desktop entry | `$XDG_DATA_HOME/applications/masthead.desktop` (default `~/.local/share/…`) | `apps` |
 | The icon | `$XDG_DATA_HOME/icons/hicolor/scalable/apps/masthead.svg` | `icons` |
 
-Because the unit, desktop entry and icon follow `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, run `install.sh` from a shell where those are either unset or set to the folders you really use. A shell left with a test server's temporary XDG folders would install the unit there and bake those folders into it (see step 6).
+The unit always goes to `~/.config/systemd/user`, where `systemctl --user` reads it. The desktop entry and icon follow `XDG_DATA_HOME`, and a set `XDG_CONFIG_HOME`/`XDG_DATA_HOME` is baked into the unit (see step 6), so run `install.sh` from a shell where those are either unset or set to the folders you really use. Any value with a line break is refused before the unit is written. `uninstall.sh` runs `masthead remote off` first (Masthead's own Tailscale entry), and removes the unit both from `~/.config/systemd/user` and from an older `$XDG_CONFIG_HOME` location.
 
 ## What `install.sh` does
 

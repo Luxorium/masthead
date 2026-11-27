@@ -31,16 +31,11 @@
   });
 
   const line = $derived(toolLine(request.toolName, request.input));
-  const WANTS: Record<string, string> = {
-    Bash: 'wants to run a command',
-    Write: 'wants to write a file',
-    Edit: 'wants to edit a file',
-    NotebookEdit: 'wants to edit a notebook',
-    Read: 'wants to read a file',
-    WebFetch: 'wants to fetch a web page',
-    WebSearch: 'wants to search the web',
-  };
-  const wants = $derived(WANTS[request.toolName] ?? `wants to use ${request.toolName.replace(/^mcp__/, '').replace(/__/g, ' · ')}`);
+  const wants = $derived(
+    request.toolName !== 'other' && typeof T.wants[request.toolName] === 'string'
+      ? (T.wants[request.toolName] as string)
+      : T.wants.other(request.toolName.replace(/^mcp__/, '').replace(/__/g, ' · ')),
+  );
   const detail = $derived.by(() => {
     const i = (request.input ?? {}) as Record<string, unknown>;
     if (typeof i.command === 'string') return i.command;

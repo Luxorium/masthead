@@ -13,13 +13,13 @@ Files: `package.json`, `package-lock.json`, `tsconfig.server.json`, `tsconfig.we
 | `private` | `true` | Stays until the name is decided, so nothing can be published by accident. npm refuses to publish a private package. |
 | `type` | `module` | Every `.js` file is an ES module (`import`/`export`). |
 | `bin` | `masthead` → `dist/server/main.js` | The `masthead` command. `server/main.ts` starts with `#!/usr/bin/env node`, so npm can link it on Linux and macOS and make a `.cmd` shim on Windows. |
-| `files` | `dist/`, `README.md`, `LICENSE`, `CHANGELOG.md` | Only these go into the tarball (npm adds `package.json` itself). No sources, tests or plans. |
+| `files` | `dist/` without `dist/server/backends/codex/protocol/` and `dist/server/backends/codex/testing/`, plus `README.md`, `LICENSE`, `CHANGELOG.md` | Only these go into the tarball (npm adds `package.json` itself). The Codex protocol files are imported for their types only (empty at run time) and the Codex fake is for tests only. No sources, tests or plans. |
 | `engines` | `node >=22` | Node 22 or newer. |
 | `os` | `linux`, `darwin`, `win32` | npm refuses to install on any other system. |
 | `publishConfig` | `access: public`, `provenance: true` | A scoped package is private on npm unless `access` is public. Provenance links the package to the CI run that built it. |
 | `license`, `homepage`, `repository`, `bugs`, `keywords` | MIT, the GitHub project | Shown on the npm page. |
 
-`npm pack --dry-run` on 2026-11-27 gave `luxorium-masthead-0.1.4.tgz`: 425 files, 325.8 kB packed, 1.1 MB unpacked. Apart from `dist/` it held only `CHANGELOG.md`, `LICENSE`, `README.md` and `package.json`. (The count grows with the code.)
+`npm pack --dry-run` on 2026-11-27, after the clean build and the Codex exclusions, gave `luxorium-masthead-0.1.4.tgz`: 57 files, 289.9 kB packed. Apart from `dist/` it held only `CHANGELOG.md`, `LICENSE`, `README.md` and `package.json`. (The count grows with the code.)
 
 ### Optional packages
 
@@ -46,7 +46,7 @@ The two places that use `--omit=optional` are installs that need no build: the i
 | `start` | `node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED dist/server/main.js serve` |
 | `prepack` | `npm run build` |
 
-`prepack` runs before `npm pack` and `npm publish`, so the tarball always holds a fresh `dist/`. A clean checkout has no `dist/` (it is git-ignored), and without `prepack` the `bin` would point at nothing. What each script is for: [Building, testing and installing](Building-Testing-Installing.md#npm-scripts).
+`build` starts with `clean` (deletes `dist/` with a one-line Node script, so it works on Windows too): files of moved or deleted sources can no longer linger in `dist/` and ship. `prepack` runs before `npm pack` and `npm publish`, so the tarball always holds a fresh `dist/`. A clean checkout has no `dist/` (it is git-ignored), and without `prepack` the `bin` would point at nothing. What each script is for: [Building, testing and installing](Building-Testing-Installing.md#npm-scripts).
 
 ### Dependencies
 

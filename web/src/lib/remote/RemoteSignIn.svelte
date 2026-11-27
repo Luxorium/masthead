@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { T } from '../text.ts';
   // What a device on the tailnet sees until it is allowed: who it is to that computer, a request with
   // a code to compare, and a poll until the person decides. The poll secret survives a reload
   // (sessionStorage), because asking again while a request waits is refused.
@@ -126,7 +127,7 @@
     <button class="btn primary" onclick={ask} disabled={busy}>{RT.signIn.ask}</button>
   {:else if phase === 'waiting'}
     <p>{RT.signIn.codeLead}</p>
-    <p class="code mono" aria-label="Code {code.split('').join(' ')}">{spacedCode(code)}</p>
+    <p class="code mono" aria-label={T.images.code(code)}>{spacedCode(code)}</p>
     <p role="status" class="muted">{RT.signIn.waiting}</p>
   {:else if phase === 'gone'}
     <p role="status">{RT.signIn.notAllowed}</p>

@@ -178,7 +178,10 @@ export class Store {
    * Whether an agent backend is there to run. Until the server sends `state.backends` (W8) this reads
    * the Claude Code info: a path, or (for the test-only fake backend) a version without a path.
    */
-  canRun = $derived(!!this.app && (!!this.app.claude.path || !!this.app.claude.version));
+  canRun = $derived(
+    !!this.app &&
+      (this.backends.some((b) => b.available === true) || !!this.app.claude.path || !!this.app.claude.version),
+  );
   convPending = $derived(this.pending.filter((p) => p.convId === this.convId));
   liveCount = $derived(this.agentList.filter((a) => a.tier !== 'lead' && (a.status === 'queued' || a.status === 'running' || a.status === 'waiting')).length);
 
@@ -379,6 +382,10 @@ export class Store {
   /** What this page may do: everything on this computer; on a device, what its role allows. */
   get mayAct(): boolean {
     return this.deviceRole === null || this.deviceRole === 'full';
+  }
+  /** Stopping work: full and approve devices may (the server allows both). */
+  get mayStop(): boolean {
+    return this.deviceRole !== 'read';
   }
   get mayAnswer(): boolean {
     return this.deviceRole === null || this.deviceRole !== 'read';

@@ -89,15 +89,20 @@ test('doctor: folders that are missing warn, not writable or not a folder fail',
   assert.equal(file.ok, false);
 });
 
-test('doctor: a secret others can read fails; on Windows the mode is not checked', async () => {
+test('doctor: a secret others can read fails; on Windows the ACL decides, not the mode', async () => {
   const open = { stat: (p: string) => (p === paths.secretFile ? { isDirectory: false, mode: 0o100644 } : { isDirectory: true, mode: 0o40755 }), writable: () => true };
   const c = byName(await doctor(deps({ fs: open })), 'Secret');
   assert.equal(c.ok, false);
   assert.match(c.detail, /mode 644/);
-  assert.match(c.fix!, /chmod 600/);
-  const win = byName(await doctor(deps({ fs: open, platform: 'win32' })), 'Secret');
-  assert.equal(win.ok, true);
-  assert.match(win.detail, /ACL/);
+  assert.match(c.fix!, /replaced with a new one/);
+  const winOk = byName(await doctor(deps({ fs: open, platform: 'win32', isPrivate: () => true })), 'Secret');
+  assert.ok(winOk.ok && !winOk.warn);
+  assert.match(winOk.detail, /only you/);
+  const winOpen = byName(await doctor(deps({ fs: open, platform: 'win32', isPrivate: () => false })), 'Secret');
+  assert.equal(winOpen.ok, false);
+  assert.match(winOpen.fix!, /Delete/);
+  const unchecked = byName(await doctor(deps({ fs: open, platform: 'win32' })), 'Secret');
+  assert.ok(unchecked.warn, 'without an ACL probe it says so, never "private"');
 });
 
 test('doctor: the port is free or ours, else it fails', async () => {
