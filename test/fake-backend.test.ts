@@ -20,6 +20,7 @@ test('fake: selected only on purpose', () => {
 test('fake: the script is decided by the text alone', () => {
   assert.deepEqual(plan('hello'), [{ kind: 'reply', text: 'Fake reply: hello' }]);
   assert.deepEqual(plan('[[limit 30s]]'), [{ kind: 'limit', seconds: 30 }]);
+  assert.deepEqual(plan('[[limit 60]]'), [{ kind: 'limit', seconds: 60 }], 'a bare number is ignored: the default 60 s, never 60 ms');
   assert.deepEqual(plan('[[background 200ms]]'), [{ kind: 'background', ms: 200, silent: false }]);
   assert.deepEqual(plan('Reply with exactly the word X'), [{ kind: 'word', word: 'X' }]);
 });

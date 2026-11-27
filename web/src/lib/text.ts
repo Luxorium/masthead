@@ -2,7 +2,13 @@
 // No translations yet; keeping the text here makes wording reviews (and a later translation) one file.
 // Functions take what varies (names, counts, times); everything else is a plain string.
 
+import type { RemoteRole } from './remote/types.ts';
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+/** A date and time for lists (remote devices, activity). */
+/** A device role in the page's words (the audit log stores the id). */
+const roleWord = (role: string) => ({ full: 'everything', approve: 'answer approvals and stop work', read: 'only read' })[role] ?? role;
+const when = (ts: number) => new Date(ts).toLocaleString([], { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 
 export const T = {
   app: {
@@ -272,6 +278,175 @@ export const T = {
     roleApprove: 'This device can follow the chats and answer questions and permission requests, but not send messages or change settings.',
   },
 
+  /** Remote access (web/src/lib/remote). */
+  remote: {
+  signIn: {
+    title: 'Open Masthead on this device',
+    checking: 'Checking this device…',
+    withdrawn: 'This computer withdrew access for this device.',
+    intro: (device: string) => `Masthead runs on another computer. To use it from ${device}, ask that computer to allow this device.`,
+    ask: 'Ask for access',
+    askAgain: 'Ask again',
+    codeLead: 'Check that the same code shows on the computer, then allow this device there:',
+    waiting: 'Waiting for approval…',
+    notAllowed: 'This device was not allowed, or the request ran out.',
+    tooMany: 'Too many requests from this device. Wait a minute, then ask again.',
+    refused: (reason: string) => `This computer does not accept this device: ${reason}.`,
+    offline: 'Could not reach the computer. Check that it is on and connected to Tailscale.',
+  },
+  request: {
+    label: (device: string) => `${device} asks to use Masthead`,
+    heading: (device: string) => `${device} wants to use Masthead`,
+    from: (os: string, user: string | undefined, address: string) => [os, user, address].filter(Boolean).join(' · '),
+    codeLead: 'Allow it only if this code shows on that device:',
+    warning: 'Allowing this device lets it do everything you can do here, including running commands.',
+    role: 'What it may do',
+    allow: 'Allow',
+    deny: 'Deny',
+  },
+  role: {
+    full: 'Everything',
+    approve: 'Answer approvals and stop work',
+    read: 'Only read',
+  } satisfies Record<RemoteRole, string>,
+  section: {
+    title: 'Remote access',
+    intro: 'Use Masthead from your other devices on your own Tailscale network. Nothing is opened to the internet.',
+    switch: 'Allow my other devices to connect',
+    noTailscale: 'Tailscale is not available on this computer.',
+    on: (url: string) => `On. Open this address on your other device: ${url}`,
+    off: 'Off.',
+    pending: 'Turning on…',
+    command: 'Run this once in a terminal, then switch it on again:',
+    copy: 'Copy',
+    copied: 'Copied',
+    port: 'Port',
+    portLocked: 'Switch remote access off to change the port.',
+    otherTailnets: 'Allow devices shared from other Tailscale networks',
+    tagged: 'Allow devices without a user (tagged devices)',
+    devices: 'Allowed devices',
+    noDevices: 'No device is allowed yet.',
+    device: (name: string) => `Device ${name}`,
+    deviceRole: (name: string) => `What ${name} may do`,
+    revoke: 'Remove',
+    revokeLabel: (name: string) => `Remove ${name}`,
+    seen: (ts: number) => `Last used ${when(ts)}`,
+    expires: (ts: number) => `Allowed until ${when(ts)}, renewed when used`,
+    audit: 'Recent activity',
+    loadAudit: 'Show recent activity',
+    noAudit: 'Nothing yet.',
+  },
+  event: (e: { event: string; nodeName?: string; detail?: string }) => {
+    const who = e.nodeName ?? 'A device';
+    switch (e.event) {
+      case 'request':
+        return `${who} asked for access`;
+      case 'allow':
+        return `${who} was allowed${e.detail ? ` (${roleWord(e.detail)})` : ''}`;
+      case 'deny':
+        return `${who} was turned down`;
+      case 'collect':
+        return `${who} received its access`;
+      case 'connect':
+        return `${who} connected`;
+      case 'revoke':
+        return `${who} was removed`;
+      case 'expire':
+        return `${who}'s access ran out`;
+      case 'role':
+        return `${who} may now: ${roleWord(e.detail ?? '')}`;
+      case 'refuse':
+        return `${who} was refused${e.detail ? `: ${e.detail}` : ''}`;
+      case 'switch':
+        return e.detail ? e.detail.charAt(0).toUpperCase() + e.detail.slice(1) : 'Remote access changed';
+      case 'forget':
+        return `${who} signed itself out`;
+      default:
+        return `${who}: access changed`;
+    }
+  },
+  when,
+},
+
+  /** Teams and agent programs in the settings (web/src/lib/settings). */
+  teams: {
+  backends: {
+    heading: 'Agents on this computer',
+    intro: 'The AI coding programs Masthead can run your team on.',
+    checkAgain: 'Check again',
+    checking: 'Checking…',
+    found: 'Ready',
+    notFound: 'Not found',
+    notReady: 'Not ready',
+    version: (v: string) => `Version ${v}`,
+    models: (n: number) => (n === 1 ? '1 model' : `${n} models`),
+    install: (label: string) => `Install ${label}, then press “Check again”.`,
+    signIn: (label: string) => `Sign in to ${label} in a terminal, then press “Check again”.`,
+    tooOld: (label: string, min: string) => `This ${label} is too old. Update it to version ${min} or later, then press “Check again”.`,
+    note: 'Note',
+    none: 'No agent program was found on this computer yet.',
+  },
+  teams: {
+    heading: 'Teams',
+    intro: 'A team is the main assistant and the helpers it may bring in, one level each.',
+    forNewChats: 'Team for new chats',
+    edit: (name: string) => `Edit ${name}`,
+    close: 'Done',
+    duplicate: 'Make a copy',
+    remove: 'Remove team',
+    removeConfirm: (name: string) => `Remove the team “${name}”? Chats that used it keep their history.`,
+    reset: 'Reset to the built-in team',
+    resetDone: 'Restored the built-in team.',
+    builtIn: 'Built in',
+    copyOf: (name: string) => `${name} (copy)`,
+    proposalTitle: 'A team for Codex is ready',
+    proposalBody: 'Masthead put it together from the models your Codex offers. Use it as it is, or change it first.',
+    useIt: 'Use it for new chats',
+    changeFirst: 'Change it first',
+    unusable: (backend: string) => `Needs ${backend}, which is not ready on this computer.`,
+    save: 'Save team',
+    saved: 'Team saved.',
+    cancel: 'Cancel',
+    teamName: 'Team name',
+  },
+  level: {
+    title: (n: number, model: string) => (n === 1 ? `Main assistant: ${model}` : `Level ${n} helper: ${model}`),
+    name: 'Name shown',
+    program: 'Agent program',
+    model: 'Model',
+    thinking: 'Thinking time up to',
+    helpers: 'Helpers at a time',
+    helpersNone: 'The main assistant is always one.',
+    light: 'Keep light',
+    lightHint: 'Leaves out your own extra tools (MCP servers), so it starts faster and uses less.',
+    colour: 'Colour',
+    add: 'Add a helper level',
+    removeLevel: 'Remove this level',
+    moveUp: 'Move up',
+    moveDown: 'Move down',
+    thinkingLevel: { low: 'Short', medium: 'Medium', high: 'Long', xhigh: 'Longest' } as Record<string, string>,
+    colourName: { amber: 'Amber', violet: 'Violet', blue: 'Blue', teal: 'Teal', rose: 'Rose', green: 'Green', slate: 'Slate', orange: 'Orange' } as Record<string, string>,
+  },
+  problems: {
+    noName: 'Give the team a name.',
+    nameTaken: 'Another team already has this name.',
+    noLevels: 'A team needs at least the main assistant.',
+    tooMany: (max: number) => `A team can have at most ${max} levels.`,
+    noModel: (n: number) => `Choose a model for level ${n}.`,
+    modelGone: (n: number, model: string) => `Level ${n} uses ${model}, which this program no longer offers. Choose another model.`,
+    thinkingNotOffered: (n: number) => `The model of level ${n} does not offer that thinking time. Choose a shorter one.`,
+    helpersRange: (n: number, max: number) => `Level ${n} may have from 0 to ${max} helpers at a time.`,
+    helpersZero: (n: number) => `Level ${n} has 0 helpers at a time, so the levels after it would never start. Remove them or allow at least 1.`,
+    oneProgram: 'Every level of a team uses the same agent program for now.',
+    programNotReady: (label: string) => `${label} is not ready on this computer, so this team cannot start yet.`,
+  },
+  chip: {
+    // Read by people who have never heard of teams: say which AI does the work.
+    label: (name: string) => `Uses ${name}`,
+    menu: 'Choose which AI works on this chat',
+  },
+},
+
   errors: {
     notConnected: "Masthead isn't answering. Check that it is running, then try again.",
   },
@@ -291,4 +466,13 @@ export function friendlyError(message: string): string {
   ];
   for (const [re, text] of known) if (re.test(message)) return text;
   return message;
+}
+
+/**
+ * A program's name for people, when the server's list does not have it (not installed): never the id.
+ */
+export function programName(id: string, label?: string): string {
+  if (label) return label;
+  const known: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', fake: 'the test program' };
+  return known[id] ?? id.replace(/[-_]/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 }

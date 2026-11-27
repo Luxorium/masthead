@@ -114,3 +114,25 @@ test('a conversation on the generated Codex team runs end to end on the fake app
     await registry.dispose();
   }
 });
+
+test('registry: "check again" looks for Claude Code again and offers it without a restart', async () => {
+  let installed = false;
+  const r = new BackendRegistry({
+    env: {},
+    claude: { path: null, version: null, error: 'Claude Code was not found.' },
+    findClaude: () => (installed ? { path: '/new/claude', version: '2.1.400' } : { path: null, version: null, error: 'Claude Code was not found.' }),
+    codex: false,
+  });
+  await r.detectAll();
+  assert.equal(r.get('claude-code'), undefined);
+  installed = true;
+  const s = await r.detectAll();
+  const c = s.find((x) => x.id === 'claude-code')!;
+  assert.equal(c.available, true);
+  assert.equal(c.version, '2.1.400');
+  assert.ok(r.get('claude-code'));
+  assert.deepEqual(r.claudeInfo(), { path: '/new/claude', version: '2.1.400' });
+  const broken = new BackendRegistry({ env: {}, findClaude: () => ({ path: '/x/claude', version: null, error: 'Could not run it.' }), codex: false });
+  await broken.detectAll();
+  assert.equal(broken.get('claude-code'), undefined, 'a binary that will not run is not usable');
+});

@@ -4,7 +4,7 @@ The page and the server talk over one WebSocket at `/ws`, plus two small HTTP ro
 
 Where it lives:
 
-- Types: `shared/protocol.ts` (`ClientMsg`, `ServerMsg`, the version 1 set, already extended with paging fields, `blobs`, `profile` and the error `code`) and `shared/protocol-v2.ts` (`ClientMsgV2`, `ServerMsgV2`, `PROTOCOL_VERSION = 2`, `Capability`, `ErrorCode`, `CLIP_CHARS`, `RING_SIZE`, `ApprovalSummary`). The comment in `protocol-v2.ts` says the two files are to merge into one before 0.2.0; on disk they are still two.
+- Types: `shared/protocol.ts` (`ClientMsg`, `ServerMsg`, the version 1 set, already extended with paging fields, `blobs`, `profile` and the error `code`) and `shared/protocol-v2.ts` (`ClientMsgV2`, `ServerMsgV2`, including the remote-access and backend messages, `PROTOCOL_VERSION = 2`, `Capability`, `ErrorCode`, `CLIP_CHARS`, `RING_SIZE`, `ApprovalSummary`). The comment in `protocol-v2.ts` says the two files are to merge into one before 0.2.0; on disk they are still two.
 - Per-tab handling: `Hub` in `server/app/clients.ts` (versions, subscriptions, sequence numbers, draft deltas, clipping, error shapes, the role gate).
 - Requests: `App.handle()` → `Hub.admit()` → `Hub.intercept()` → `App.remoteMessage()` → `App.dispatch()` in `server/app/app.ts`.
 - Socket plumbing: `attach()` in `server/transport/http.ts` (local) and `server/transport/remote.ts` (remote devices).
@@ -52,7 +52,7 @@ sequenceDiagram
 - `{t:'hello', protocol: 2, caps?}`: the tab becomes version 2; `caps` (strings) are recorded; the reply is the version 2 `state`.
 - Any other `protocol` value: error `protocol`, "This Masthead speaks protocol 2. Reload the page."
 
-**Capabilities.** `Capability` is `'drafts-delta' | 'items-paging' | 'blobs' | 'resync'`, and the page sends all four. The `Hub` stores them (`Session.caps`) but nothing in `server/app/clients.ts` reads them: every version 2 tab gets deltas, paging, blob refs and resync whatever it listed.
+**Capabilities.** `Capability` is `'drafts-delta' | 'items-paging' | 'blobs' | 'resync'`, and the page sends all four. The `Hub` stores them (`Session.caps`) for later use; nothing reads them yet, so every version 2 tab gets deltas, paging, blob refs and resync whatever it listed.
 
 **Version 2 `state`** (`Hub.stateV2()`): `{t:'state', protocol: 2, epoch, state}`. `state` is the `AppState` (`version`, `settings`, `conversations`, `claude`, `home`, `usage`, `blobToken`), with two differences from version 1: `pending` holds `ApprovalSummary` objects (`id`, `convId`, `agentName`, `kind`) instead of whole requests, and `backends` (the registry's detection status) is added. A local tab also gets `remote` (the remote-access state); a remote device never does (`App.state()`).
 
@@ -170,9 +170,9 @@ Any other `t` gets "Unknown request." (code `invalid`).
 | `permission_resolved` | `requestId` | A request was answered, cancelled or withdrawn. |
 | `settings` | `settings` | Settings changed. |
 | `rate_limit` | `notice: RateLimitNotice` | A backend reported the usage-limit state; the latest per `type` is kept for `state.usage`. |
-| `backends` | `backends` | After `check_backends`. Not in the `ServerMsg` types (sent with a cast in `App.remoteMessage()`). |
-| `remote` | `remote` | Local tabs only: the remote-access state changed. Not in the `ServerMsg` types. |
-| `remote_audit` | `entries` | Reply to `remote_audit`. Not in the `ServerMsg` types. |
+| `backends` | `backends` | After `check_backends`. |
+| `remote` | `remote` | Local tabs only: the remote-access state changed. |
+| `remote_audit` | `entries` | Reply to `remote_audit`. |
 | `resync` | `convId` | Version 2: the events since `since` cannot be replayed; a snapshot follows. |
 | `item_full` | `convId`, `agentId`, `item` | Reply to `item_full`. |
 | `dirs` | `path`, `parent`, `entries`, `error?` | Reply to `dirs`. |
@@ -195,7 +195,7 @@ Codes (`ErrorCode` in `shared/protocol-v2.ts`):
 | `too_large` | Over a limit: message text (400,000 characters), image count (8), one image over 5 MB, images over 30 MB together. |
 | `invalid` | Malformed JSON or message, unknown request, or a bad field ("The message is empty.", "Unsupported image.", "Bad image list.", a folder that is not a folder, "Allow or deny."). |
 
-Most errors are thrown as `ClientError` with their code. Errors thrown as plain `Error` get a code from their text (`codeOf()`): "no longer exists" or "not found" → `not_found`; "too long", "larger than", "at most", "too large" → `too_large`; anything else → `invalid`. A side effect of the text match: "Claude Code was not found." (starting a conversation when Claude Code is missing) is coded `not_found`, not `invalid`.
+Most errors are thrown as `ClientError` with their code. An error thrown as plain `Error` gets a code from its text (`codeOf()`): "no longer exists" → `not_found`; "too long", "larger than", "at most", "too large" → `too_large`; anything else → `invalid` (for example "Claude Code was not found." when a conversation cannot start).
 
 ## Image routes (`server/transport/blobs.ts`)
 

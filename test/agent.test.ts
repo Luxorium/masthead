@@ -824,3 +824,18 @@ test('runtime on fake: a team tool reported under its bare name is shown like Cl
   await wait(() => turns.length === 1);
   assert.ok(items.some((i) => i.kind === 'tool' && (i as { name: string }).name === 'mcp__masthead__list_agents'));
 });
+
+test('runtime on fake: without mid-turn delivery a message waits for the turn to end, then starts the next', async () => {
+  const { host, turns, wait, backend } = onFake({ slowMs: 60, caps: { midTurnDelivery: false } });
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Count slowly please' });
+  a.start();
+  await wait(() => a.status === 'running' && a.hasProcess);
+  await new Promise((r) => setTimeout(r, 15));
+  a.deliver('Reply with exactly the word LATER');
+  assert.equal(backend.sessions[0]!.received.length, 1, 'kept back while the turn runs');
+  assert.equal(a.busy, true);
+  await wait(() => turns.length === 1);
+  assert.equal(backend.sessions[0]!.received.length, 2);
+  assert.match(turns[0]!.text, /DONE/);
+  assert.match(turns[0]!.text, /LATER/, 'one run: both turns in the outcome');
+});

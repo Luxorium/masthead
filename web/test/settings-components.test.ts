@@ -95,9 +95,9 @@ describe('ProfileChip', () => {
   it('opens a menu of usable teams, picks one, and closes with Esc returning focus', async () => {
     const onchange = vi.fn();
     render(ProfileChip, { value: 'claude', onchange });
-    const chip = screen.getByRole('button', { name: 'Team: Claude' });
+    const chip = screen.getByRole('button', { name: 'Uses Claude' });
     await fireEvent.click(chip);
-    const menu = screen.getByRole('menu', { name: 'Choose a team for this chat' });
+    const menu = screen.getByRole('menu', { name: 'Choose which AI works on this chat' });
     expect(within(menu).getAllByRole('menuitemradio').map((i) => i.textContent?.trim())).toEqual(['Claude', 'Codex']);
     await fireEvent.keyDown(menu, { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
@@ -110,7 +110,7 @@ describe('ProfileChip', () => {
   it('lists only teams that can start', async () => {
     store.backends = backends(false) as unknown as Record<string, unknown>[];
     render(ProfileChip, { value: 'claude', onchange: () => {} });
-    await fireEvent.click(screen.getByRole('button', { name: 'Team: Claude' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Uses Claude' }));
     expect(screen.getAllByRole('menuitemradio')).toHaveLength(1);
   });
 });

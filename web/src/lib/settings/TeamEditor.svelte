@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { programName } from '../text.ts';
   // Edits one team on a copy: 1 to 5 levels, each with its program, model and thinking time from that
   // program's real model list, helpers at a time, colour and the "keep light" switch. Nothing is sent
   // until Save; the problems list says in plain words what stops saving.
@@ -84,7 +85,7 @@
               <span>{ST.level.program}</span>
               <select id={fid(i, 'program')} value={t.backend} onchange={(e) => setProgram(i, e.currentTarget.value)}>
                 {#each programs as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
-                {#if !b}<option value={t.backend}>{t.backend}</option>{/if}
+                {#if !b}<option value={t.backend}>{programName(t.backend)}</option>{/if}
               </select>
             </label>
           {/if}

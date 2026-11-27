@@ -211,7 +211,7 @@ Not in the runtime any more (now in the Claude adapter): the `Channel` input str
 ## Points to be aware of
 
 - The `AgentHost.backend?` doc comment (line 51) still says an undefined backend means Claude Code at `claudePath()`; the code fails the agent instead unless `host.query` is set.
-- `BackendCaps.midTurnDelivery` says that when false "the runtime queues sends until turnEnded"; this runtime does not, it always sends at once. The fake backend batches by itself; the runtime only passes the cap to `systemAppend`. `caps.consumedIds` is not read by the runtime (a `null` from the backend is enough).
+- With `BackendCaps.midTurnDelivery` false, a message delivered during a turn is kept in `afterTurn` (still unanswered, so the agent stays busy) and sent when that turn's result arrives, before the run's end is decided; the next turn is part of the same run. `caps.consumedIds` is not read by the runtime (a `null` from the backend is enough).
 - For the lead the context size is read twice per turn end (`handleResult()` and `Conversation.turnEnded()`); harmless.
 - If `launch()` threw after `backend.open()` succeeded, the catch in `ensureProcess()` would drop the session without closing it. Nothing after `open()` is expected to throw.
 

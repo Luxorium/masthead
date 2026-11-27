@@ -2,7 +2,7 @@
 // version 1 (shared/protocol.ts). Kept in its own file while shared/protocol.ts is being reworked by
 // another change; the two merge into one file before 0.2.0. Nothing in here may import Node or DOM APIs.
 // Agreed with the page side (charlie, web.md section 2; core.md section 7).
-import type { AgentInfo, ClientMsg, ConversationMeta, Draft, Item, PermissionRequest, ServerMsg } from './protocol.js';
+import type { AgentInfo, ClientMsg, ConversationMeta, Draft, Effort, Item, PermissionRequest, ServerMsg } from './protocol.js';
 
 export const PROTOCOL_VERSION = 2;
 
@@ -15,6 +15,32 @@ export type ErrorCode = 'protocol' | 'refused' | 'not_found' | 'too_large' | 'in
 export const CLIP_CHARS = 16 * 1024;
 /** Events kept per conversation for resync. */
 export const RING_SIZE = 500;
+
+/** A model a backend offers (copy of server/backends/types.ts ModelInfo; checked in server/app/app.ts). */
+export interface BackendModelV2 {
+  id: string;
+  label: string;
+  efforts: Effort[];
+  nativeEffort: Partial<Record<Effort, string>>;
+  contextWindow?: number;
+  default?: boolean;
+  description?: string;
+  order?: number;
+}
+
+/** An agent program on this computer (copy of server/backends/registry.ts BackendStatus). */
+export interface BackendStatusV2 {
+  id: string;
+  label: string;
+  available: boolean;
+  path: string | null;
+  version: string | null;
+  signedIn: boolean | null;
+  minVersion?: string;
+  error?: string;
+  warning?: string;
+  models: BackendModelV2[];
+}
 
 /** For badges on every conversation: who is asking, without the request itself. */
 export interface ApprovalSummary {
@@ -38,6 +64,13 @@ export type ClientMsgV2 =
   | { t: 'items'; convId: string; agentId: string; before?: number | null; limit?: number }
   /** Version 1's `send`, plus the team profile for a new conversation (default: the settings' default). */
   | (Extract<ClientMsg, { t: 'send' }> & { profile?: string })
+  | { t: 'check_backends' }
+  | { t: 'remote_settings'; enabled?: boolean; port?: number; allowOtherTailnets?: boolean; allowTagged?: boolean }
+  | { t: 'device_decision'; requestId: string; decision: 'allow' | 'deny'; role?: 'full' | 'approve' | 'read' }
+  | { t: 'device_revoke'; nodeId: string }
+  | { t: 'device_role'; nodeId: string; role: 'full' | 'approve' | 'read' }
+  | { t: 'remote_audit' }
+  | { t: 'forget_me' }
   | ClientMsg;
 
 /** A per-conversation event as sent to a subscriber: version 1's event plus its sequence number. */
@@ -47,7 +80,7 @@ export type Sequenced<T> = T & { seq: number };
 export type ServerMsgV2 =
   /** Version 1's `state` with `protocol: 2`; `pending` holds summaries, not full requests. */
   /** `epoch` changes on every server start; send it back with `subscribe` so an old `seq` is never replayed. */
-  | { t: 'state'; protocol: 2; epoch: string; state: Record<string, unknown> & { pending: ApprovalSummary[]; blobToken?: string } }
+  | { t: 'state'; protocol: 2; epoch: string; state: Record<string, unknown> & { pending: ApprovalSummary[]; blobToken?: string; backends?: BackendStatusV2[] } }
   /** Snapshot on subscribe (or when `since` is too old to replay). */
   /** `lastItemIds`: each agent's newest stored item, so a reconnecting page fetches only newer ones. */
   | { t: 'conversation'; conv: ConversationMeta; agents: AgentInfo[]; pending: PermissionRequest[]; drafts: Record<string, Draft & { dseq: number }>; lastItemIds: Record<string, string>; seq: number }
@@ -67,4 +100,9 @@ export type ServerMsgV2 =
   | { t: 'item_full'; convId: string; agentId: string; item: Item }
   | { t: 'items'; convId: string; agentId: string; items: Item[]; draft: Draft | null; cursor?: number | null; more?: boolean }
   | { t: 'error'; code: ErrorCode; message: string; ref?: string }
+  /** The agent programs found on this computer (version 2 tabs; after `check_backends`). */
+  | { t: 'backends'; backends: BackendStatusV2[] }
+  /** Remote access state, to local tabs only (shape: server/remote/access.ts RemoteState). */
+  | { t: 'remote'; remote: Record<string, unknown> }
+  | { t: 'remote_audit'; entries: Array<{ ts: number; event: string; nodeId?: string; nodeName?: string; user?: string; address?: string; detail?: string }> }
   | ServerMsg;

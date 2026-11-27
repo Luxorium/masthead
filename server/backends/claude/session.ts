@@ -99,6 +99,8 @@ export interface ClaudeBackendOptions {
   /** As found at start-up (findClaude), for detect(). */
   version?: string | null;
   error?: string;
+  /** Looks for Claude Code again (path search and --version); detect() calls it each time when set. */
+  find?: () => { path: string | null; version: string | null; error?: string };
   /** How the Claude Code process is started and stopped; tests replace it. */
   treeDeps?: TreeDeps;
   /** Starts a session; tests replace it. Defaults to the Agent SDK's `query`. */
@@ -112,12 +114,19 @@ export class ClaudeBackend implements Backend {
 
   constructor(private opts: ClaudeBackendOptions) {}
 
+  /** Looks for Claude Code again when a finder was given (a real start); otherwise reports what it was given. */
   async detect(): Promise<BackendInfo> {
-    // Detection still lives in settings/app (findClaude) until the registry step.
+    if (this.opts.find) {
+      const found = this.opts.find();
+      this.opts.path = found.path;
+      this.opts.version = found.version;
+      this.opts.error = found.error;
+    }
     return {
       id: this.id,
       label: this.label,
-      available: this.opts.path !== null,
+      // A binary that would not run (`--version` failed) is not usable either.
+      available: this.opts.path !== null && !this.opts.error,
       path: this.opts.path,
       version: this.opts.version ?? null,
       signedIn: null,

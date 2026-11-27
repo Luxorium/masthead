@@ -27,6 +27,7 @@ import type { BlobRef } from '../storage/blobs.js';
 import { Store } from '../storage/store.js';
 import type { RemoteAccess } from '../remote/access.js';
 import { ClientError, Hub, type Client } from './clients.js';
+import type { BackendStatusV2 } from '../../shared/protocol-v2.js';
 
 /** A browser tab connected to the server. */
 export type { Client } from './clients.js';
@@ -80,7 +81,7 @@ export class App implements ConversationHost {
     // variables for it, and the page can never choose it.
     const fakeOnly = fakeBackendSelected(process.env);
     this.claude = fakeOnly ? { path: null, version: 'fake backend (tests only)' } : (opts.claude ?? (opts.registry ? { path: null, version: null } : findClaude()));
-    this.registry = opts.registry ?? new BackendRegistry({ claude: this.claude });
+    this.registry = opts.registry ?? new BackendRegistry({ claude: this.claude, ...(opts.claude ? {} : { findClaude }) });
     // Detect every backend in the background; a usable Codex adds its generated team profile. Only
     // for a real start (no Claude Code or registry handed in): tests decide themselves when to detect.
     if (!opts.claude && !opts.registry) void this.registry.detectAll().then(() => this.backendsDetected(), () => {});
@@ -104,6 +105,9 @@ export class App implements ConversationHost {
 
   /** After detection: add generated team profiles (the Codex team when Codex is usable). */
   backendsDetected(): void {
+    // A Claude Code installed (or signed in) since start-up counts from now on.
+    const claude = this.registry.claudeInfo();
+    if (claude && !this.registry.fake) this.claude = claude;
     const next = withBuiltInProfiles(this.currentSettings, this.registry.generatedProfiles());
     if (next !== this.currentSettings) this.updateSettings(next);
   }
@@ -272,7 +276,8 @@ export class App implements ConversationHost {
     // Remote access is managed from the local browser only; a remote device never sees the list.
     const remote = this.remote && client && !client.role ? { remote: this.remote.state() } : {};
     // Version 2 pages read `backends`; version 1 pages ignore it.
-    const backends = client && this.hub.isV2(client) ? { backends: this.registry.status() } : {};
+    // The type check keeps the page's copy (BackendStatusV2) in step with the registry's.
+    const backends = client && this.hub.isV2(client) ? { backends: this.registry.status() satisfies BackendStatusV2[] } : {};
     return { ...remote, ...backends, ...(client?.blobToken ? { blobToken: client.blobToken } : {}), version: VERSION, settings: this.currentSettings, conversations: this.metas(), claude: this.claude, home: HOME, pending: [...this.pending.values()].map((p) => p.request), usage: [...this.usage.values()] };
   }
 

@@ -262,10 +262,12 @@ export class Agent {
       return;
     }
     if (this.session && !this.closing) {
-      // Every message goes the same way, so none can sit in the backlog of a live process.
+      // Every message goes the same way, so none can sit in the backlog of a live process. A backend that
+      // cannot take a message during a turn gets it when the turn ends (still unanswered meanwhile).
       for (const m of msgs) {
-        this.session.send(m.id, m.content);
         this.sent.push(m);
+        if (this.inTurn && !this.midTurnDelivery) this.afterTurn.push(m);
+        else this.session.send(m.id, m.content);
       }
       if (this.info.status !== 'running') this.setStatus('running');
     } else {
@@ -395,6 +397,8 @@ export class Agent {
       return;
     }
     this.session = session;
+    this.midTurnDelivery = backend.caps.midTurnDelivery;
+    this.afterTurn = [];
     for (const m of this.sent) session.send(m.id, m.content);
     this.starting = false;
     this.setStatus('running');
@@ -454,6 +458,10 @@ export class Agent {
     };
   }
 
+  /** Whether the current backend takes messages during a turn (BackendCaps.midTurnDelivery). */
+  private midTurnDelivery = true;
+  /** Messages kept back until the running turn ends, for a backend without mid-turn delivery. */
+  private afterTurn: Msg[] = [];
   /** Names of the team tools given to the current session. */
   private teamTools = new Set<string>();
   private toolsForSession(): ToolDef[] {
@@ -502,6 +510,7 @@ export class Agent {
   /** Clean-up when the current session has ended, whichever way. */
   private sessionGone(): void {
     this.session = null;
+    this.afterTurn = [];
     this.costBefore = this.info.usage.costUsd;
     this.setDraft(null, true);
     this.closeOpenTools();
@@ -549,6 +558,10 @@ export class Agent {
   }
 
   private handleResult(r: TurnResult): void {
+    // Messages kept back during the turn (a backend without mid-turn delivery) go out now; they are still
+    // unanswered, so the run goes on into the turn they start.
+    const later = this.afterTurn.splice(0);
+    if (this.session && !this.closing) for (const m of later) this.session.send(m.id, m.content);
     // The backend names the ids a turn consumed: [] for a turn it started by itself; null when it
     // cannot tell (an older Claude Code), and then everything counts as answered so the agent can
     // never stay busy for ever. A process that dies clears everything anyway.

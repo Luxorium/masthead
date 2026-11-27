@@ -1,6 +1,6 @@
 # Storage format 2: server/storage/migrate.ts, transcript.ts, atomic.ts and store.ts
 
-**Role:** how 0.2.0 reads and writes conversations: the format version and its migration from 0.1.x, a store-wide format marker, paging a transcript from the end, and renames that survive Windows. The layout is on [Storage on disk](Storage-on-Disk.md). The parts of `server/storage/store.ts` that did not change from 0.1 (`loadItems`, `appendItem`, id safety) are on [server/store.ts](Source-Store.md); images are on [Images](Source-Blobs.md).
+**Role:** how 0.2.0 reads and writes conversations: the format version and its migration from 0.1.x, a store-wide format marker, paging a transcript from the end, and renames that survive Windows. The layout is on [Storage on disk](Storage-on-Disk.md). The parts of `server/storage/store.ts` that did not change from 0.1 (`loadItems`, `appendItem`, id safety) are on [server/storage/store.ts](Source-Storage.md); images are on [Images](Source-Blobs.md).
 
 ## migrate.ts
 
@@ -71,4 +71,4 @@ Creates the parent folder (`0700`), writes `<path>.<pid>.tmp` with mode `0600`, 
 
 ## Related pages
 
-[Storage on disk](Storage-on-Disk.md) · [server/store.ts](Source-Store.md) · [Images](Source-Blobs.md) · [server/app.ts](Source-App.md)
+[Storage on disk](Storage-on-Disk.md) · [server/storage/store.ts](Source-Storage.md) · [Images](Source-Blobs.md) · [server/app.ts](Source-App.md)

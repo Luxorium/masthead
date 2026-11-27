@@ -1,6 +1,6 @@
 # Check, unit tests, build and a packaging smoke test on Linux, macOS and Windows.
-# Needs no Claude account: the unit tests never start Claude Code. The browser test (test/ui.e2e.mjs)
-# joins once the fake backend exists (MASTHEAD_FAKE_BACKEND=1, docs/plans/0.2.0/backends.md §8).
+# Needs no Claude account: the unit tests never start Claude Code, and the browser job runs the page
+# against the fake backend (MASTHEAD_BACKEND=fake with MASTHEAD_ALLOW_FAKE=1; see scripts/ci-e2e.mjs).
 name: ci
 
 on:

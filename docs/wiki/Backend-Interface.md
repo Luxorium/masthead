@@ -64,7 +64,7 @@ What detection found. Never holds credentials.
 | `approvalsAlways` | "Always allow" rules can be offered. |
 | `questions` | The agent can ask the person a question. |
 | `consumedIds` | `false`: turn results do not name the messages they consumed, and the runtime uses its fallback rule. |
-| `midTurnDelivery` | `false`: the runtime queues sends until `turnEnded` and sends them as one batch. |
+| `midTurnDelivery` | `false`: the runtime keeps messages sent during a turn and sends them when the turn ends. |
 | `contextUsage` | `Session.contextUsage()` works. |
 | `lean` | Can skip the person's own MCP servers. |
 

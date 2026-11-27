@@ -75,6 +75,6 @@ describe('RemoteSection', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Show recent activity' }));
     expect(sent).toHaveBeenCalledWith({ t: 'remote_audit' });
     auditFn!({ t: 'remote_audit', entries: [{ ts: 1, event: 'request', nodeName: 'phone' }, { ts: 2, event: 'allow', nodeName: 'phone', detail: 'full' }] });
-    expect(await screen.findByText(/phone was allowed \(full\)/)).toBeTruthy();
+    expect(await screen.findByText(/phone was allowed \(everything\)/)).toBeTruthy();
   });
 });

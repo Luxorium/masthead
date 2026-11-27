@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { programName } from '../text.ts';
   // "Teams": the team for new chats, each team with its levels, an editor, copies, removal and reset
   // of a built-in team, and the generated Codex team shown as a proposal until the person decides.
   import { CLAUDE_PROFILE, type TeamProfile } from '../../../../shared/protocol.ts';
@@ -94,7 +95,7 @@
         </div>
         {#if p.description}<p class="muted desc">{p.description}</p>{/if}
         {#if !ok}
-          <p class="warn">{ST.teams.unusable(backends.find((b) => b.id === p.tiers[0]?.backend)?.label ?? p.tiers[0]?.backend ?? '')}</p>
+          <p class="warn">{ST.teams.unusable(programName(p.tiers[0]?.backend ?? '', backends.find((b) => b.id === p.tiers[0]?.backend)?.label))}</p>
         {/if}
         {#if editing === p.id}
           <TeamEditor profile={p} all={profiles} {backends} onsave={save} oncancel={() => (editing = null)} />

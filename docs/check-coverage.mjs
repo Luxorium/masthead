@@ -16,10 +16,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const wiki = join(root, 'docs', 'wiki');
 const only = process.argv.slice(2).map((p) => p.replace(/\/+$/, ''));
 
-const SOURCES = ['server', 'shared', 'web/src', 'web/index.html', 'web/public', 'scripts', 'packaging', 'test', 'vite.config.ts', 'svelte.config.js', 'tsconfig.server.json', 'tsconfig.web.json', 'package.json'];
+const SOURCES = ['server', 'shared', 'web/src', 'web/index.html', 'web/public', 'scripts', 'packaging', 'test', 'vite.config.ts', 'svelte.config.js', 'tsconfig.server.json', 'tsconfig.web.json', 'package.json', 'package-lock.json', 'web/vitest.config.ts', '.github/workflows'];
 const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--', ...SOURCES], { cwd: root, encoding: 'utf8' })
   .split('\n')
-  .filter((f) => f && existsSync(join(root, f)) && !f.startsWith('test/fixtures/'));
+  .filter((f) => f && existsSync(join(root, f)));
 
 const map = readFileSync(join(wiki, 'Code-Coverage-Map.md'), 'utf8');
 const rows = [];
@@ -40,7 +40,7 @@ for (const r of rows) {
 
 // Links in the rows we checked: page must exist; #anchor must match a heading on that page.
 const slug = (h) =>
-  h.trim().toLowerCase().replace(/[`*_~]/g, '').replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s/g, '-');
+  h.trim().toLowerCase().replace(/[`*~]/g, '').replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
 const anchorsOf = new Map();
 function anchors(page) {
   if (!anchorsOf.has(page)) {

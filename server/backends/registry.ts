@@ -19,6 +19,8 @@ export interface RegistryOptions {
   env?: Record<string, string | undefined>;
   /** Claude Code as found at start-up. */
   claude?: ClaudeInfo;
+  /** Looks for Claude Code again on each detectAll() (a real start passes findClaude). */
+  findClaude?: () => ClaudeInfo;
   /** Options for the Codex backend (tests pass a fake CLI); false leaves Codex out. */
   codex?: CodexOptions | false;
 }
@@ -43,7 +45,7 @@ export class BackendRegistry {
       return;
     }
     const claude = opts.claude ?? { path: null, version: null };
-    this.backends.set('claude-code', new ClaudeBackend({ path: claude.path, version: claude.version, error: claude.error }));
+    this.backends.set('claude-code', new ClaudeBackend({ path: claude.path, version: claude.version, error: claude.error, find: opts.findClaude }));
     // Until detectAll() has run, Claude Code is as it was found at start-up, and Codex is unknown.
     this.statuses.set('claude-code', {
       id: 'claude-code',
@@ -98,6 +100,12 @@ export class BackendRegistry {
     const s = this.statuses.get(id);
     if (!s) return `There is no agent backend called "${id}".`;
     return s.error ?? `${s.label} cannot be used right now.`;
+  }
+
+  /** Claude Code as the latest detection saw it, in the shape the page's old `claude` field uses. */
+  claudeInfo(): ClaudeInfo | null {
+    const s = this.statuses.get('claude-code');
+    return s ? { path: s.path, version: s.version, ...(s.error ? { error: s.error } : {}) } : null;
   }
 
   /** Team profiles built from what is installed: the Codex team when Codex is usable. */

@@ -257,7 +257,7 @@ test('v2: state carries backends for version 2 tabs only; check_backends re-dete
   const { Store } = await import('../server/storage/store.ts');
   const dir = mkdtempSync(join(tmpdir(), 'masthead-backends-'));
   let detected = 0;
-  const registry = { status: () => [{ id: 'fake', label: 'Fake', available: true, models: [] }], detectAll: async () => (detected++, []), dispose: () => {}, get: () => undefined, generatedProfiles: () => [] } as never;
+  const registry = { status: () => [{ id: 'fake', label: 'Fake', available: true, models: [] }], detectAll: async () => (detected++, []), dispose: () => {}, get: () => undefined, generatedProfiles: () => [], claudeInfo: () => ({ path: null, version: null }) } as never;
   const app = new App({ store: new Store(join(dir, 'c')), settingsFile: join(dir, 's.json'), settings: defaultSettings(), claude: { path: null, version: null }, registry });
   const v1: Array<Record<string, unknown>> = [];
   const v2: Array<Record<string, unknown>> = [];

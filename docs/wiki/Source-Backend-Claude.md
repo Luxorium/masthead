@@ -18,7 +18,7 @@ An async queue used as the session's input stream. `push()` adds an item (ignore
 
 `id = 'claude-code'`, `label = 'Claude Code'`, `caps = CLAUDE_CAPS` (line 60; table on [the interface page](Backend-Interface.md#capabilities-per-backend)). Options: `path`, `version`, `error` as found by `findClaude()`, and for tests `treeDeps` and `query`.
 
-- `detect()` returns `path`, `version` and `error` as given at start-up, `available: path !== null`, `signedIn: null`. It does not look again.
+- `detect()` looks for Claude Code again (path search and `--version`, through `findClaude`) each time on a real start, so "Check again" finds a Claude Code installed later; tests that hand in a fixed `claude` get what they gave. `available` needs a path and no error (a binary whose `--version` fails is not usable). `signedIn: null`.
 - `models()` returns `[]` (the comment says it is to be filled from `Query.supportedModels()` later).
 - `open()` returns a `ClaudeSession`.
 
@@ -141,7 +141,7 @@ These checks were made before or alongside the move into `server/backends/claude
 
 ## Points to be aware of
 
-- `detect()` reports only what `findClaude()` found when Masthead started, and `models()` is empty.
+- `models()` is empty: the Claude tiers still name their models in the settings.
 - `turnStarted()` is sent on every stream event and every assistant message, not once per turn.
 - A turn's `text` events can repeat what `turnEnded.text` carries; `turnEnded.text` prefers the result string.
 - `exited` carries the `apiError` of the last assistant error only if no `result` cleared it first.

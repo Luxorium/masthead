@@ -42,11 +42,12 @@ step, and commands left running in the background are not followed up by Masthea
 a built-in Claude team (Fable, then Opus, Sonnet and Haiku helpers).
 
 - **Team for new chats** chooses the team a new chat starts with. You can also pick one for a single
-  chat with **Team:** under the message box, before the first message.
-- **Edit** a team to change its levels. For each level you can set the **Name shown**, the **Agent
+  chat with the **Uses …** button under the message box (for example **Uses Claude**; its menu is "Choose which AI works on this chat"), before the first message. It shows only when you have more than one team that can start.
+- Press **Edit …** (for example **Edit Claude**) to change a team's levels. For each level you can set the **Name shown**, the **Agent
   program**, the **Model**, **Thinking time up to**, **Helpers at a time**, **Keep light** and a
   **Colour**. **Add a helper level** adds one below; a team can have at most 5 levels.
 - **Every level of a team uses the same agent program for now.**
+- If a team's program is missing or not signed in, the editor says "<program> is not ready on this computer, so this team cannot start yet."
 - **Make a copy** to try changes without losing the original. **Reset to the built-in team** undoes
   your changes to a built-in one. **Remove team** deletes one you made; chats that used it keep their
   history.

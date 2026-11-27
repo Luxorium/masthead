@@ -13,7 +13,7 @@ you will see on the page.
 4. [Pictures](pictures.md): attaching pictures to a message.
 5. [Teams and agent programs](teams-and-agent-programs.md): Claude Code and Codex.
 6. [Keeping the computer awake](keeping-awake.md)
-7. [Using Masthead from your phone](phone.md) (this page is coming).
+7. [Using Masthead from your phone](phone.md)
 8. [Updating, and where your data is kept](updating-and-your-data.md)
 9. [Troubleshooting](troubleshooting.md)
 

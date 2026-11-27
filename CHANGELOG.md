@@ -1,14 +1,57 @@
 # Changelog
 
-## Unreleased (0.2.0)
+## 0.2.0 (unreleased; pre-releases first)
 
-Project
-- Prepared for packaging: package.json describes an npm package with the built app inside (name
-  `@luxorium/masthead` pending a decision; still private, so nothing can be published by accident).
-- Continuous integration on Linux, macOS and Windows: type check, unit tests, build, and installing
-  the packed package.
-- SECURITY.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md and issue templates.
-- Outlines for Homebrew, AUR and Scoop packages under `packaging/` (not published).
+Masthead for anybody: simple by default, on Linux, macOS and Windows, able to run a team on Claude
+Code or on Codex, reachable from your other devices over your own Tailscale, and showing pictures.
+
+What you will notice
+- A simpler page by default, in plain words, with the team view one click away and a phone layout.
+- Teams: choose a team profile (levels, which agent program, how many at once) instead of fixed tiers.
+- Codex can run a team as well as Claude Code (new; see Known limits).
+- Pictures: attach images to a message and see images agents produce; they are stored as files, not
+  inside the transcript.
+- Use Masthead from your phone or another computer over your own Tailscale: a switch in settings,
+  each device approved by you with a six-digit code, its role adjustable, sign-out per device.
+- Keeps the computer awake while helpers are working (idle sleep only; closing the lid or choosing
+  Sleep still works). If the computer did sleep, the chat says from when to when.
+- Runs on macOS and Windows as well as Linux: native folders, the browser opens signed in, and
+  `masthead service install` starts it at login (systemd, launchd or Task Scheduler).
+- `masthead doctor` checks the set-up and says how to fix what is wrong.
+- A user guide for non-developers in `docs/guide/`.
+
+Under the hood
+- The team rules are a tested state machine; agent programs sit behind one backend interface (Claude
+  Code, Codex, and a fake one for tests).
+- Versioned settings (team profiles), storage format 2 (images as files) and protocol v2 (the old
+  protocol is still accepted for one release).
+- Platform fixes for macOS and Windows: finding Claude Code (`claude.exe`, npm shims, Homebrew),
+  opening the browser, the secret kept private with an ACL on Windows, file retries, signals, drives.
+- Package ready for npm with the built app inside (name pending), CI on Linux, macOS and Windows
+  including the page in a real browser on the fake backend, SECURITY.md, CONTRIBUTING.md, code of
+  conduct, issue templates, and outlines for Homebrew, AUR and Scoop.
+
+Upgrading from 0.1.x
+- Your conversations and settings are converted when 0.2.0 first uses them. Before the first rewrite,
+  the old files are copied beside the new ones: `settings.json.v1.bak` and, per conversation,
+  `conversation.json.v1.bak`.
+- On Linux the folders stay where they were (`~/.config/masthead`, `~/.local/share/masthead`).
+- The old way to install (`scripts/install.sh`) still works from a checkout; the new way is the package
+  plus `masthead service install`.
+- To go back to 0.1.4: stop Masthead, copy each `.v1.bak` file back over the file next to it, and
+  reinstall 0.1.4. 0.1.x cannot read the new files. Images attached in 0.2.0 do not show in 0.1.4.
+- Copying both folders somewhere safe before upgrading is still the simplest backup.
+
+Known limits
+- macOS and Windows have been built and tested automatically, but not yet checked by a person on real
+  machines (`docs/plans/0.2.0/release-checklist.md`).
+- Remote access has only run against a fake Tailscale in tests, not a real tailnet.
+- Pausing at a usage limit is tested with a fake clock; it has never been seen at a real limit.
+- Codex support drives Codex's own app-server interface, which Codex marks experimental, and Codex's
+  own sub-agents could not be switched off in tests, so a Codex team cannot yet guarantee the levels.
+- Stopping an agent now stops the commands it started (its whole process tree: `taskkill /T` on Windows);
+  this is verified on Linux only.
+- Not yet published to npm or any package manager; install from source.
 
 ## 0.1.4
 

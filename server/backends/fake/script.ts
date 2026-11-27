@@ -32,7 +32,8 @@ export type Step =
 
 function duration(v: string | undefined): number | undefined {
   if (!v) return undefined;
-  const m = /^(\d+)(ms|s)?$/.exec(v.trim());
+  // A unit is required ("200ms", "60s"): a bare number is ignored, so "[[limit 60]]" cannot mean 60 ms.
+  const m = /^(\d+)(ms|s)$/.exec(v.trim());
   if (!m) return undefined;
   return m[2] === 's' ? Number(m[1]) * 1000 : Number(m[1]);
 }

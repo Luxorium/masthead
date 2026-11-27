@@ -67,7 +67,7 @@ export class ClientError extends Error {
 export function codeOf(e: unknown): ErrorCode {
   if (e instanceof ClientError) return e.code;
   const m = (e as Error)?.message ?? '';
-  if (/no longer exists|not found/i.test(m)) return 'not_found';
+  if (/no longer exists/i.test(m)) return 'not_found';
   if (/too long|larger than|at most|too large/i.test(m)) return 'too_large';
   return 'invalid';
 }

@@ -35,7 +35,7 @@ These are also used by the conformance suite, so real backends get the same prom
 
 ### Markers
 
-Written `[[name]]` or `[[name arg]]`, lowercase. Durations are `<n>ms`, `<n>s` or a bare number, which counts as **milliseconds**.
+Written `[[name]]` or `[[name arg]]`, lowercase. Durations need a unit, `<n>ms` or `<n>s`; a bare number is ignored and the default applies (`[[limit 60]]` is the default 60 s, never 60 ms).
 
 | Marker | What happens |
 |---|---|

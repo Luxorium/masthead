@@ -20,13 +20,13 @@ A team has levels, each named after the model it uses. With the built-in Claude 
 
 ## The Team panel
 
-1. Press **Team** at the top of the page. It shows **Team · 2 working** while helpers work.
+1. Press **Team** at the top of the page. It shows **Team · 2 working** (**Team · 2** on a small screen) while helpers work.
 2. The panel lists everyone in this chat, with what each is doing: **Working**, **Waiting its
    turn**, **Waiting**, **Idle**, **Done**, **Failed** or **Stopped**.
 3. Click a helper (**Click to open the chat**) to read its own chat, or to message it directly.
    **Back to …** returns you.
 4. **Show as a map** draws the team as a tree. **Back to the chat** returns.
-5. **Memory used** shows how full the main assistant's memory of this chat is.
+5. **Memory used: …%** shows how full the main assistant's memory of this chat is.
 
 ## Team controls
 
@@ -42,7 +42,7 @@ Other settings that shape the team:
 - **Let them decide how long to think**: everyone starts with short thinking time; the main
   assistant raises its own, helpers ask the one above them.
 - **Keep Opus helpers light** and **Keep Sonnet and Haiku helpers light**: they skip your
-  connected services, which keeps them smaller and quicker.
+  connected services, which keeps their memory small.
 - **Show helper reports as one line**: reports stay folded until you open them.
 - **Longest a helper may work**: a helper still working after this long is stopped, and the one
   that started it is told. **No limit** turns this off.
