@@ -31,7 +31,7 @@ What each action checks and replies is on [server/core/conversation.ts](Source-C
 
 ## Private helpers
 
-- `str(min, max, description?)`: a string schema with `minLength` / `maxLength`.
+- `str(min, max, description?)`: a string schema with `minLength` / `maxLength`, and a `description` when given.
 - `object(properties, required)`: an object schema with `additionalProperties: false`.
 - `s(v)`: reads an argument as a string, `''` if it is not one. A guard only: the schema already says what it must be.
 
@@ -49,7 +49,7 @@ Builds the tool list for one agent. Inside it:
 | `send_message` | everyone | `to` (1–80 characters), `message` (1–20,000); for sub-agents also `wait` (boolean) | `team.message(agent, to, message, wait === true)` |
 | `list_agents` | everyone | none | `team.list(agent)` |
 | `read_archive` | everyone, when `team.readArchive` exists | `name` (1–80), `page` (integer ≥ 1), `search` (1–100); all optional | `team.readArchive(agent, name, page ?? 1, search)` |
-| `compact_team` | the lead only, when `team.compactTeam` exists | `keep` (required: up to 100 of `{ name (1–80), why (1–200) }`), `note` (0–500) | `team.compactTeam(agent, keep, note)` |
+| `compact_team` | the lead only, when `team.compactTeam` exists | `keep` (required: up to 100 items, each `{ name (1–80, required), why (0–200) }` or a bare name string (1–80), because leads often send a plain list of names), `note` (0–500) | `team.compactTeam(agent, keep, note)`, with a bare name read as `{ name, why: '' }` |
 | `spawn_agent` | agents whose tier has a child tier | `title` (1–60), `task` (1–60,000), `effort` (only if the backend has effort levels) | `team.spawn()`, with an unknown effort read as left out |
 | `stop_agent` | agents whose tier has a child tier | `name` (1–80) | `team.stop()` |
 | `set_effort` | everyone, when automatic effort is on and the backend has effort levels | `level`, `reason` (1–500) | `team.setOwnEffort()`, or "Error: unknown effort level." |
@@ -60,10 +60,10 @@ The tool descriptions, as the model reads them:
 - **`send_message`**: "Send a short message to another agent in this conversation by name, e.g. "charlie" ("lead" and "parent" also work). A finished agent resumes with its context to read it. Use it to ask a question, pass on a finding or answer a message. It returns once delivered; any answer arrives later as a message." The `wait` input: "You need the answer to continue: end your turn and you resume when it arrives. Parent or lead only".
 - **`list_agents`**: "List the agents in this conversation: name, tier, status, effort, who started each and its task."
 - **`read_archive`**: "Read archived helpers' work: no name gives the list with their reports; a name gives that chat, a page at a time." `search`: "Only lines with this word".
-- **`compact_team`**: "When asked to tidy the team: name the finished helpers to keep and why. The rest are archived; their chats stay readable." `note`: "One line for the person". The lead has the tool all the time; calling it when no tidying was asked returns "Error: nobody asked to tidy the team now." See [Compact team](Compact-Team.md).
+- **`compact_team`**: "When asked to tidy the team: name the finished helpers to keep and why. The rest are archived; their chats stay readable." `keep`: "Each one {name, why}". `note`: "One line for the person". The lead has the tool all the time; calling it when no tidying was asked returns "Error: nobody asked to tidy the team now." See [Compact team](Compact-Team.md).
 - **`spawn_agent`**: "Start a <label> agent on a task. It knows only what you write in "task". It is given the next name from the phonetic alphabet (bravo, charlie, …); the reply tells you which. Returns at once; the agent's report arrives later as an <agent-report> message." `title`: "A few words on its job, shown to the person, e.g. "Review the API layer"". `task`: "Everything the agent needs: goal, paths, constraints, what to send back". `effort`: "Thinking effort to start at. Leave out for low; raise only for work that needs careful reasoning".
 - **`stop_agent`**: "Stop an agent you started, or one started below it, together with everything under it. Only for work that is no longer wanted: a stopped agent sends no report. Never use it to wait for or collect a result."
-- **`set_effort`**: for the lead, "Change your own thinking effort from your next step on. Low is right for most work. Raise it when …; lower it again afterwards. Change it at the start of a piece of work, not repeatedly." For others, "Ask to change your own thinking effort. Low is right for most work. Lowering applies at once. Raising needs the approval of the agent that started you: this sends the request and returns; keep working at your current level. If approved, the new level applies by itself from your next step; no message is sent. list_agents shows your current effort." `reason`: "One sentence on why".
+- **`set_effort`**: for the lead, "Change your own thinking effort from your next step on. Low is right for most work. Raise it when the task needs careful multi-step reasoning, subtle debugging or a design decision, or when you catch yourself making mistakes; lower it again afterwards. Change it at the start of a piece of work, not repeatedly." For others, "Ask to change your own thinking effort. Low is right for most work. Lowering applies at once. Raising needs the approval of the agent that started you: this sends the request and returns; keep working at your current level. If approved, the new level applies by itself from your next step; no message is sent. list_agents shows your current effort." `reason`: "One sentence on why".
 - **`set_agent_effort`**: "Set the thinking effort of an agent you started, or of one started below it. Use it to approve or adjust an effort request, or to raise or lower effort as the work changes."
 
 ## `send_message` and `wait`
@@ -72,7 +72,7 @@ Only sub-agents get the `wait` input; the lead's schema has just `to` and `messa
 
 ## Callers
 
-`Conversation.tools(agent)` returns `teamToolDefs(agent, this)`; `Agent.launch()` (`server/runtime/agent.ts`) passes the result as the session's `tools` to `backend.open()`. The list is built once per launch.
+`Conversation.tools(agent)` returns `teamToolDefs(agent, this)`; `Agent.launch()` (`server/runtime/agent.ts`) gets it through its private `toolsForSession()` (which also records the names in `teamTools`) and passes it as the session's `tools` to `backend.open()`. The list is built once per launch.
 
 ## Two layers of enforcement
 
@@ -80,7 +80,7 @@ Only sub-agents get the `wait` input; the lead's schema has just `to` and `messa
 
 ## Tests
 
-`test/prompts.test.ts` ("tools: one neutral definition per agent; spawn only with a child tier; effort tools only with levels"). The actions behind the tools are tested in `test/conversation.test.ts` (`compact_team` and `read_archive` in the "compact: …", "auto: …" and "archived helpers …" tests). Read for this page, not run.
+`test/prompts.test.ts` ("tools: one neutral definition per agent; spawn only with a child tier; effort tools only with levels" and "tools: compact_team accepts plain names as well as {name, why}"). The actions behind the tools are tested in `test/conversation.test.ts` (`compact_team` and `read_archive` in the "compact: …", "auto: …" and "archived helpers …" tests). Read for this page, not run.
 
 ## Related pages
 

@@ -3,7 +3,7 @@
 CI (`.github/workflows/ci.yml`) proves the type check, the unit tests, the web tests, the build and
 installing the packed package on Linux, macOS and Windows, plus the browser test on the fake backend.
 It has no Claude account, no logged-in desktop and no second device. The checks below need a person at
-a real machine. Each is done before 0.2.0 is tagged; write the date, machine and result next to it.
+a real machine. Write the date, machine and result next to each. What is still open for the final, and what the person chose to leave for later, is in the table below.
 
 Rules for every check: use a throwaway data folder unless the check says otherwise
 (`MASTHEAD_DATA_DIR`, `MASTHEAD_CONFIG_DIR`), and a port other than 7717 unless the check is about the
@@ -19,8 +19,27 @@ installed service.
 - **Remote access, Tailscale 1.104.7 on Linux:** switching on through the one-time `sudo tailscale
   serve` command, pairing a phone and using it fully; from a second device by script: the `read` and
   `approve` roles enforced, a role lowered in place on an open socket, revoke closing it with 4001.
-- **Not yet:** macOS (all of it); Windows keep-awake and the permission prompt; the page on
-  restricted devices; a real usage limit.
+- **Remote access from a Windows device** as well as the Android phone (0.2.0-beta.2).
+- **0.2.0-beta.2** installed on Linux and on the same Windows 11 PC.
+
+## What is left for the final 0.2.0
+
+| Check | State |
+|---|---|
+| 1. Browser opens signed in | Windows done; macOS deferred (the person's decision: ship, check on a Mac later). |
+| 2. Service at login | Windows done; macOS deferred. |
+| 3. Claude Code found | Windows: native installer (`install.ps1`, Claude Code 2.1.330 in `%USERPROFILE%\.local\bin\claude.exe`, not on the service's PATH) found by doctor; winget/npm not tried. macOS deferred. |
+| 4. No processes left after Stop (Windows) | Open. |
+| 5. Remote access | Done (Linux host, Android phone, Windows device). Restricted roles on the page itself not tried. |
+| 6. A real usage limit | Open; shipped as a known limit. |
+| 7. Upgrade from 0.1.4 with real data | Done on Linux: real data upgraded 0.1.4 → 0.2.0-beta.1 → beta.2, chats and settings intact. Downgrade path not tried. |
+| 8. Secret private on Windows | Open. |
+| 9. Keeps awake | Linux: the `systemd-inhibit --what=idle --who=Masthead` hold seen while agents worked (staying awake through an idle timeout not checked); Windows open; macOS deferred. |
+
+Open items that are not done before the tag go into the CHANGELOG's Known limits.
+
+Decided 2026-11-27 (see `PLAN.md`, "Decided for the final"): ship with the notice, keep the name
+Masthead, no npm publish for 0.2.0 (GitHub release `.tgz` only), macOS unchecked on real hardware.
 
 ## 1. The browser opens, signed in (macOS and Windows)
 
@@ -62,14 +81,14 @@ doctor and the page both find it.
 1. Start a conversation; ask the lead: "Run the shell command `ping -t localhost` and wait".
 2. When the agent shows it running, press its stop button.
 3. Task Manager (Details): no `ping.exe`, and no `bash.exe`/`powershell.exe` child of a stopped
-   `claude.exe`. Expected today: they probably remain (see echo's note: `spawnClaudeCodeProcess` with
-   `taskkill /T` is planned). Record what you see; if processes remain and the fix has landed, it failed.
+   `claude.exe`. The fix (`spawnClaudeCodeProcess` with `taskkill /T`, `server/backends/proctree.ts`)
+   has landed, so any process left over is a failure.
 4. Repeat with "Stop everything" and with `masthead stop`.
 
 ## 5. Remote access over Tailscale
 
-Follow golf's test plan, `docs/plans/0.2.0/remote-test.md` (to be written), on a real tailnet with a
-phone and a second computer.
+Follow golf's test plan, [remote-test.md](remote-test.md), on a real tailnet with a phone and a second
+computer. Done 2026-11-27; see the top of this page.
 
 ## 6. A real usage limit
 

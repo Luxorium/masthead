@@ -316,6 +316,25 @@ export function chatsUsing(id: string, convProfiles: Iterable<string | undefined
  * settings unchanged when there is nothing to delete. Callers refuse first while chats use it
  * (`chatsUsing`), unless the person confirmed.
  */
+/**
+ * Profiles in a settings update, with a fresh id for any new profile whose id is still held by chats of
+ * a deleted team: those chats keep their copy of the old team, and must not pick up the levels of a
+ * different team that happens to get the same id (tier ids follow the profile id). Others are unchanged.
+ */
+export function freshProfileIds(rawProfiles: unknown[], current: Settings, heldByChats: ReadonlySet<string>): unknown[] {
+  const existing = new Set(current.profiles.map((p) => p.id));
+  const taken = new Set([...existing, ...heldByChats]);
+  for (const p of rawProfiles) if (p && typeof p === 'object' && typeof (p as { id?: unknown }).id === 'string') taken.add((p as { id: string }).id);
+  return rawProfiles.map((p) => {
+    const id = p && typeof p === 'object' ? (p as { id?: unknown }).id : undefined;
+    if (typeof id !== 'string' || existing.has(id) || !heldByChats.has(id)) return p;
+    let n = 2;
+    while (taken.has(`${id}-${n}`)) n++;
+    taken.add(`${id}-${n}`);
+    return { ...(p as object), id: `${id}-${n}` };
+  });
+}
+
 export function deleteProfile(s: Settings, id: string): Settings {
   if (id === CLAUDE_PROFILE || !s.profiles.some((p) => p.id === id)) return s;
   return sanitizeSettings({ profiles: s.profiles.filter((p) => p.id !== id) }, s);

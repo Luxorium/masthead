@@ -16,7 +16,7 @@ A queued request: `id` (agent id), `owner` (who asked, used for fairness), `seq`
 
 ## `class Scheduler`
 
-Constructed by `App` (`server/app/app.ts`) as `new Scheduler((tier) => tierLimit(this.currentSettings, tier))`. `tierLimit()` (`server/settings/settings.ts`) looks the tier id up in every team profile: `Infinity` for a profile's first tier (its lead), the tier's `max` for the others, 0 for an unknown tier. Taking the limit as a **function** means the scheduler always reads the current settings; no update call is needed for the numbers themselves. Tier ids are strings: `lead`/`opus`/`sonnet`/`haiku` for the Claude profile, `<profile>:<index>` for others (see [Team profiles and settings](Team-Profiles-and-Settings.md)).
+Constructed by `App` (`server/app/app.ts`) as `new Scheduler((tier) => tierLimit(this.currentSettings, tier))`. `tierLimit()` (`server/settings/settings.ts`) looks the tier id up in every team profile: `Infinity` for a profile's first tier (its lead), the tier's `max` for the others. For a tier id no profile has any more, it uses the conversation's remembered copy of its team (`rememberTeam`): `Infinity` for an id ending in `:0`, else the copy's `max`, else 0 ([server/settings/settings.ts](Source-Settings.md#tierlimits-tier)). Taking the limit as a **function** means the scheduler always reads the current settings; no update call is needed for the numbers themselves. Tier ids are strings: `lead`/`opus`/`sonnet`/`haiku` for the Claude profile, `<profile>:<index>` for others (see [Team profiles and settings](Team-Profiles-and-Settings.md)).
 
 ### State
 
@@ -30,7 +30,7 @@ Constructed by `App` (`server/app/app.ts`) as `new Scheduler((tier) => tierLimit
 
 | Method | Behaviour |
 |---|---|
-| `cap(tier)` (private) | `Infinity` when the tier id is `lead` or the limit function returns `Infinity` (first tiers of other profiles); otherwise `max(0, limit(tier))`. |
+| `cap(tier)` (private) | `Infinity` when the limit function returns `Infinity`, as `tierLimit` does for the first tier of every team, whatever it is called (the real rule). The tier id `lead` (the built-in Claude team's first tier) is also unlimited, as an extra guard for limit functions that do not say so. Otherwise `max(0, limit(tier))`. |
 | `running(tier)`, `queued(tier)` | Counts, used by `Conversation.spawn()` to say in its reply whether the new agent will queue. |
 | `acquire(tier, id, owner)` | Returns a promise. Resolves at once if the agent already holds a slot. Rejects at once with `TierOff` if the cap is 0, so a paused agent that resumes while its tier is off fails and reports instead of queuing for ever. Resolves at once if there is room **and** nobody is queued (so a newcomer never jumps the queue). Otherwise adds a `Waiter` and calls `pump()`. |
 | `release(tier, id)` | Removes the agent from `active`; if it was there, calls `pump()`. Safe to call twice. |
@@ -47,7 +47,8 @@ An agent that is waiting for agents it started keeps its slot (the class comment
 ## Callers
 
 - `Agent.ensureProcess()` (`server/runtime/agent.ts`): `acquire` with `owner` = `parentId ?? convId`. It shows `queued` only when the slot is not granted within a microtask. If the agent was ended while waiting and the grant lands afterwards, it `release`s the slot again.
-- `Agent.launch()` failure paths (no backend, `open()` throws), `Agent.end()`, `Agent.dispose()`: `release`; `end()` and `dispose()` also `cancel`.
+- `Agent.launch()` failure paths (a tier marked `unusable` in the settings, no backend, `open()` throws), `Agent.end()`, `Agent.dispose()`, and `closeQuietly()` (closing a process opened only to compact): `release`; `end()` and `dispose()` also `cancel`.
+- `Agent.compact()`: `cancel` when no slot came free within a minute, so the request cannot launch later outside the compaction.
 - `Conversation.exec()` for the `releaseSlot` effect (a pause or a lost process): `release`.
 - `Conversation.spawn()`: `running`, `queued`.
 - `App.updateSettings()` (`server/app/app.ts`): `limitsChanged`.

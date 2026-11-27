@@ -2,7 +2,7 @@
 
 **Role:** the Tailscale side of remote access, behind one interface so the rest of Masthead can be tested with a fake. Masthead only ever adds and removes its own `tailscale serve` entry, on one HTTPS port it owns. It never runs `serve reset`, never touches another port and never uses Funnel. The feature as a whole is described on [Remote access](Remote-Access.md); the threats it guards against are on [Security model](Security-Model.md).
 
-**What has been run:** remote access has only ever run against a fake Tailscale. The unit tests in `test/remote.test.ts` use `FakeTailscale`, and `CliTailscale` with a fake `Runner` that records the arguments instead of starting `tailscale`. No test, and nothing written for this page, has run the real `tailscale` command. Statements about what the real CLI prints or accepts are read from the code, not run.
+**What has been run:** remote access has been checked by a person on a real tailnet (a Linux computer running Masthead, an Android phone and a Windows device). The unit tests in `test/remote.test.ts` use `FakeTailscale`, and `CliTailscale` with a fake `Runner` that records the arguments instead of starting `tailscale`. No automated test runs the real `tailscale` command.
 
 ## Types
 

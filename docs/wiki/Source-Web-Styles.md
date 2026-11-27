@@ -72,7 +72,7 @@ Rules under `.md` style rendered Markdown ([Rendering Markdown safely](Source-We
 
 ## Layout regions (`web/src/App.svelte`)
 
-The grid lives in App.svelte's scoped `<style>` and script, not in `app.css`. `div.shell` is a grid whose `grid-template-columns` the script sets: `264px` for the chat list when open and not narrow, `minmax(0, 1fr)` for `main`, and `340px` for the team panel when open on a wide screen. `main` is a flex column: a 48 px header (56 px on a phone), banners, breadcrumbs, the transcript, and the `.dock` whose `.column` is at most 768 px wide and centred. The dock pads itself with `env(safe-area-inset-bottom)`. The toast is fixed above the dock.
+The grid lives in App.svelte's scoped `<style>` and script, not in `app.css`. `div.shell` is a grid whose `grid-template-columns` the script sets: `264px` for the chat list when open and not narrow, `minmax(0, 1fr)` for `main`, and `${ui.teamWidth}px` for the team panel when open on a wide screen (400 px by default, 300–560, dragged on its left edge; see [Simple and Advanced](Source-Web-Front-End.md#simple-and-advanced-uisveltets)). `main` is a flex column: a 48 px header (56 px on a phone), banners, breadcrumbs, the transcript, and the `.dock` whose `.column` is at most 768 px wide and centred. The dock pads itself with `env(safe-area-inset-bottom)`. The toast is fixed above the dock.
 
 Drawers: on narrow screens `aside.left`, and below 1280 px `aside.right`, become `position: fixed` at full height, at most 88vw, with `--shadow`, over a 35% black backdrop. Details per width are on [Layout per width](Source-Web-Front-End.md#layout-per-width).
 
@@ -82,7 +82,7 @@ A 32×32 rounded square (6 px corners) in `#14171c`, the light `--text` colour. 
 
 ## `vite.config.ts`
 
-From the page's side: `root: 'web'` makes `web/index.html` the entry, and `vite build` writes to `dist/web` (target ES2022). The dev server (`npm run dev:web`) listens on `MASTHEAD_DEV_WEB_PORT` (default 7718, `strictPort`) and proxies `/ws` and `/api` to the Masthead server on `127.0.0.1:MASTHEAD_PORT` (default 7717). Set both to run beside an installed Masthead. A port outside 1024–65535 stops with a clear error. `/blob` is not proxied, so pictures do not work in the dev server. Full detail: [Build configuration](Source-Build-Config.md#viteconfigts).
+From the page's side: `root: 'web'` makes `web/index.html` the entry, and `vite build` writes to `dist/web` (target ES2022). The dev server (`npm run dev:web`) listens on `MASTHEAD_DEV_WEB_PORT` (default 7718, `strictPort`) and proxies `/ws`, `/api` and `/blob` to the Masthead server on `127.0.0.1:MASTHEAD_PORT` (default 7717). Set both to run beside an installed Masthead. A port outside 1024–65535 stops with a clear error. `vite.config.ts` is at the repository root and loads `../svelte.config.js` relative to `web/`. Full detail: [Build configuration](Source-Build-Config.md#viteconfigts).
 
 ## `svelte.config.js`
 

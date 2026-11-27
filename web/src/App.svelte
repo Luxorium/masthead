@@ -55,7 +55,7 @@
   const remoteRequests = $derived(((store.remote as RemoteState | null)?.requests ?? []) as RemoteState['requests']);
 
   /** Helpers exist in the open chat: only then is there a team to show. */
-  const hasTeam = $derived(store.agentList.some((a) => a.tier !== 'lead'));
+  const hasTeam = $derived(store.agentList.some((a) => !!a.parentId));
   const showPanel = $derived(hasTeam && ui.teamOpen);
 
   // Advanced on a wide screen opens the team panel by itself when the first helper starts, unless the
@@ -99,7 +99,7 @@
     lastPending = n;
   });
 
-  const path = $derived(store.viewAgent && store.viewAgent.tier !== 'lead' ? store.pathTo(store.viewAgent.id) : []);
+  const path = $derived(store.viewAgent && store.viewAgent.parentId ? store.pathTo(store.viewAgent.id) : []);
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -154,8 +154,11 @@
                 else if (e.key === 'Escape') finishRename(false);
               }}
             />
-          {:else}
+          {:else if store.mayAct}
             <button class="title-btn" onclick={startRename} title={T.shell.rename}>{store.conv.title}</button>
+          {:else}
+            <!-- A device that may not act cannot rename (the server refuses it): the title is just words. -->
+            <span class="title-text">{store.conv.title}</span>
           {/if}
         {:else}
           <span class="title-text">{T.shell.newChatTitle}</span>
@@ -203,11 +206,10 @@
           {#each remoteRequests as request (request.id)}
             <DeviceRequestCard {request} />
           {/each}
-          {#if store.mayAnswer}
-            {#each store.convPending as request (request.id)}
-              <PermissionCard {request} />
-            {/each}
-          {/if}
+          <!-- Every device sees what is waiting; a read-only one is told it cannot answer (PermissionCard). -->
+          {#each store.convPending as request (request.id)}
+            <PermissionCard {request} />
+          {/each}
           <CompactCard />
           <CompactProgress />
           {#if store.viewAgent?.archived}
@@ -223,9 +225,24 @@
             {#key store.composerKey}
               <Composer />
             {/key}
-          {:else}
-            <!-- A remote device whose role cannot send: say plainly what it may do instead of a dead box. -->
-            <p class="role-line" role="note">{store.deviceRole === 'approve' ? T.device.roleApprove : T.device.roleRead}</p>
+          {/if}
+          {#if !store.mayAct}
+            <!-- A remote device whose role cannot send: say plainly what it may do, and how to get more,
+                 in place of the message box. A device that may stop gets the stops the message box held. -->
+            <div class="role-line" role="note">
+              <p>{store.deviceRole === 'approve' ? T.device.roleApprove : T.device.roleRead}</p>
+              <p>{T.device.askMore}</p>
+              {#if store.mayStop && store.convId && (store.lead?.status === 'running' || store.liveCount > 0)}
+                <div class="role-stops">
+                  {#if store.lead?.status === 'running'}
+                    <button class="btn" title={T.composer.stopTitle} onclick={() => store.convId && store.send({ t: 'interrupt', convId: store.convId })}>{T.device.stopReply}</button>
+                  {/if}
+                  {#if store.liveCount > 0}
+                    <button class="btn danger" onclick={() => store.convId && store.send({ t: 'stop_all', convId: store.convId })}>{T.composer.stopAll}</button>
+                  {/if}
+                </div>
+              {/if}
+            </div>
           {/if}
         </div>
       </div>
@@ -337,6 +354,18 @@
   .archived-words {
     flex: 1;
     min-width: 12em;
+  }
+  .role-line p {
+    margin: 0;
+  }
+  .role-line p + p {
+    margin-top: 4px;
+  }
+  .role-stops {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 10px;
   }
   .role-line {
     margin: 0;

@@ -1,11 +1,11 @@
 {
   "//": [
-    "The package name @luxorium/masthead is a placeholder pending the person's decision (docs/plans/0.2.0/PLAN.md, gate 3).",
-    "\"private\": true stays until then, so nothing can be published by accident.",
+    "The product is Masthead. @luxorium/masthead is the package name inside the GitHub release tarball (luxorium-masthead-<version>.tgz).",
+    "Masthead 0.2.0 is not published to npm: \"private\": true stays, so nothing can be published by accident.",
     "Install globally with --os=none --cpu=none (npm ignores --omit=optional for a global install): the Agent SDK's optional platform packages hold a private Claude Code binary that Masthead never uses (it always runs the person's own claude)."
   ],
   "name": "@luxorium/masthead",
-  "version": "0.2.0-beta.2",
+  "version": "0.2.0",
   "description": "A local web app for running a tiered team of Claude agents through the Claude Code already installed on your machine.",
   "license": "MIT",
   "homepage": "https://github.com/Luxorium/masthead#readme",

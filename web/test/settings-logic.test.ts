@@ -49,6 +49,8 @@ describe('team settings logic', () => {
     expect(c.builtIn).toBe(false);
     expect(c.label).toBe('Claude (copy)');
     expect(c.tiers.map((t) => t.id)).toEqual([`${c.id}:0`, `${c.id}:1`]);
+    // A removed team's id still named by a chat is not handed out again.
+    expect(copyOf(claude(), [claude()], [c.id]).id).not.toBe(c.id);
   });
 
   it('a new model fits the thinking time and carries its name unless renamed', () => {

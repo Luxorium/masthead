@@ -417,11 +417,16 @@ test('delete_profile: refused with the count while chats use it, deleted with fo
   app.connect(local);
   got.length = 0;
   app.handle(local, { t: 'delete_profile', id: 'mini' });
-  assert.deepEqual(got[0], { t: 'error', code: 'refused', message: '1 chat use this team.', inUse: { id: 'mini', chats: 1 } });
+  assert.deepEqual(got[0], { t: 'error', code: 'refused', message: '1 chat uses this team.', inUse: { id: 'mini', chats: 1 } });
   got.length = 0;
   app.handle(local, { t: 'delete_profile', id: 'mini', force: true });
   const s = got.find((m) => m.t === 'settings') as { settings: { profiles: Array<{ id: string }> } };
   assert.equal(s.settings.profiles.some((p) => p.id === 'mini'), false);
+  // A new team under the deleted id gets a fresh id: the chat keeps its copy of the old team's levels.
+  got.length = 0;
+  app.handle(local, { t: 'settings', settings: { profiles: [...s.settings.profiles, { id: 'mini', label: 'Other', tiers: [{ label: 'Boss', model: 'm2' }] }] } } as never);
+  const s2 = got.find((m) => m.t === 'settings') as { settings: { profiles: Array<{ id: string; label: string }> } };
+  assert.deepEqual(s2.settings.profiles.filter((p) => p.label === 'Other').map((p) => p.id), ['mini-2']);
   got.length = 0;
   app.handle(local, { t: 'delete_profile', id: 'claude' });
   assert.equal(got[0]!.message, 'This team cannot be deleted.', 'the built-in Claude team stays');

@@ -7,7 +7,7 @@ import { defaultSettings, sanitizeSettings } from '../server/settings/settings.t
 import { messageEnvelope, reportEnvelope, systemAppend } from '../server/core/prompts.ts';
 import { Scheduler, SlotCancelled } from '../server/core/scheduler.ts';
 import { Store } from '../server/storage/store.ts';
-import { CHILD_TIER, EFFORTS, agentName, capEffort, displayName, modelLabel, type Item, type Tier } from '../shared/protocol.ts';
+import { EFFORTS, agentName, capEffort, displayName, modelLabel, type Item, type Tier } from '../shared/protocol.ts';
 import { toolLine } from '../shared/toolline.ts';
 
 const tick = () => new Promise((r) => setImmediate(r));
@@ -137,7 +137,6 @@ test('settings: bad values fall back instead of being stored', () => {
 });
 
 test('tiers: each tier starts only the one below it', () => {
-  assert.deepEqual(CHILD_TIER, { lead: 'opus', opus: 'sonnet', sonnet: 'haiku', haiku: null });
   assert.equal(capEffort('xhigh', 'medium'), 'medium');
   assert.equal(capEffort('low', 'high'), 'low');
 });

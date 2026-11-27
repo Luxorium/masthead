@@ -135,7 +135,7 @@
         const l = toolLine(item.name, item.input, !item.done);
         lines.push({ id: item.id, who: '', text: flat(`${l.verb} ${l.target ?? ''}`, 110), kind: item.kind });
       } else if (item.kind === 'inbound' && item.via !== 'task') {
-        const via = item.via === 'report' ? T.map.reportFrom : T.map.messageFrom;
+        const via = item.via === 'report' ? T.preview.reportFrom : T.preview.messageFrom;
         lines.push({ id: item.id, who: via(displayName(item.from)), text: flat(item.text, 140), kind: item.kind });
       } else if (item.kind === 'notice') lines.push({ id: item.id, who: '', text: flat(item.text, 120), kind: item.kind });
     }
@@ -259,7 +259,7 @@
                 <div class="p-line {l.kind}">{#if l.who}<b>{l.who}</b> {/if}{l.text}</div>
               {/each}
               {#if draft?.text}
-                <div class="p-line live">{#if draft.kind === 'thinking'}{T.map.thinking}{:else}<b>{displayName(a.name)}</b>{/if} {flat(draft.text.slice(-160), 160)}</div>
+                <div class="p-line live">{#if draft.kind === 'thinking'}{T.preview.thinking}{:else}<b>{displayName(a.name)}</b>{/if} {flat(draft.text.slice(-160), 160)}</div>
               {/if}
             {/if}
           </div>
@@ -384,6 +384,8 @@
     border-radius: 6px;
     min-width: 0;
     cursor: pointer;
+    /* A clickable row otherwise flashes the phone's blue tap colour (and keeps it when Stop vanishes). */
+    -webkit-tap-highlight-color: transparent;
   }
   .row:hover,
   .row.viewing {

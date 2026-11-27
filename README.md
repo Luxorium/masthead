@@ -4,21 +4,10 @@ Masthead is an app on your own computer that runs a team of AI helpers for you, 
 You talk to one main assistant; when the work calls for it, it brings in helpers, using the Claude
 Code (or Codex) you have already installed and signed in to.
 
-> **Masthead 0.2.0 is in progress** (branch `next`). These notes describe 0.2.0. Masthead 0.1.4 is
-> the current release.
-
-## Screenshots
-
-> **TODO:** take these pictures and save them under `docs/images/`, then remove this note.
-
-- `![New chat](docs/images/new-chat.png)`: a new chat, with "What are we working on?" and the message box.
-- `![A chat with helpers](docs/images/chat-with-helpers.png)`: the main assistant working with two helpers.
-- `![The team](docs/images/team.png)`: the Team panel showing who is working.
-- `![Team panel](docs/images/team-panel.png)`: the Team panel, with helpers under the one that started them.
-- `![Permission request](docs/images/permission-request.png)`: a card asking "Allow" or "Deny".
-- `![Pictures](docs/images/pictures.png)`: a picture attached to a message.
-- `![Settings](docs/images/settings.png)`: the Settings page.
-- `![Phone](docs/images/phone.png)`: Masthead on a phone over Tailscale.
+> Masthead is an independent open-source project, not affiliated with, endorsed by or sponsored by
+> Anthropic or OpenAI. It runs your own Claude Code or Codex under your own account; their terms and
+> your plan's limits apply. Running many agents on a Pro/Max subscription may hit limits or be
+> restricted; use an API key if you need certainty. Read the [full notice](docs/guide/accounts-and-terms.md).
 
 ## What you need
 
@@ -26,73 +15,58 @@ Code (or Codex) you have already installed and signed in to.
 - [Node.js](https://nodejs.org) 22 or newer.
 - [Claude Code](https://code.claude.com/docs/en/setup), installed and signed in with your own account.
   (Or Codex: see [Teams and agent programs](docs/guide/teams-and-agent-programs.md).)
-- Git, while Masthead is only available from source.
 
-**Windows has been partly checked on a real machine; macOS not yet.** It is built and tested
-automatically on all three systems. On Windows 11 a person has installed it, run agents and the
-service at login; keep-awake and some prompts are not checked yet. Until the
-[release checklist](docs/plans/0.2.0/release-checklist.md) is done on a real Mac, treat macOS as untested.
+Masthead is built and tested automatically on all three systems, and has been checked by a person on
+Linux and on a real Windows 11 PC. **macOS has not yet been checked on a real Mac**: it should work,
+and reports of what does not are welcome.
 
 ## Install
 
-Masthead will be installable with `npm i -g --os=none --cpu=none @luxorium/masthead` **once it is
-published**. That package is not published yet and its name may change. Until then, install from
-source as below. Full steps with more detail: [docs/guide/installing.md](docs/guide/installing.md).
+Once Node.js and Claude Code are in place, Masthead installs from its
+[release page](https://github.com/Luxorium/masthead/releases/tag/v0.2.0) with one command, called
+"the install command" below:
+
+<!-- The file name is the package name @luxorium/masthead plus the version. For a new version change
+the address here, in README.md and in docs/guide/installing.md. -->
+```
+npm install -g --os=none --cpu=none https://github.com/Luxorium/masthead/releases/download/v0.2.0/luxorium-masthead-0.2.0.tgz
+```
+
+Full steps with more detail: [docs/guide/installing.md](docs/guide/installing.md).
 
 ### Windows
 
-1. Install Node.js 22 or newer and Git.
+1. Install [Node.js](https://nodejs.org) 22 or newer.
 2. Install Claude Code: open PowerShell and run `irm https://claude.ai/install.ps1 | iex`
    (or `winget install Anthropic.ClaudeCode`).
 3. Sign in: run `claude` once and follow the steps, then close it.
-4. Install Masthead from source, in PowerShell:
-   ```powershell
-   git clone https://github.com/Luxorium/masthead
-   cd masthead
-   git switch next
-   npm ci
-   npm pack
-   npm i -g --os=none --cpu=none .\luxorium-masthead-<version>.tgz
-   ```
-   (`<version>` is the number in the file name `npm pack` printed.)
+4. Paste the install command into PowerShell and press Enter.
 5. Run `masthead.cmd`. Your browser opens on Masthead. (In PowerShell use `masthead.cmd`: stock
    PowerShell refuses `masthead.ps1` because running scripts is disabled. Command Prompt takes plain
-   `masthead`. Optional permanent fix: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.)
+   `masthead`.)
 6. Optional: run `masthead.cmd service install` so Masthead starts when you log in.
 
 ### macOS
 
-1. Install Node.js 22 or newer (for example `brew install node`) and Git.
+1. Install Node.js 22 or newer (for example `brew install node`).
 2. Install Claude Code, for example `brew install --cask claude-code`
    (other ways: [Claude Code setup](https://code.claude.com/docs/en/setup)).
 3. Sign in: run `claude` once in Terminal and follow the steps, then close it.
-4. Install Masthead from source, in Terminal:
-   ```sh
-   git clone https://github.com/Luxorium/masthead
-   cd masthead
-   git switch next
-   npm ci
-   npm pack
-   npm i -g --os=none --cpu=none ./luxorium-masthead-*.tgz
-   ```
+4. Paste the install command into Terminal and press Enter.
 5. Run `masthead`. Your browser opens on Masthead.
 6. Optional: run `masthead service install` so Masthead starts when you log in.
 
 ### Linux
 
-1. Install Node.js 22 or newer and Git from your distribution.
+1. Install Node.js 22 or newer from your distribution.
 2. Install Claude Code ([setup](https://code.claude.com/docs/en/setup)).
 3. Sign in: run `claude` once in a terminal and follow the steps, then close it.
-4. Install Masthead from source:
-   ```sh
-   git clone https://github.com/Luxorium/masthead
-   cd masthead
-   git switch next
-   scripts/install.sh
-   ```
-   The script installs Masthead for your user only (no root), adds the `masthead` command, a
-   launcher entry, and a service that starts Masthead when you log in.
+4. Paste the install command into a terminal and press Enter.
 5. Run `masthead`. Your browser opens on Masthead.
+6. Optional: run `masthead service install` so Masthead starts when you log in.
+
+To install from source instead (or with `scripts/install.sh` on Linux), see
+[Installing from source](docs/guide/installing.md#installing-from-source).
 
 If the browser opens but asks you to "Open Masthead with the `masthead` command", run
 `masthead --no-browser` in a terminal and open the address it prints. More in
@@ -128,10 +102,12 @@ time keep usage down (see [Helpers and the team](docs/guide/helpers-and-team.md)
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). How the code works is described in [docs/wiki](docs/wiki/Home.md).
 
-## Not affiliated
+## Notice
 
-Masthead is an independent project. It is not affiliated with, made by or endorsed by Anthropic or
-OpenAI. Claude and Claude Code are Anthropic's; Codex is OpenAI's.
+Masthead is an independent open-source project, not affiliated with, endorsed by or sponsored by
+Anthropic or OpenAI. "Claude", "Claude Code", "OpenAI", "Codex" and "ChatGPT" are trademarks of their
+owners, used only to describe compatibility. The full notice, and how to use an API key instead of a
+plan: [Your account, API keys and the terms](docs/guide/accounts-and-terms.md).
 
 ## Licence
 

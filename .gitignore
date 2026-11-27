@@ -3,3 +3,4 @@ dist/
 *.log
 e2e-shots/
 .playwright-browsers/
+.tmp-*

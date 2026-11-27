@@ -11,7 +11,7 @@ Every message a tab sends passes `admit()` first. That is the one place a remote
 
 ## shared/protocol-v2.ts
 
-The file comment says it holds the messages that are new or changed from version 1 (`shared/protocol.ts`). It is kept separate while that file is reworked, and the two merge into one before 0.2.0. It must not import Node or DOM APIs.
+The file comment says it holds the messages that are new or changed from version 1 (`shared/protocol.ts`), kept separate while that file was being reworked. The comment says the two merge into one file before 0.2.0; in the 0.2.0 source they are still two files. It must not import Node or DOM APIs.
 
 | Export | Value or meaning |
 |---|---|
@@ -20,12 +20,14 @@ The file comment says it holds the messages that are new or changed from version
 | `ErrorCode` | `'protocol' \| 'refused' \| 'not_found' \| 'too_large' \| 'invalid'`. |
 | `CLIP_CHARS` | 16 × 1024 characters. Live `item` events clip tool input and output past this; `item_full` fetches the rest. |
 | `RING_SIZE` | 500: events kept per conversation for resync. |
+| `BackendModelV2` | A model a backend offers: `id`, `label`, `efforts`, `nativeEffort`, optional `contextWindow`, `default`, `description`, `order`. A copy of `ModelInfo` in `server/backends/types.ts`. |
+| `BackendStatusV2` | An agent program on this computer: `id`, `label`, `available`, `path`, `version`, `signedIn`, optional `minVersion`, `error`, `warning`, and its `models`. A copy of `BackendStatus` in `server/backends/registry.ts`. |
 | `ApprovalSummary` | `{id, convId, agentName, kind}`: who is asking, without the request itself, for badges on every conversation. |
-| `ClientMsgV2` | Version 1's messages plus `hello` with `protocol` and `caps`, `subscribe {convId, since?}`, `unsubscribe`, `draft_sync {convId, agentId}`, `item_full {convId, agentId, itemId}`, paged `items {before?, limit?}`, and `send` with an optional `profile`. |
+| `ClientMsgV2` | Version 1's messages plus `hello` with `protocol` and `caps`, `subscribe {convId, since?}`, `unsubscribe`, `draft_sync {convId, agentId}`, `item_full {convId, agentId, itemId}`, paged `items {before?, limit?}`, `send` with an optional `profile`, `check_backends`, the remote-access messages (`remote_settings`, `device_decision`, `device_revoke`, `device_role`, `remote_audit`, `forget_me`), and the team-compaction messages (`compact_answer`, `compact_cancel`, `archive_items`, `restore_agent`, `auto_compact`). |
 | `Sequenced<T>` | `T & {seq: number}`. |
-| `ServerMsgV2` | `state` with `protocol: 2` and summarised `pending`; the `conversation` snapshot (with `drafts` and `seq`); sequenced `agent`, `item` (with `truncated?`), `draft` (with `dseq` and `append` or `text`), `draft_end` and `permission_request`; `approval`; `resync`; `item_full`; paged `items` (with `cursor` and `more`); `error` with a `code`. |
+| `ServerMsgV2` | `state` with `protocol: 2` and summarised `pending`; the `conversation` snapshot (with `drafts` and `seq`); sequenced `agent`, `item` (with `truncated?`), `draft` (with `dseq` and `append` or `text`), `draft_end` and `permission_request`; `approval`; `resync`; `item_full`; paged `items` (with `cursor` and `more`); `error` with a `code`; `compact` (a conversation's compaction state, or null); `archived` and `archive_items` (archived agents and their paged items); `backends`; `remote` (local tabs only); and `remote_audit` entries. |
 
-The types also list `epoch` on `state` and on `subscribe`, `itemId` on `draft_end`, and `lastItemIds` on the `conversation` snapshot.
+The types also list `epoch` on `state` and on `subscribe`, `itemId` on `draft_end`, `lastItemIds` on the `conversation` snapshot, and optional `blobToken`, `backends` and `problems` (`{what: 'settings' | 'devices', message}`) inside the version 2 `state`.
 
 ## Client and HubHost
 
@@ -38,7 +40,7 @@ The types also list `epoch` on `state` and on `subscribe`, `itemId` on `draft_en
 ## Errors: ClientError and codeOf(e)
 
 - `ClientError(code, message)`: an `Error` carrying an `ErrorCode`. App throws it where the code matters.
-- `codeOf(e)`: the code for any error. A `ClientError` gives its own code. A plain `Error` is classified by its text: "no longer exists" or "not found" gives `not_found`; "too long", "larger than", "at most" or "too large" gives `too_large`; anything else `invalid`.
+- `codeOf(e)`: the code for any error. A `ClientError` gives its own code. A plain `Error` is classified by its text: "no longer exists" gives `not_found`; "too long", "larger than", "at most" or "too large" gives `too_large`; anything else `invalid`.
 - `Hub.error(client, e, ref?)`: sends `{t: 'error', message, ref?}`. Only a local version 1 tab gets that old shape; every other tab, including a remote device that has not said hello yet, also gets `code`.
 
 ## Sessions: version 0, 1 and 2

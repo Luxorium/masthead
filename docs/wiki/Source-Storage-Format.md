@@ -18,7 +18,7 @@ Optional on read (absent in 0.1.x files); always written as `FORMAT` by `saveCon
 
 ### Format marker
 
-The `Store` constructor writes a store-wide marker so a later version can tell what it is opening without reading every file. When the root folder is named `conversations` (the real data folder) the marker is `<data folder>/format`; for any other root (a test's temporary folder) it is `<root>/.format`. If the marker is missing or lower than 2 it is written as `2\n` with `writeFileAtomic`; a marker from a newer Masthead is left as it is. A read-only data folder still loads (tested in `test/storage.test.ts`).
+The `Store` constructor writes a store-wide marker so a later version can tell what it is opening without reading every file. When the root folder is named `conversations` (the real data folder) the marker is `<data folder>/format`; for any other root (a test's temporary folder) it is `<root>/.format`. If the marker is missing, unreadable or lower than 2 it is written as `2\n` with `writeFileAtomic`; a marker from a newer Masthead is left as it is (tested by "format marker: raised to 2, never lowered from a newer one"). A failed write is ignored, so a read-only data folder still loads (read from the code; no test covers it).
 
 ### `loadAll()` with migration
 
@@ -36,7 +36,7 @@ One page of a transcript, through `readPage` below. `App` uses it to send pages 
 
 ### `referencedBlobs(convId)`, `collectBlobs(convId)` and `deleteConversation(convId)`
 
-`referencedBlobs` reads every `items/*.jsonl` of the conversation with `loadItems` and collects `blobsOf` each item. `collectBlobs` removes the images not in that set. `deleteConversation` removes the folder, images included, with `rmSync` retrying up to 5 times 100 ms apart for Windows. Tested by "store: readItems pages a stored transcript; delete removes images too".
+`referencedBlobs` reads every `items/*.jsonl` of the conversation with `loadItems` and collects `blobsOf` each item. `collectBlobs` removes the images not in that set, except when `hasTornLine(convId)` finds a transcript line that does not parse: then it keeps every image and logs once (tested by "transcript: after a torn last line the next item starts on its own line; images are all kept while a line is damaged"). `appendItem` also writes a newline first when a file it appends to for the first time in a run ends mid-line, so a new item does not join a torn line. `deleteConversation` removes the folder, images included, with `rmSync` retrying up to 5 times 100 ms apart for Windows. Tested by "store: readItems pages a stored transcript; delete removes images too".
 
 ## transcript.ts: `readPage(file, {before, limit})`
 
@@ -63,11 +63,11 @@ Tested by "atomic: renames retry on Windows while the target is busy, and nowher
 
 ### `writeFileAtomic(path, data)`
 
-Creates the parent folder (`0700`), writes `<path>.<pid>.tmp` with mode `0600`, and moves it into place with `renameRetry`, so a crash never leaves half a file. Used for `conversation.json`, the format marker and the remote access config; the device registry's `devices.json` uses `renameRetry` the same way (see [server/remote/registry.ts](Source-Remote-Registry.md)).
+Creates the parent folder (`0700`), writes `<path>.<pid>.tmp` with mode `0600`, and moves it into place with `renameRetry`, so a crash never leaves half a file. Used for `conversation.json`, the format marker, `settings.json` (and its v2 copy, `server/settings/settings.ts`) and the remote access config (`server/remote/access.ts`); the device registry's `devices.json` uses `renameRetry` the same way (see [server/remote/registry.ts](Source-Remote-Registry.md)).
 
 ## Tests
 
-`test/storage.test.ts`; all its tests passed when this page was written (`node --import tsx --test test/remote.test.ts test/storage.test.ts`, 35 tests).
+`test/storage.test.ts`: 13 tests, all passed on 2026-11-27 (`node --import tsx --test test/storage.test.ts`).
 
 ## Related pages
 

@@ -1,5 +1,8 @@
 # 0.2.0 research: a Codex backend
 
+> **History.** This plan was research that led to the Codex backend in 0.2.0. It is kept as the record of the design and the evidence; where it
+> differs from the code, the code and `docs/wiki/` are right.
+
 Research by bravo, 2026-11-27, against `codex-cli 0.172.0` (`/usr/bin/codex`, signed in with a ChatGPT
 Pro plan) and Masthead `next` (0.1.4). Read-only on the project except this file. Experiments ran in
 `/tmp/codex-exp` with `gpt-6-luna` at `low` effort. Each run cost about 19k input tokens, most of it

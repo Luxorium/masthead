@@ -7,7 +7,7 @@ Backends in 0.2.0:
 | Id | Label | Code | Page |
 |---|---|---|---|
 | `claude-code` | Claude Code | `server/backends/claude/` | [Claude Code backend](Source-Backend-Claude.md) |
-| `codex` | Codex | `server/backends/codex/` | not written yet |
+| `codex` | Codex | `server/backends/codex/` | [Codex backend](Source-Backend-Codex.md) |
 | `fake` | Fake backend | `server/backends/fake/` | [Fake backend](Source-Backend-Fake.md) |
 
 ## `server/backends/types.ts`

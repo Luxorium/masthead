@@ -53,6 +53,9 @@
         <button class="btn ghost" onclick={() => store.answerCompact([...keep], false)}>{T.compact.cancel}</button>
         <button class="btn primary" onclick={() => store.answerCompact([...keep], true)}>{T.compact.confirm}</button>
       </div>
+    {:else}
+      <!-- A read-only device sees the proposal but cannot answer it (the server refuses). -->
+      <p class="cannot" role="note">{T.device.cannotTidy}</p>
     {/if}
   </div>
 {/if}
@@ -114,6 +117,11 @@
   }
   .locked .what {
     font-style: italic;
+  }
+  .cannot {
+    margin: 10px 0 0;
+    font-size: 13px;
+    color: var(--muted);
   }
   .actions {
     display: flex;

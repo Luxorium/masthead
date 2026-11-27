@@ -7,7 +7,7 @@ import path, { join } from 'node:path';
 import { test } from 'node:test';
 import { Conversation, type ConversationHost } from '../server/core/conversation.ts';
 import { Scheduler } from '../server/core/scheduler.ts';
-import { absoluteFolder, claudeProfile, defaultSettings, loadSettings, sanitizeSettings, tierLimit } from '../server/settings/settings.ts';
+import { absoluteFolder, claudeProfile, defaultSettings, freshProfileIds, loadSettings, sanitizeSettings, tierLimit } from '../server/settings/settings.ts';
 import { childTierOf, findTier, isLeadTier, type Settings } from '../shared/protocol.ts';
 
 const twoTier = { id: 'duo', label: 'Duo', tiers: [{ model: 'claude-opus-5-5', effort: 'high' }, { model: 'claude-haiku-5-5', max: 2, colour: 'rose' }] };
@@ -118,6 +118,31 @@ test('profiles: tier lookups, the lead tier, children and limits', () => {
   assert.equal(tierLimit(s, 'gone'), 0);
   const sched = new Scheduler((t) => tierLimit(s, t));
   assert.equal(sched.running('duo:0' as never), 0);
+});
+
+test('profiles: the top tier of a custom or Codex team is never limited, whatever its id', async () => {
+  const codex = { id: 'codex', label: 'Codex', tiers: [{ backend: 'codex', model: 'gpt-6-luna' }, { backend: 'codex', model: 'gpt-6-luna', max: 1 }] };
+  const s = sanitizeSettings({ profiles: [claudeProfile(), twoTier, codex] });
+  assert.deepEqual(s.profiles.map((p) => p.tiers[0]!.id), ['lead', 'duo:0', 'codex:0']);
+  const sched = new Scheduler((t) => tierLimit(s, t));
+  const started: string[] = [];
+  for (const tier of ['duo:0', 'codex:0', 'codex:1']) for (const n of [1, 2, 3]) void sched.acquire(tier as never, `${tier}#${n}`, 'x').then(() => started.push(`${tier}#${n}`));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(started.filter((x) => x.startsWith('duo:0')).length, 3, 'custom team leads all start');
+  assert.equal(started.filter((x) => x.startsWith('codex:0')).length, 3, 'Codex team leads all start');
+  assert.equal(started.filter((x) => x.startsWith('codex:1')).length, 1, 'helpers keep their limit');
+  assert.equal(isLeadTier(s, 'codex:0'), true);
+  assert.equal(isLeadTier(s, 'codex:1'), false);
+});
+
+test('profiles: a new team does not take the id of a deleted team that chats still use', () => {
+  const s = sanitizeSettings({ profiles: [claudeProfile(), twoTier] });
+  const held = new Set(['claude', 'duo', 'gone', 'gone-2']);
+  const out = freshProfileIds([claudeProfile(), twoTier, { ...twoTier, id: 'gone', label: 'New' }, { ...twoTier, id: 'free' }], s, held) as Array<{ id: string; label?: string }>;
+  assert.deepEqual(out.map((p) => p.id), ['claude', 'duo', 'gone-3', 'free'], 'existing and unheld ids stay; a held one gets a fresh id');
+  assert.equal(out[2]!.label, 'New');
+  const next = sanitizeSettings({ profiles: out }, s);
+  assert.deepEqual(next.profiles.find((p) => p.id === 'gone-3')!.tiers.map((t) => t.id).slice(0, 1), ['gone-3:0'], 'its tiers follow the new id');
 });
 
 function host(settings: Settings): ConversationHost {

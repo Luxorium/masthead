@@ -26,7 +26,7 @@
 
   const agent = $derived(store.viewAgent);
   const isNew = $derived(store.convId === null);
-  const direct = $derived(!isNew && agent !== null && agent.tier !== 'lead');
+  const direct = $derived(!isNew && agent !== null && !!agent.parentId);
   const leadBusy = $derived(store.lead?.status === 'running');
   const anyLive = $derived(store.liveCount > 0);
   /** Pictures still uploading, or that failed: sending waits for the first and needs the second removed. */
@@ -160,10 +160,31 @@
     void addFiles(files);
   }
 
+  /** Only a drag that carries files is ours: dragged text still drops into the box as usual. */
+  const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+
+  function onDragOver(e: DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragging = true;
+  }
+
+  function onDragLeave(e: DragEvent) {
+    // Moving over the box's own children (the text box, the thumbnails) is not leaving it.
+    if (e.relatedTarget instanceof Node && (e.currentTarget as Node).contains(e.relatedTarget)) return;
+    dragging = false;
+  }
+
   function onDrop(e: DragEvent) {
+    if (!hasFiles(e)) return;
     e.preventDefault();
     dragging = false;
     if (e.dataTransfer?.files.length) void addFiles(e.dataTransfer.files);
+  }
+
+  /** A file dropped beside the box must not make the browser leave the app to show it. */
+  function stray(e: DragEvent) {
+    if (hasFiles(e) && !e.defaultPrevented) e.preventDefault();
   }
 
   function removeImage(i: number) {
@@ -171,6 +192,8 @@
     if (gone) URL.revokeObjectURL(gone.url);
   }
 </script>
+
+<svelte:window ondragover={stray} ondrop={stray} />
 
 {#if direct && agent?.status === 'waiting' && agent.waitingFor}
   <p class="hint">{T.composer.waiting(displayName(agent.name), displayName(agent.waitingFor))}</p>
@@ -196,11 +219,8 @@
   class:dragging
   role="group"
   aria-label={direct && agent ? T.composer.labelTo(displayName(agent.name)) : T.composer.label}
-  ondragover={(e) => {
-    e.preventDefault();
-    dragging = true;
-  }}
-  ondragleave={() => (dragging = false)}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
   ondrop={onDrop}
 >
   {#if draft.images.length > 0}
@@ -240,8 +260,9 @@
         <FolderPicker onclose={() => (choosingFolder = false)} />
       {/if}
     </div>
-    {#if teams.length > 1}
-      <!-- Only when there is a real choice (a second usable team): Simple by default. -->
+    {#if teams.length > 1 || (teams.length === 1 && teams[0].id !== (store.settings?.defaultProfile ?? 'claude'))}
+      <!-- When there is a real choice (a second usable team), or when the one team that can start is not
+           the default: then the chip names it and the chat starts with it. Otherwise hidden: Simple. -->
       <ProfileChip value={store.newProfile ?? store.settings?.defaultProfile ?? 'claude'} onchange={(id) => (store.newProfile = id)} />
     {/if}
     {#if firstChat}<span class="first">{T.composer.folderFirst}</span>{/if}
@@ -263,7 +284,7 @@
       {#if direct && agent}
         <b>{modelLabel(agent.model)}</b> {T.effort[agent.effort]}
       {:else}
-        {@const first = profileById(store.settings, store.conv?.profileId ?? store.settings.defaultProfile)?.tiers[0]}
+        {@const first = profileById(store.settings, store.conv?.profileId ?? store.newProfile ?? store.settings.defaultProfile)?.tiers[0]}
         <b>{modelLabel(store.lead?.model ?? first?.model ?? '')}</b> {T.effort[store.lead?.effort ?? (store.settings.autoEffort ? 'low' : (first?.effort ?? 'low'))]}
       {/if}
       <span class="sep">·</span>

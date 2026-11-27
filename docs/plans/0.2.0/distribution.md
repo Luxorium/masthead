@@ -1,5 +1,11 @@
 # 0.2.0: distribution: prepackaged, on Linux, macOS and Windows
 
+> **History.** This plan was carried out for 0.2.0. It is kept as the record of the design and the evidence; where it
+> differs from the code, the code and `docs/wiki/` are right.
+> As shipped: 0.2.0 is not on npm (decided 2026-11-27); a pushed `v*` tag makes
+> `.github/workflows/release.yml` build the GitHub release with the `.tgz` and `SHA256SUMS`. The
+> release steps are in `CONTRIBUTING.md`, "Making a release".
+
 Written 2026-11-27 by delta (Opus), from the `next` branch at 0.1.4 (`478601f`). This is a research and design note: nothing was changed in the code, nothing was published or registered, and no install script was run.
 
 How it was done:

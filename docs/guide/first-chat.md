@@ -8,14 +8,15 @@
 3. Under the message box, press **Folder** and choose the folder to work in.
    **Agents can read and change files in this folder.** Pick the project folder, not your whole
    home folder. A chat keeps its folder; to work somewhere else, start a new chat.
-4. If you have more than one team, **Team:** next to the folder shows which one this chat uses. You
+4. If you have more than one team, a **Uses …** button (for example **Uses Claude**) next to the
+   folder shows which team this chat will use. You
    can change it before you send the first message. See
    [Teams and agent programs](teams-and-agent-programs.md).
 5. In the box that says **Ask for anything**, write what you want in your own words. For example:
    - Look through this folder and tell me what this project does.
    - Find and fix the failing tests, then explain what was wrong.
    - Write a short README for this project.
-6. Press **Send**, or Enter.
+6. Press the **↑** button (**Send**), or Enter.
 7. The answer appears in the chat. While it works you see **Working…** or **Thinking…**.
 
 ## While it works
@@ -26,7 +27,8 @@
   appears above the message box. Choose an answer, or **Allow**, **Allow for this session** or
   **Deny**. Chats waiting for you are marked **Needs your answer** in the chat list.
 - **It may bring in helpers.** See [Helpers and the team](helpers-and-team.md).
-- **To stop**, press **Stop** next to the message box. **Stop all** also stops every helper.
+- **To stop**, press the **■** button (**Stop**), which takes the place of **↑** while the main
+  assistant is working and the box is empty. **Stop all** also stops every helper.
 - **Closing the browser tab stops nothing.** The work carries on and the page catches up when you
   come back. Stopping Masthead itself (`masthead stop`) stops the work.
 

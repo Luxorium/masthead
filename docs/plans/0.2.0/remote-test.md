@@ -1,5 +1,8 @@
 # Remote access: the first real try (manual)
 
+> **History.** This plan was carried out for 0.2.0 (the record of the first real try). It is kept as the record of the design and the evidence; where it
+> differs from the code, the code and `docs/wiki/` are right.
+
 Everything in remote access has been tested only against a fake Tailscale (`test/remote*.test.ts`).
 These steps are the first time it touches the real one. They are for the person, on their own
 machine, once. Each step says what should happen; stop at the first one that does not and note what

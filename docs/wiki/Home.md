@@ -16,6 +16,8 @@ Agents are named in the order they start, from the radio spelling alphabet: the 
 
 The page can also be opened from your phone or another computer on your own Tailscale network, once you switch remote access on and approve that device on this computer ([Remote access](Remote-Access.md), [Using Masthead from your phone](Using-Masthead-From-Your-Phone.md)).
 
+**Is it safe?** The page listens only on this computer and needs a secret that only your account can read. Other devices come in only through your own Tailscale, after you approve each one with a matching code, and each device has a role that limits what it can do. How agents are kept in hand is on [Safety model](Safety-Model.md); who can reach Masthead, and what it does not protect against, is on [Security model](Security-Model.md#in-short-how-masthead-stays-safe).
+
 For people who just want to use Masthead, there is a plain-language **user guide** in `docs/guide/`: [Guide home](../guide/README.md) · [Installing](../guide/installing.md) · [Your first chat](../guide/first-chat.md) · [Helpers and the team](../guide/helpers-and-team.md) · [Tidying a long chat](../guide/tidying-a-long-chat.md) · [Teams and agent programs](../guide/teams-and-agent-programs.md) · [Pictures](../guide/pictures.md) · [Keeping the computer awake](../guide/keeping-awake.md) · [Updating, and where your data is kept](../guide/updating-and-your-data.md) · [Troubleshooting](../guide/troubleshooting.md). This wiki is the developer's view.
 
 ## The whole picture

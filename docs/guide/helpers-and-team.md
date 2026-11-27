@@ -30,7 +30,7 @@ A team has levels, each named after the model it uses. With the built-in Claude 
 4. **Hide finished** folds each helper's finished helpers into one row (for example **3 finished:
    Delta, Echo, Foxtrot**). Click that row to see them again. Helpers that failed are never folded.
 5. Rest the pointer on a helper (or move to it with the keyboard) to see its task and its last few
-   lines. Click it (**Click to open the chat**) to read its own chat or to message it directly.
+   lines. Click it to read its own chat or to message it directly.
    **Back to …** returns you.
 6. **Memory used: …%** shows how full the main assistant's memory of this chat is.
 7. When the team has been tidied, **Archived helpers (N)** at the foot of the panel lists the
@@ -47,17 +47,18 @@ Turn on **Show team controls** in the settings to see these in the Team panel:
 
 Other settings that shape the team:
 
-- **Let them decide how long to think**: everyone starts with short thinking time; the main
+- **Let them decide how long to think** (shown when **Show team controls** is on): everyone starts with short thinking time; the main
   assistant raises its own, helpers ask the one above them.
-- **Keep Opus helpers light** and **Keep Sonnet and Haiku helpers light**: they skip your
-  connected services, which keeps their memory small.
+- **Keep light**, set per level when you edit a team (see
+  [Teams and agent programs](teams-and-agent-programs.md)): that level leaves out your own extra
+  tools (MCP servers), so it starts faster and uses less.
 - **Show helper reports as one line**: reports stay folded until you open them.
 - **Longest a helper may work**: a helper still working after this long is stopped, and the one
   that started it is told. **No limit** turns this off.
 
 ## Stopping
 
-- **Stop** next to the message box stops the reply that is running now.
+- The **■** button (**Stop**) next to the message box stops the reply that is running now.
 - **Stop all** stops the main assistant and every helper in this chat.
 - **Stop** next to one helper in the Team panel stops that helper and everything under it.
 - `masthead stop` in a terminal stops Masthead and all work in every chat.
@@ -66,6 +67,6 @@ Closing the browser tab does not stop anything.
 
 ## Usage
 
-Under the chat list, **Usage** shows how much of your Claude plan you have used (for example
+Under the chat list, once an agent has run, **Usage** shows how much of your Claude plan you have used (for example
 **This session (5 hours)** and **This week, all models**). Near the limit a banner says **You are
 close to your Claude usage limit.** At the limit, helpers pause and carry on when it resets.

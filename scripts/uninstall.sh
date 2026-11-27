@@ -9,7 +9,7 @@ unit="$HOME/.config/systemd/user/masthead.service"
 old_unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/masthead.service"
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
 
-# `masthead stop` stops the service and also a copy started without it (on 7717, or MASTHEAD_PORT).
+# `masthead stop` stops the service and also a copy started without it (on the service's port, MASTHEAD_PORT, or 7717).
 if [ -x "${HOME}/.local/bin/masthead" ]; then
   # Turn off Masthead's own Tailscale entry if remote access was on (it prints the command if it cannot).
   "${HOME}/.local/bin/masthead" remote off || true

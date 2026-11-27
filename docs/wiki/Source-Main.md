@@ -1,6 +1,6 @@
 # server/main.ts
 
-**Role:** the program's entry point and the `masthead` command. It is the `bin` in `package.json`, compiled to `dist/server/main.js`, and starts with a `#!/usr/bin/env node` line. The `~/.local/bin/masthead` script, the systemd unit written by `scripts/install.sh`, and the services written by `masthead service install` (systemd, launchd or Task Scheduler; see [server/service](Source-Service.md)) all run this file. The same file is the **launcher** (start a server if needed, open the browser, report status, stop), the **server** (`masthead serve`), the service installer (`masthead service`) and the set-up check (`masthead doctor`, see [server/doctor.ts](Source-Doctor.md)). The parsing it relies on is in [server/cli.ts](Source-Cli.md). How to use the command is on [Command-line launcher](Command-Line-Launcher.md); this page walks through the code.
+**Role:** the program's entry point and the `masthead` command. It is the `bin` in `package.json`, compiled to `dist/server/main.js`, and starts with a `#!/usr/bin/env node` line. The `~/.local/bin/masthead` script, the systemd unit written by `scripts/install.sh`, and the services written by `masthead service install` (systemd, launchd or Task Scheduler; see [server/service](Source-Service.md)) all run this file. The same file is the **launcher** (start a server if needed, open the browser, report status, stop), the **server** (`masthead serve`), the service installer (`masthead service`), the set-up check (`masthead doctor`, see [server/doctor.ts](Source-Doctor.md)) and `masthead remote off`. The parsing it relies on is in [server/cli.ts](Source-Cli.md). How to use the command is on [Command-line launcher](Command-Line-Launcher.md); this page walks through the code.
 
 > Checked against the 0.2.0 source on branch `next` (2026-11-27). The behaviour described here is read from the code, not verified by running.
 
@@ -10,12 +10,13 @@
 |---|---|
 | `../shared/protocol.js` | `VERSION`. |
 | `./app/app.js` | `App`, the whole application ([server/app](Source-App.md)). |
-| `./cli.js` | `UsageError`, `onPath`, `openSignedIn`, `parseCommand`, `parseDevWebPort`, `parsePort`, `serverProves`, `signInDir`, `signInUrl`, `unitPortFrom` and the `Opener` type ([server/cli.ts](Source-Cli.md)). |
-| `./paths.js` | `CONFIG_DIR`, `DATA_DIR`, `DEFAULT_PORT`, `SECRET_FILE` ([server/paths.ts](Source-Paths.md)). |
-| `./transport/auth.js` | `loadSecret`, `readSecret` ([server/transport/auth.ts](Source-Transport-Auth.md)). |
+| `./cli.js` | `UsageError`, `commandPort`, `onPath`, `openSignedIn`, `parseCommand`, `parseDevWebPort`, `parsePort`, `serverProves`, `signInDir`, `signInUrl`, `unitPortFrom` and the `Opener` type ([server/cli.ts](Source-Cli.md)). |
+| `./paths.js` | `CONFIG_DIR`, `DATA_DIR`, `DEFAULT_PORT`, `mastheadCommand`, `SECRET_FILE` ([server/paths.ts](Source-Paths.md)). |
+| `./transport/auth.js` | `isPrivate`, `loadSecret`, `readSecret` ([server/transport/auth.ts](Source-Transport-Auth.md)). |
 | `./transport/http.js` | `serve` ([server/transport/http.ts](Source-Http.md)). |
-| `./transport/remote.js`, `./remote/access.js`, `./remote/tailscale.js` | `chooseTarget`, `startRemote`, `RemoteAccess`, `tailscaleFor`: remote access over the person's own Tailscale ([server/transport/remote.ts](Source-Transport-Remote.md), [Remote access](Remote-Access.md)). |
+| `./transport/remote.js`, `./remote/access.js`, `./remote/tailscale.js` | `chooseTarget`, `startRemote`, `RemoteAccess`, `targetUrl`, `tailscaleFor`: remote access over the person's own Tailscale ([server/transport/remote.ts](Source-Transport-Remote.md), [Remote access](Remote-Access.md)). |
 | `./service/index.js` | `serviceFor`, `ServiceError` ([server/service](Source-Service.md)). |
+| `./service/common.js` | `statusSummary`, the one-line service status ([server/service](Source-Service.md#commonts)). |
 | `./service/awake.js` | `Awake`, `awakeCommand` ([Keep awake](Source-Service.md#keep-awake-awakets)). |
 | `./doctor.js` | `doctor`, `doctorExitCode`, `formatChecks`, `sdkBinaryPackage`, `systemDoctorFs` ([server/doctor.ts](Source-Doctor.md)). |
 | `./backends/claude/env.js` | `findClaude`, which finds the installed `claude` ([Claude back end](Source-Backend-Claude.md)). |
@@ -30,7 +31,11 @@
 
 ### port()
 
-Calls `parsePort(process.argv.slice(2), process.env)`. On a `UsageError` it prints the message to stderr and exits with code 2. Any other error is re-thrown. `main()` calls it for every command, including `help` and unknown words, so a bad `--port` or `MASTHEAD_PORT` exits 2 before anything else happens. (`--help`, `-h` and `--version` are handled at the bottom of the file first; see [Entry at the bottom of the file](#entry-at-the-bottom-of-the-file).)
+Calls `parsePort(process.argv.slice(2), process.env)`. On a `UsageError` it prints the message to stderr and exits with code 2. Any other error is re-thrown. Only `runServer()` uses it: `masthead serve` serves the port asked for, or 7717.
+
+### portFor(cmd)
+
+The port every other command works on: `commandPort(cmd, args, process.env, installed)` ([server/cli.ts](Source-Cli.md)), where `installed` asks `serviceFor(process.platform)?.status()`. An explicit `--port` or `MASTHEAD_PORT` wins; otherwise `open`, `status`, `stop`, `service` and `doctor` use the installed background service's port when there is one (so `masthead stop` finds a service installed with `--port 7727`), else `DEFAULT_PORT`. A failing status query counts as no service. A `UsageError` prints its message and exits 2, any other error is re-thrown. `main()` calls it for every command, including `help` and unknown words, so a bad `--port` or `MASTHEAD_PORT` exits 2 before anything else happens. (`--help`, `-h` and `--version` are handled at the bottom of the file first; see [Entry at the bottom of the file](#entry-at-the-bottom-of-the-file).)
 
 ### health(p)
 
@@ -43,6 +48,10 @@ The message for a server on `p` that did not prove it knows this data folder's s
 ### unitServes(p)
 
 Returns false at once on any platform other than Linux. On Linux it runs `systemctl --user show -p LoadState -p Environment masthead.service` and returns true only if the command exits 0 **and** `unitPortFrom()` reads port `p` from its output. In words: the installed user service is the one that serves this port. If `systemctl` is missing, `spawnSync` gives a null status and the answer is false. Any port other than the unit's is "a server of its own", as the code comment says, so `masthead --port 7720` never touches the unit. On macOS and Windows the launcher always starts its own copy and stops it through `/api/shutdown`: per the code comment, launchd and Task Scheduler do not restart a server that exits cleanly, so going around them is safe there (not verified by running).
+
+### removeRemoteServe()
+
+Turns off Masthead's own `tailscale serve` entry if remote access was on; used by `service uninstall` and `masthead remote off` (which `scripts/uninstall.sh` runs). It builds a `RemoteAccess` for `<DATA_DIR>/remote` as `runServer()` does. Remote access off: no lines. Otherwise it asks Tailscale for the serve state on the remote port and target (`targetUrl()`), and only when the entry is `ours` removes it and returns `Turned off Masthead's Tailscale entry on port <n>.` If Tailscale refuses, it returns `Could not turn off Masthead's Tailscale entry (<message>). Run: tailscale serve --https=<port> off`. Only Masthead's own entry, on its port and target, is ever removed.
 
 ### systemOpener
 
@@ -69,7 +78,7 @@ Returns `loadSecret()` ([server/transport/auth.ts](Source-Transport-Auth.md)): t
 6. Starts remote access without waiting: `startRemote(app, remote, { webDir, blobs, convExists })` opens the private remote listener when remote access is on. A missing Tailscale is not an error; any other failure prints `Masthead: remote access did not start: <message>` and the server keeps running.
 7. Only after the server listens does it install handlers that call `shutdown()` for `SIGINT`, `SIGTERM` and `SIGHUP`, plus `SIGBREAK` on Windows (the code comment: Windows never sends SIGTERM; closing the console window gives SIGHUP, Ctrl+Break gives SIGBREAK). It also installs and an `unhandledRejection` handler that logs `Masthead: unhandled rejection: <stack>` and keeps the server running for the agents that are working. Errors during start-up (steps 1–5) still end the process. Uncaught exceptions keep Node's default, which exits (an installed service restarts it: systemd `Restart=on-failure`, launchd `KeepAlive` on a failed exit, Task Scheduler `RestartOnFailure`), because after one the state cannot be trusted. (Read from the code; not verified by running.)
 8. Prints `Masthead <version> is running at http://127.0.0.1:<p>`, then how to sign a browser in:
-   - normal: ``Open it with `masthead` to sign the browser in.`` (with `--port <p>` added when the port is not 7717);
+   - normal: ``Open it with `masthead` to sign the browser in.`` (`masthead.cmd` on Windows, through `mastheadCommand()`; with `--port <p>` added when the port is not 7717);
    - development: `Development page (Vite, MASTHEAD_PORT=<p> MASTHEAD_DEV_WEB_PORT=<dev port> npm run dev:web):` and on the next line `http://localhost:<dev port>/#key=<secret>` (`signInUrl()`). So it names the command that starts a Vite page forwarding to this server. This prints the secret to the terminal (or the service's log, if run as a service with `MASTHEAD_DEV=1`).
 
 `POST /api/shutdown` reaches the same `shutdown()` through `onShutdown`.
@@ -86,7 +95,7 @@ Makes sure a server answers on `p`. Returns true when one does.
 
 ### main()
 
-Reads the command with `parseCommand()` and the port with `port()`, then:
+Reads the command with `parseCommand()` and the port with `portFor(cmd)`, then:
 
 | Command | What happens | Exit |
 |---|---|---|
@@ -96,8 +105,9 @@ Reads the command with `parseCommand()` and the port with `port()`, then:
 | `stop` | See [Control flow of stop](#control-flow-of-stop). | 0, or 1 |
 | `service` | `serviceCommand(p)`. See [serviceCommand](#servicecommandp). | 0; 1 on failure; 2 for an unknown sub-command; `status`: 3 when not installed |
 | `doctor` | `doctorCommand(p)`. See [doctorCommand](#doctorcommandp). | 0 all ok (warnings too), 1 otherwise |
+| `remote off` | `removeRemoteServe()`, printing its lines, or `Masthead has no Tailscale entry to turn off.` Any other word after `remote` prints `Usage: masthead remote off   (switch remote access on in Settings → Remote access)`. Switching remote access on is done in the page. | 0; 2 for a wrong sub-command |
 | `version`, `--version` | Prints `VERSION`. | 0 |
-| anything else | Prints the usage text to stdout. It lists `masthead`, `serve`, `status`, `stop`, `service install\|uninstall\|status`, `doctor` (with `--json`), `--port N` and `--no-browser`; it does not list `--force`. | 0 for `help` and `--help`; 2 otherwise |
+| anything else | Prints the usage text to stdout. It lists `masthead`, `serve`, `status`, `stop`, `service install\|uninstall\|status`, `doctor` (with `--json`), `remote off`, `--port N` ("use a port other than the installed service's or 7717 (or set MASTHEAD_PORT)") and `--no-browser`; it does not list `--force`. | 0 for `help` and `--help`; 2 otherwise |
 
 The `--version` case in the switch cannot be reached in practice: `parseCommand()` skips words that start with `-`, and the bottom of the file catches `--version` first.
 
@@ -107,9 +117,9 @@ The `--version` case in the switch cannot be reached in practice: `parseCommand(
 
 1. The sub-command is the second word that is neither an option nor the value after `--port` (`--port=N` is one word and an option); with none it is `status`.
 2. `serviceFor(process.platform)` picks systemd (Linux), launchd (macOS) or Task Scheduler (Windows). On any other platform it prints ``Masthead has no background service for <platform>; run `masthead serve` instead.`` and exits 1.
-3. `install`: first asks `health(p)`. If the server on the port reports `busy` (the number of working conversations) above 0 and `--force` is not given, it prints `Masthead has agents working in <n> conversation(s); installing restarts it and stops them. Run again when they have finished, or with --force.` and exits 1. Then it calls `findClaude()` and `svc.install({ node: process.execPath, mainJs: <this file>, port: p, env: process.env, claudePath })` and prints each returned line.
-4. `uninstall`: `svc.uninstall()`, printing each line.
-5. `status`: `svc.status()`, with a health check of its port, printed by `statusSummary()` (`server/service/common.ts`): whether Masthead answers on the port and who started it, e.g. `Installed (taskscheduler). Masthead is running on port 7727, started by hand; the service starts it at login. (<detail>)`, or `Not installed (<kind>). Masthead is not running on port N.` Exit 0 when installed, 3 when not.
+3. `install`: first asks `health(p)`. If the server on the port reports `busy` (the number of working conversations) above 0 and `--force` is not given, it prints `Masthead has agents working in <n> conversation(s); installing restarts it and stops them. Run again when they have finished, or with --force.` and exits 1. Then it calls `findClaude()` and `svc.install({ node: process.execPath, mainJs: <this file>, port: p, env: process.env, claudePath })` and prints each returned line. Then it says what is true now: if a server was already up it waits 1.5 s, then polls `health(p)` up to 11 times, 500 ms apart, and prints `statusSummary()` for the service's port (or `p`). If Masthead answers but the service is not the one running it (a copy started by hand keeps the port), it adds ``To let the service run it now: `masthead stop`, then `masthead service install` again.`` (`masthead.cmd` on Windows).
+4. `uninstall`: `removeRemoteServe()`, then `svc.uninstall()`, printing each line.
+5. `status`: `svc.status()`, with a health check of the service's own port (else `p`), printed by `statusSummary()` (`server/service/common.ts`): whether Masthead answers on the port and who started it, e.g. `Installed (taskscheduler). Masthead is running on port 7727, started by hand; the service starts it at login. (<detail>)`, or `Not installed (<kind>). Masthead is not running on port N.` Exit 0 when installed, 3 when not.
 6. Any other word: `Usage: masthead service install|uninstall|status [--port N] [--force]`, exit 2.
 7. A `ServiceError` (a required command failed) prints its message and exits 1; any other error is re-thrown.
 
@@ -118,6 +128,8 @@ What each service manager writes and runs is on [server/service](Source-Service.
 ## doctorCommand(p)
 
 `masthead doctor [--json]`. Calls `doctor()` ([server/doctor.ts](Source-Doctor.md)) with the real system: `process.platform`, `process.versions.node`, `findClaude`, the paths `CONFIG_DIR`, `DATA_DIR`, `SECRET_FILE`, `systemDoctorFs`, the port, and:
+
+- `isPrivate(file)`: from `server/transport/auth.ts`; on Windows it reads the file's ACL with `icacls` (elsewhere the POSIX mode), so the secret file's privacy can be checked;
 
 - `probe(port)`: `free` when `health()` does not answer; otherwise `ours` when `readSecret()` finds a secret and `serverProves()` passes, else `other`;
 - `service`: `serviceFor(process.platform)`;
@@ -129,7 +141,7 @@ With `--json` anywhere in the arguments it prints the checks as a JSON array (2-
 ## Control flow of open
 
 1. If `webDir/index.html` does not exist: `The web page has not been built. Run: npm run build`, exit 1.
-2. `start(p)`, or `Masthead did not start. Try \`masthead serve\` to see why.`, exit 1.
+2. `start(p)`, or `Masthead did not start. Try \`masthead serve\` to see why.` (with `--port <p>` when not 7717; `masthead.cmd` on Windows), exit 1.
 3. Load the secret with `secretOrExit()`. If `serverProves(url(p), p, secret)` is false, print `notOurs(p)` and exit 1. The server is sent nothing that carries the key, and no browser is opened. Any failure counts: no answer, another program, a Masthead with another secret, or an older Masthead without `/api/proof`.
 4. Print `Masthead is at http://127.0.0.1:<p>`.
 5. Unless `--no-browser` is anywhere in the arguments, `openSignedIn({ base, secret, dir: signInDir(process.env, DATA_DIR), opener: systemOpener, tty: process.stdout.isTTY === true })`. It opens a private sign-in file that sends the browser to `<url>/#key=<secret>`; if it cannot, it prints that address when stdout is a terminal, and otherwise only says to run `masthead --no-browser` in a terminal (see [server/cli.ts](Source-Cli.md#opensignedinopts)). With `--no-browser`, the address is printed as `Sign-in address (keep it private):` only when stdout is a terminal (`process.stdout.isTTY`), so it does not end up in a log or a pipe. The page stores the key in `localStorage` for that origin and removes it from the address bar (`takeKey()` in `web/src/lib/signin.ts`); the server never sets a cookie. See [Security model](Security-Model.md#the-local-secret).
@@ -167,7 +179,7 @@ flowchart TD
 Three cases, checked on the raw arguments before `main()`:
 
 1. `--version` **anywhere** prints the version and nothing else runs. So `masthead stop --version` only prints the version.
-2. Otherwise `--help` or `-h` anywhere replaces all the arguments with `help` and runs `main()`, which prints the usage and exits 0. `--port` is dropped too, so a bad `--port` value does not matter here; a bad `MASTHEAD_PORT` still exits 2 from `port()`. The usage text names `DEFAULT_PORT` (7717) whatever port was asked for.
+2. Otherwise `--help` or `-h` anywhere replaces all the arguments with `help` and runs `main()`, which prints the usage and exits 0. `--port` is dropped too, so a bad `--port` value does not matter here; a bad `MASTHEAD_PORT` still exits 2 from `portFor()`. The usage text names `DEFAULT_PORT` (7717) whatever port was asked for.
 3. Otherwise `main()` runs.
 
 ## Related pages

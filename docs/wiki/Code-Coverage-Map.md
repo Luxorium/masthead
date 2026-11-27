@@ -28,8 +28,8 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `server/backends/codex/protocol/**` | [What is experimental](Source-Backend-Codex.md#what-is-experimental) | [Backend-Interface](Backend-Interface.md) |
 | `server/backends/codex/rpc.ts` | [How Codex is driven](Source-Backend-Codex.md#how-codex-is-driven) | [Backend-Interface](Backend-Interface.md) |
 | `server/backends/codex/testing/fake-app-server.ts` | [What was verified and how](Source-Backend-Codex.md#what-was-verified-and-how) | [Source-Tests](Source-Tests.md) |
-| `server/backends/fake/index.ts` | [FakeBackend](Source-Backend-Fake.md#fakebackend-indexts-line-59), [FakeSession](Source-Backend-Fake.md#fakesession-indexts-line-100) | [Source-Tests](Source-Tests.md) |
-| `server/backends/fake/script.ts` | [The script](Source-Backend-Fake.md#the-script-scriptts-plan-line-40), [Selection](Source-Backend-Fake.md#selection) | [Source-Tests](Source-Tests.md) |
+| `server/backends/fake/index.ts` | [FakeBackend](Source-Backend-Fake.md#fakebackend-indexts), [FakeSession](Source-Backend-Fake.md#fakesession-indexts) | [Source-Tests](Source-Tests.md) |
+| `server/backends/fake/script.ts` | [The script](Source-Backend-Fake.md#the-script-scriptts-plan), [Selection](Source-Backend-Fake.md#selection) | [Source-Tests](Source-Tests.md) |
 | `server/backends/proctree.ts` | [server/backends/proctree.ts](Backend-Interface.md#serverbackendsproctreets) | [Source-Backend-Claude](Source-Backend-Claude.md) |
 | `server/backends/registry.ts` | [server/backends/registry.ts](Backend-Interface.md#serverbackendsregistryts), [The generated Codex team](Source-Backend-Codex.md#the-generated-codex-team) | [Source-Backend-Codex](Source-Backend-Codex.md) |
 | `server/backends/types.ts` | [server/backends/types.ts](Backend-Interface.md#serverbackendstypests) | [Source-Runtime](Source-Runtime.md) |
@@ -153,6 +153,7 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `web/test/pure.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/remote-section.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/remote-signin.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/restricted-device.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/settings-components.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/settings-fixtures.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/settings-logic.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
@@ -173,6 +174,7 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | File | Explained on | Also see |
 |---|---|---|
 | `.github/workflows/ci.yml` | [CI](Source-CI.md): [When it runs](Source-CI.md#when-it-runs), [Job test](Source-CI.md#job-test-check-tests-build-and-a-pack-and-install), [Job browser](Source-CI.md#job-browser-the-real-page-on-the-fake-backend) | [Platforms](Platforms.md#what-ci-proves-and-what-needs-a-real-machine) |
+| `.github/workflows/release.yml` | [CI](Source-CI.md): [The release workflow](Source-CI.md#the-release-workflow) | [Building, testing and installing](Building-Testing-Installing.md#installing-from-a-release) |
 | `package-lock.json` | [Build configuration](Source-Build-Config.md): [package-lock.json](Source-Build-Config.md#package-lockjson) | [CI](Source-CI.md#why-a-plain-npm-ci) |
 | `package.json` | [Build configuration](Source-Build-Config.md): [package.json](Source-Build-Config.md#packagejson), [Optional packages](Source-Build-Config.md#optional-packages), [Scripts](Source-Build-Config.md#scripts), [Dependencies](Source-Build-Config.md#dependencies) | [Building, testing and installing](Building-Testing-Installing.md#npm-scripts) |
 | `packaging/README.md` | [Installing](Source-Install-Scripts.md): [The packaging files](Source-Install-Scripts.md#the-packaging-files) | |
@@ -205,6 +207,7 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `test/backend-conformance.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 | `test/backpressure.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 | `test/characterisation.test.ts` | [Tests](Source-Tests.md) | [Storage on disk](Storage-on-Disk.md) |
+| `test/codex-app.live.ts` | [Codex: `test/codex-app.live.ts`](Live-Tests.md#codex-testcodex-applivets) | [Source-Backend-Codex](Source-Backend-Codex.md#running-the-codex-live-tests) |
 | `test/codex-proctree.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 | `test/codex-team.live.ts` | [Codex: `test/codex-team.live.ts](Live-Tests.md#codex-testcodex-teamlivets) | [Source-Tests](Source-Tests.md) |
 | `test/codex.live.ts` | [Codex: `test/codex.live.ts](Live-Tests.md#codex-testcodexlivets) | [Source-Tests](Source-Tests.md) |

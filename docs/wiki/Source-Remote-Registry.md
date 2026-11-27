@@ -2,7 +2,7 @@
 
 **Role:** the devices allowed to use Masthead over the tailnet. It holds pending requests with pairing codes, approvals with roles, tokens bound to the Tailscale node, expiry, revocation and an audit log. It is pure logic plus a small versioned file: the transport calls it and never decides on its own. The feature is described on [Remote access](Remote-Access.md) and the threats on [Security model](Security-Model.md).
 
-Remote access has only ever run against a fake Tailscale (`FakeTailscale`) in tests. The registry itself needs no Tailscale: its tests in `test/remote.test.ts` call it directly with made-up identities.
+Remote access has been checked on a real tailnet (a Linux computer running Masthead, an Android phone and a Windows device); the unit tests use a fake Tailscale (`FakeTailscale`). The registry itself needs no Tailscale: its tests in `test/remote.test.ts` call it directly with made-up identities.
 
 ## Types and limits
 

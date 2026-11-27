@@ -7,7 +7,7 @@ You can show the agents pictures, such as a screenshot of an error or a sketch o
 ## Attaching a picture
 
 1. Do one of these:
-   - Press **Attach pictures** next to the message box and choose one or more files.
+   - Press the **+** button (**Attach pictures**) next to the message box and choose one or more files.
    - Paste a picture into the message box (for example a screenshot you just copied).
    - Drag a picture onto the message box.
 2. The picture shows above the box. **Remove picture** takes it off again.

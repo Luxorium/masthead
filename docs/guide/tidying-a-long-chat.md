@@ -5,7 +5,7 @@
 A long chat gathers many finished helpers, and the main assistant's memory fills up. Masthead tidies
 the team for you, so it stays quick and does not run out of memory.
 
-> New in 0.2.0 beta 2. Tidying has been tested with real Claude Code (Haiku), in a live run that passed twice.
+> New in 0.2.0.
 
 ## What happens
 
@@ -34,7 +34,7 @@ Type `/compact` in the message box and send it to tidy the team at once.
 ## Turning it off
 
 - In the settings, **Tidy the team automatically** is on by default. Turn it off to be asked first.
-- **Tidy this chat's team automatically** can turn it off for one chat only (with the setting off, it
+- **Tidy this chat's team automatically**, in the Team panel, can turn it off for one chat only (with the setting off, it
   cannot turn it on for one chat).
 - With it off, the main assistant suggests `/compact` once when the team gets large or its memory gets full, and `/compact`
   shows a card, **Tidy the team?**: *Keep N, archive M*, with a tick box for each helper. Helpers

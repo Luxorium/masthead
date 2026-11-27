@@ -2,7 +2,7 @@
 
 **Role:** `access.ts` is remote access as a whole: the on/off switch, Masthead's own `tailscale serve` entry, the device registry and the state shown to local sessions. The transport (`server/transport/remote.ts`) opens and closes the private listener when told, and `App` relays the person's decisions. `authorise.ts` makes the one decision the transport asks for: may this request go on, and as whom? The feature is described on [Remote access](Remote-Access.md) and the threats on [Security model](Security-Model.md).
 
-Remote access has only ever run against a fake Tailscale (`FakeTailscale`) in tests. Nothing on this page has been run against a real tailnet.
+Remote access has been checked on a real tailnet (a Linux computer running Masthead, an Android phone and a Windows device); the unit tests use a fake Tailscale (`FakeTailscale`).
 
 ## access.ts
 

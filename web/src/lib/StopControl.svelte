@@ -3,7 +3,7 @@
   import { displayName, type AgentInfo } from '../../../shared/protocol.ts';
   import { store } from './store.svelte.ts';
 
-  /** The ■ that stops a live sub-agent and everything under it. Shared by the team map and the team panel. */
+  /** The ■ that stops a live sub-agent and everything under it. Shown on live helpers' rows in the team outline. */
   let { agent, placement }: { agent: AgentInfo; placement: 'row' } = $props();
 
   function press() {

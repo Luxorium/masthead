@@ -27,7 +27,7 @@
   }
 
   function duplicate(p: TeamProfile): void {
-    const copy = copyOf(p, profiles);
+    const copy = copyOf(p, profiles, store.conversations.map((c) => c.profileId));
     store.updateSettings((s) => void s.profiles.push(copy));
     editing = copy.id;
   }
@@ -49,7 +49,13 @@
       const inUse = m.inUse as { id?: unknown; chats?: unknown } | undefined;
       if (!inUse || typeof inUse.id !== 'string') return;
       const p = profiles.find((x) => x.id === inUse.id);
-      if (p && confirm(ST.teams.inUseConfirm(p.label, Number(inUse.chats) || 0))) sendDelete(p, true);
+      if (!p) return;
+      // The store has already shown the server's own words; say it in the page's words instead.
+      const chats = Number(inUse.chats) || 0;
+      if (confirm(ST.teams.inUseConfirm(p.label, chats))) {
+        store.error = null;
+        sendDelete(p, true);
+      } else store.fail(ST.teams.kept(p.label, chats));
     }),
   );
 

@@ -6,19 +6,19 @@
 
 Open a terminal and run `masthead doctor`. It checks your set-up and prints one line per check:
 
-- `OK`: fine.
-- `WARN`: worth a look, but Masthead works.
-- `FAIL`: needs fixing. The line under it, starting `fix:`, says what to do.
+- `[ OK ]`: fine.
+- `[WARN]`: worth a look, but Masthead works.
+- `[FAIL]`: needs fixing. The line under it, starting `fix:`, says what to do.
 
 | Check | If it fails, what it says to do |
 |---|---|
 | **Node.js** | "Install Node.js 22 or newer." |
 | **Claude Code** | Not found: "Install Claude Code (https://code.claude.com/docs/en/setup) and sign in by running `claude` once." Found but its version could not be read: "Check that `<path> --version` works." |
 | **Config folder**, **Data folder** | "does not exist yet (made on first start)" is fine. Not a folder: "Move … out of the way." Not writable: "Make … writable by your user." |
-| **Secret** | "does not exist yet (made on first start)" is fine. A folder: "Remove …; a new secret is made on the next start." Readable by others (macOS, Linux): `chmod 600 '<file>'`. On Windows it is not checked. |
-| **Port 7717** | "in use by another program": "Stop that program, or use another port: masthead --port <n>." "served by this Masthead" is fine. |
+| **Secret** | "does not exist yet (made on first start)" is fine. A folder: "Remove …; a new secret is made on the next start." Readable by others (macOS, Linux): "Restart Masthead: a secret others could read is replaced with a new one (sign in again with masthead)." Windows, reachable by others: "Delete … and restart Masthead; a new private secret is made." |
+| **Port 7717** (or the port your service uses) | "in use by another program": "Stop that program, or use another port: masthead --port <n>." "served by this Masthead" is fine. |
 | **Service** | "not installed" is fine if you start Masthead yourself; to start it at login: `masthead service install`. Installed but not running: `masthead service install`. |
-| **SDK private binary** | An unused private copy of Claude Code was installed with Masthead. Harmless, but you can reinstall without it: `npm i -g --os=none --cpu=none @luxorium/masthead`. |
+| **SDK private binary** | A `[WARN]`, not a failure: an unused private copy of Claude Code was installed with Masthead. Harmless, but you can reinstall without it: run the install command from [Installing Masthead](installing.md) again (it includes `--os=none --cpu=none`). |
 | **Keep awake** | The tool that keeps the computer awake was not found, so it may sleep while agents work. On Linux: "Install systemd (systemd-inhibit), or keep the computer awake yourself". See [Keeping the computer awake](keeping-awake.md). |
 
 ## Common problems
@@ -43,8 +43,9 @@ skipped.
 
 ### The browser did not open, or opened without signing in
 
-The page says "Open Masthead with the `masthead` command (or its launcher entry) to sign this
-browser in", or "Masthead did not accept this browser's key".
+The page says "Open Masthead with the `masthead` command (`masthead.cmd` in Windows PowerShell) or
+its launcher entry to sign this browser in", or "Masthead did not accept this browser's key. Open it
+with the `masthead` command (`masthead.cmd` in Windows PowerShell) to sign in again".
 
 1. Run `masthead` again.
 2. Still not signed in? Run `masthead --no-browser` in a terminal. It prints a **sign-in address**.
@@ -53,13 +54,17 @@ browser in", or "Masthead did not accept this browser's key".
 This happens most with browsers installed as a snap or flatpak on Linux, which cannot open the small
 sign-in file Masthead hands them.
 
-### "Port 7717 is already in use"
+### "Port 7717 is already in use", "Another Masthead (or another program) is using port 7717" or "Masthead did not start"
 
 Another program, or another copy of Masthead, uses the port.
 
 1. Run `masthead status`. If Masthead is already running, just run `masthead` to open it.
 2. If another program uses the port, stop it, or use another port: `masthead --port 7790`
-   (use the same `--port` with `masthead status` and `masthead stop`).
+   (use the same `--port` with `masthead status` and `masthead stop`). If you installed the service
+   with `masthead service install --port 7790`, the other commands use its port by themselves.
+3. If the service runs on another port and you also started a second Masthead by hand on 7717,
+   plain `masthead status` and `masthead stop` look only at the service's port. Add `--port 7717`
+   to reach the other one.
 
 ### "Masthead needs Claude Code to work"
 

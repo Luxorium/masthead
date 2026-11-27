@@ -1,5 +1,8 @@
 # 0.2.0: the agent backend layer
 
+> **History.** This plan was built in 0.2.0. It is kept as the record of the design and the evidence; where it
+> differs from the code, the code and `docs/wiki/` are right.
+
 Status: design, 2026-11-27, by echo. It has not been built or tested. It covers how Masthead runs one agent on
 more than one backend: Claude Code today (`server/agent.ts`), and the OpenAI Codex CLI next. The team
 core (state machine, tiers, storage, protocol) is in [core.md](core.md) by foxtrot; the facts about Codex are

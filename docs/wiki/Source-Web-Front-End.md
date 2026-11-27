@@ -40,7 +40,7 @@ The page itself holds no secret and is served to anyone who may reach the server
 - A key from the address is only a **candidate**. It replaces the key stored in `localStorage` under `masthead.key` only once a socket opened with it (`keepCandidate()`). `dropCandidate()` forgets a refused one. So a link to `…/#key=junk` cannot sign a browser out ([Connecting](Source-Web-Store.md#connecting)).
 - `storedKey()` reads `localStorage` again each time, because another tab may have signed in with a newer key. If storage is refused (private mode), the key still works for this page load.
 - `serverUp()` asks `/api/health`, which needs no key, to tell "refused" from "server down".
-- `idFromHash()` reads `#/c/<id>`. `hasCandidate()` and `resetSignin()` are for tests.
+- `idFromHash()` reads `#/c/<id>`. `hasCandidate()` and `resetSignin()` are for tests. `KEY_STORAGE` (`'masthead.key'`) is exported too.
 
 The socket is opened with the subprotocols `masthead` and `key.<secret>`; the server checks the key and answers with plain `masthead`.
 
@@ -51,7 +51,7 @@ A phone or other computer reaches Masthead only through the person's own Tailsca
 - **Device token.** A device never has the key. Once the person approves it on the computer, it gets a token, kept in `localStorage` under `masthead.device` (`deviceToken()`, `saveDeviceToken()`, `forgetDeviceToken()`). The socket uses the subprotocol `device.<token>`. Image uploads send it in the `x-masthead-device` header.
 - **`whoami()`** asks `/api/remote/whoami` with the token and returns `{state:'approved', role}`, `{state:'unknown'}` (no token, revoked or expired), `{state:'refused'}` (by policy), or `null` when it could not ask. A missing role reads as `read`.
 - **Forget this device.** `forgetDevice()` removes the token and any pairing request in progress (`sessionStorage` key `masthead.pairing`). The store's `forgetThisDevice()` also tells the server (`forget_me`) and goes back to the pairing screen. The button is in Settings > This device, shown only on a device.
-- **Roles.** `full`, `approve` or `read` (`DeviceRole`). The store turns them into `mayAct` and `mayAnswer` ([Web store](Source-Web-Store.md#connecting)). A device that may not send sees one plain line in place of the message box.
+- **Roles.** `full`, `approve` or `read` (`DeviceRole`). The store turns them into `mayAct`, `mayStop` and `mayAnswer` ([Web store](Source-Web-Store.md#connecting)). A device that may not send sees a plain note in place of the message box; on an `approve` device it also holds Stop reply and Stop all.
 
 The pairing screen is `remote/RemoteSignIn.svelte` ([Settings and remote access](Source-Web-Settings-and-Remote.md#remotesigninsvelte)).
 
@@ -81,21 +81,21 @@ One line: it re-exports `toolLine` and the `ToolLine` type from `shared/toolline
 From top to bottom, inside `div.shell`:
 
 - A skip link, "Skip to the message box", to `#message` (the composer's textarea), and a polite live region (see [Accessibility](#accessibility)).
-- `Sidebar` (the chat list), when `ui.sidebarOpen`.
+- `Sidebar` (the chat list), when `ui.sidebarOpen`. Choosing a chat closes the settings view, and on a narrow screen the chat list.
 - `main`, made `inert` while a drawer is open:
-  - **Header:** ☰ (shown when the chat list is hidden or the screen is narrow), the chat title (a button; clicking it renames in place, Enter saves, Escape cancels, blur saves), or "New chat". Then, only when the chat has helpers, the **Team** button: "Team · 2 working" ("Team · 2" on a phone), which toggles the team panel.
-  - **Banners:** "Lost the connection to Masthead. Reconnecting…" while disconnected after a first state; the usage banner (`store.rateLimit`): "You've reached your Claude usage limit." or "You are close to…", the reset time, and Dismiss.
+  - **Header:** ☰ (shown when the chat list is hidden or the screen is narrow), the chat title (with `mayAct` a button: clicking it renames in place, Enter saves, Escape cancels, blur saves; on a device that may not act, plain text), or "New chat". Then, only when the chat has helpers, the **Team** button: "Team · 2 working" ("Team · 2" on a phone), which toggles the team panel.
+  - **Banners:** one per entry in `state.problems` (the server's own sentence about saved files this Masthead leaves alone because a newer version wrote them); "Lost the connection to Masthead. Reconnecting…" while disconnected after a first state; the usage banner (`store.rateLimit`): "You've reached your Claude usage limit." or "You are close to…", the reset time, and Dismiss.
   - **The view**, first match wins: `SettingsView` when `ui.settingsOpen`; `FirstRun` when the state says no backend can run (`!store.canRun`); otherwise the breadcrumbs (when a helper is on screen: the chain of agents and "Back to Alpha"), `Transcript`, and the dock.
-  - **Dock:** remote device requests (`DeviceRequestCard`, local page only), approval cards (`PermissionCard`, if `mayAnswer`), the tidy-up card and progress line (`CompactCard`, `CompactProgress`), and the `Composer` (if `mayAct`) inside `{#key store.composerKey}`, so each chat and helper gets its own composer with its own unsent text. When the agent on screen is archived, a read-only note takes the composer's place: an "Archived" tag, a sentence that its chat can be read and it must be restored to get work, and Restore (with `mayAct`) ([Compact team](Compact-Team.md)). Without `mayAct`, a note says what the device's role allows.
+  - **Dock:** remote device requests (`DeviceRequestCard`, local page only), approval cards (`PermissionCard`, on every device; a read-only device is told it cannot answer), the tidy-up card and progress line (`CompactCard`, `CompactProgress`), and the `Composer` (if `mayAct`) inside `{#key store.composerKey}`, so each chat and helper gets its own composer with its own unsent text. When the agent on screen is archived, a read-only note takes the composer's place: an "Archived" tag, a sentence that its chat can be read and it must be restored to get work, and Restore (with `mayAct`) ([Compact team](Compact-Team.md)). Without `mayAct`, a note says what the device's role allows and how to get more; with `mayStop` (an `approve` device) it also shows Stop reply while the lead runs and Stop all while helpers are live.
 - `TeamPanel`, when the chat has helpers and `ui.teamOpen`.
 - A backdrop button while a drawer is open; tapping it closes the drawers.
 - The toast (`role="alert"`), showing `friendlyError(store.error)` ([Text](Source-Web-Text.md#friendlyerror)).
 
-**When the team panel opens.** `hasTeam` is true when any agent other than the lead exists. In Simple, the panel stays closed until the person presses Team. In Advanced on a wide screen, an effect opens it when the first helper starts, unless the person has already opened or closed it (`ui.teamTouched`).
+**When the team panel opens.** `hasTeam` is true when any agent with a `parentId` (a helper) exists; the breadcrumbs likewise show for an agent with a `parentId`. In Simple, the panel stays closed until the person presses Team. In Advanced on a wide screen, an effect opens it when the first helper starts, unless the person has already opened or closed it (`ui.teamTouched`).
 
 ## Simple and Advanced (`ui.svelte.ts`)
 
-`web/src/lib/ui.svelte.ts` holds page-only state that is not the server's business. It is kept per device in `localStorage`, because a phone and a desktop may want different things. One instance, `ui`, is exported.
+`web/src/lib/ui.svelte.ts` holds page-only state that is not the server's business. It is kept per device in `localStorage`, because a phone and a desktop may want different things. One instance, `ui`, is exported, with the `Theme` type and `applyTheme(theme)`.
 
 | Field | Meaning |
 |---|---|

@@ -1,6 +1,6 @@
 # Platforms: Linux, macOS and Windows
 
-From 0.2.0 Masthead runs natively on Linux, macOS (13 or newer) and Windows (10 1809 or newer, and 11), not through WSL. WSL counts as Linux. This page lists every place where the code does something different per system. It was read from the code on branch `next` on 2026-11-27. Only Linux was run here: the macOS and Windows behaviour below is **not verified by running**. The plan behind it is `docs/plans/0.2.0/distribution.md`.
+From 0.2.0 Masthead runs natively on Linux, macOS (13 or newer) and Windows (10 1809 or newer, and 11), not through WSL. WSL counts as Linux. (The minimum versions are decision D8 in `docs/plans/0.2.0/distribution.md`, matching Claude Code's; the code checks only the system, through `os` in `package.json`.) This page lists every place where the code does something different per system. It was read from the code on branch `next` on 2026-11-27, not run for this page. What a person has run on real machines is recorded in `docs/plans/0.2.0/release-checklist.md`: Linux, and a Windows 11 PC (packaged install, `masthead doctor`, chats, the service starting at login after a reboot); the macOS checks were deferred, so the macOS behaviour below is **not verified by running**. The plan behind it is `docs/plans/0.2.0/distribution.md`.
 
 Most of these functions take the platform, environment or file checks as arguments. The unit tests (`test/platform.test.ts`, `test/service.test.ts`, `test/launcher.test.ts`, `test/awake.test.ts`) call them with `win32`, `darwin` and `linux` on any machine.
 
@@ -82,22 +82,22 @@ On Windows, environment names are matched without regard to case, `PATH` is spli
 
 | | Linux: `systemd.ts` | macOS: `launchd.ts` | Windows: `taskscheduler.ts` |
 |---|---|---|---|
-| File | `$XDG_CONFIG_HOME/systemd/user/masthead.service` (default `~/.config/…`) | `~/Library/LaunchAgents/io.github.luxorium.masthead.plist` | XML written to a temp file, then imported as task `Masthead` |
+| File | `~/.config/systemd/user/masthead.service`, always (systemd's user manager always searches it, whatever this shell's `XDG_CONFIG_HOME`); `uninstall` also removes an older copy under `$XDG_CONFIG_HOME/systemd/user` | `~/Library/LaunchAgents/io.github.luxorium.masthead.plist` | XML written to a temp file, then imported as task `Masthead` |
 | Runs | `node --disable-warning=… main.js serve` | the same | `conhost.exe --headless node.exe --disable-warning=… main.js serve [--port N]` (no visible window) |
-| Environment | `PATH` (Node's and Claude's folders first, the current `PATH`, `~/.local/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`, cleaned), `MASTHEAD_CLAUDE`, `XDG_*` if set, `MASTHEAD_PORT` if not 7717 | the same, with `/opt/homebrew/bin`, `/usr/sbin`, `/sbin` added | none: a task cannot set variables. It inherits the person's logon environment. The port goes on the command line |
+| Environment | `PATH` (Node's and Claude's folders first, the current `PATH`, `~/.local/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`, cleaned), `MASTHEAD_CLAUDE`, `XDG_CONFIG_HOME`/`XDG_DATA_HOME` and `MASTHEAD_CONFIG_DIR`/`MASTHEAD_DATA_DIR` if set, `MASTHEAD_PORT` if not 7717 (`serviceEnv()` in `common.ts`) | the same, with `/opt/homebrew/bin`, `/usr/sbin`, `/sbin` added | none: a task cannot set variables. It inherits the person's logon environment. The port goes on the command line |
 | Restart | `Restart=on-failure`, after 2 s | `KeepAlive` with `SuccessfulExit=false` (restart only after a crash) | `RestartOnFailure` every minute, 3 times |
 | Install | `systemctl --user daemon-reload`, `enable`, `restart` (fails if systemd user services are not available) | `launchctl bootout` (ignored if not loaded), then `bootstrap gui/<uid> <plist>` | `schtasks /End`, `/Create /XML <file> /F` (UTF-16 with BOM), `/Run` |
 | Status | `systemctl --user show` (`LoadState`, `ActiveState`, `Environment`) | `launchctl print gui/<uid>/<label>` (`state =`, `MASTHEAD_PORT =>`) | `schtasks /Query /FO LIST /V` (`Status:`, `Task To Run:`; English field names only) |
 | Logs | the journal | `~/Library/Logs/Masthead/masthead.log` | none |
 | Rights | user unit, no root | per-user agent, no root | `LeastPrivilege`, `InteractiveToken`, no admin |
 
-On Windows `install` warns when `MASTHEAD_CLAUDE`, `XDG_CONFIG_HOME` or `XDG_DATA_HOME` is set in the shell, because the task will not see them ("Set them with `setx`…"). It does not warn about `MASTHEAD_DATA_DIR` or `MASTHEAD_CONFIG_DIR`, which the task also does not see (read from the code).
+On Windows `install` notes when `MASTHEAD_CLAUDE`, `MASTHEAD_DATA_DIR`, `MASTHEAD_CONFIG_DIR`, `XDG_CONFIG_HOME` or `XDG_DATA_HOME` is set in the shell, because the task does not see them ("Note: the task uses your logon environment, not … from this shell. Set them with `setx` if Masthead needs them.").
 
-`install` first asks `/api/health` on the port; if agents are working it refuses unless `--force`. `status` exits 3 when not installed.
+`install` first asks `/api/health` on the port; if agents are working it refuses unless `--force`. `status` exits 3 when not installed. Without `--port` or `MASTHEAD_PORT`, the launcher's commands use the installed service's port (`commandPort()` in `server/cli.ts`; see [Command-line launcher](Command-Line-Launcher.md)).
 
 The launcher's `start`/`stop` use `systemctl` only on Linux, and only when the unit serves that port (`unitServes()` in `server/main.ts`). On macOS and Windows the launcher starts a detached copy itself and stops any copy through `/api/shutdown`. launchd and Task Scheduler do not restart a server that exits cleanly.
 
-`launchd.ts` and `taskscheduler.ts` each say at the top that they are unverified without a real Mac or Windows machine. `scripts/install.sh` still writes its own systemd unit on Linux (see [Installing](Source-Install-Scripts.md)).
+`launchd.ts` and `taskscheduler.ts` each say at the top that they are unverified without a real Mac or Windows machine; for Task Scheduler the release checklist has since recorded the service starting at login on a Windows 11 PC. `scripts/install.sh` still writes its own systemd unit on Linux (see [Installing](Source-Install-Scripts.md)).
 
 ## Keep-awake
 
@@ -129,7 +129,7 @@ The hold is released 5 s after the last agent stops (`RELEASE_AFTER_MS`), so sho
 
 ## What CI proves and what needs a real machine
 
-CI is described on [CI](Source-CI.md). The real-machine checks are in `docs/plans/0.2.0/release-checklist.md`, each to be dated and signed off before 0.2.0 is tagged.
+CI is described on [CI](Source-CI.md). The real-machine checks are in `docs/plans/0.2.0/release-checklist.md`. Its state on 2026-11-27: §1 and §2 done on Windows, deferred on macOS by the person's decision; §3 done on Windows for one install method only; §4 (Windows), §6 and §8 open; §5 done (Linux host, Android phone, Windows device); §7 and §9 partly unconfirmed. Open items go into the CHANGELOG's Known limits.
 
 | Area | Linux | macOS | Windows | Real machine only (checklist §) |
 |---|---|---|---|---|

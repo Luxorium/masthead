@@ -10,7 +10,7 @@
 |---|---|
 | `Check` | `{ name, ok, warn?, detail, fix? }`. `warn` means "ok, but worth a look". |
 | `DoctorFs` | `stat(path)` (`{ isDirectory, mode }`, or null when missing; `mode` is only read off Windows) and `writable(path)`. |
-| `DoctorDeps` | `platform`, `nodeVersion`, `findClaude()`, `paths: { configDir, dataDir, secretFile }`, `fs`, `port`, `probe(port)` (`'free' \| 'ours' \| 'other'`), `service?` (a `ServiceManager` or null), `sdkBinary()`, `awakeTool?()` (`{ cmd, found }`). |
+| `DoctorDeps` | `platform`, `nodeVersion`, `findClaude()`, `paths: { configDir, dataDir, secretFile }`, `fs`, `port`, `probe(port)` (`'free' \| 'ours' \| 'other'`), `service?` (a `ServiceManager` or null), `sdkBinary()`, `awakeTool?()` (`{ cmd, found }`), `isPrivate?(file)` (Windows: whether only the current user can reach the file, read with icacls; `isPrivate()` in `server/transport/auth.ts`). |
 | `MIN_NODE` | `22`. |
 | `systemDoctorFs` | The real `DoctorFs`: `statSync` and `accessSync(path, W_OK)`, both turning errors into null / false. |
 
@@ -27,13 +27,13 @@
 | 5 | `Secret` | `<file> (mode 600)`; on Windows `<file> (only you have access)`, read from the ACL by `isPrivate()` (icacls) | does not exist yet; on Windows without an ACL probe `(permissions not checked)` | it is a folder; group or others have any permission bit (`mode & 0o077`); on Windows the ACL has another entry, an inherited one, or cannot be read | `Remove <file>; a new secret is made on the next start.` / `Restart Masthead: a secret others could read is replaced with a new one (sign in again with masthead).` / Windows: `Delete <file> and restart Masthead; a new private secret is made.` |
 | 6 | `Port <n>` | `free`; `served by this Masthead` | | `in use by another program`; probe threw: `could not be checked: …` (also has `warn`) | `Stop that program, or use another port: masthead --port <n>.` |
 | 7 | `Service` | the service's own `detail` while running | no service manager on this platform (``none on <platform>; run Masthead with: masthead``); not installed (`not installed (<kind>)`, fix `masthead service install`); installed with state unknown | installed but not running (fix `masthead service install`); status threw: `could not be checked: …` (also has `warn`) | see the cells; on Windows every command is written `masthead.cmd` (`mastheadCommand()` in `server/paths.ts`), because stock PowerShell refuses npm's `masthead.ps1` |
-| 8 | `SDK private binary` | `not installed (Masthead runs your own Claude Code)` | `<dir> holds an unused private copy of Claude Code` | | `Reinstall without it: npm i -g --os=none --cpu=none @luxorium/masthead` (npm ignores `--omit=optional` for a global install) |
+| 8 | `SDK private binary` | `not installed (Masthead runs your own Claude Code)` | `<dir> holds an unused private copy of Claude Code` | | `Reinstall without it: npm i -g --os=none --cpu=none <release tarball URL>`, the URL from `releaseTarball(VERSION)`: `https://github.com/Luxorium/masthead/releases/download/v<version>/luxorium-masthead-<version>.tgz` (npm ignores `--omit=optional` for a global install) |
 | 9 | `Keep awake` (only when `awakeTool` is given) | `<cmd> holds off idle sleep while agents work` | no tool on this platform; tool not on `PATH` (the computer may sleep while agents work) | | Linux only: `Install systemd (systemd-inhibit), or keep the computer awake yourself` |
 
 Notes:
 
 - The port probe in `main.ts`: `free` when `/api/health` does not answer as Masthead; `ours` when it does and the server proves it knows this data folder's secret (`serverProves()`, [server/cli.ts](Source-Cli.md#serverprovesbase-port-secret-fetchfn)); otherwise `other`. A Masthead started with another data folder therefore shows as `in use by another program`.
-- The secret's mode check reads only the permission bits; owner rights are not checked. On Windows nothing is checked: the file is private through the ACL of the person's profile folder ([Security model](Security-Model.md#files-on-disk)).
+- The secret's mode check reads only the permission bits; owner rights are not checked. On Windows the mode is not read; the ACL is read instead through `isPrivate` (`main.ts` passes `isPrivate()` from `server/transport/auth.ts`). Without `isPrivate` the check is a warning, `(permissions not checked)` ([Security model](Security-Model.md#files-on-disk)).
 - `sdkBinaryPackage(platform, arch, resolve)` resolves `@anthropic-ai/claude-agent-sdk` and then, from it, `@anthropic-ai/claude-agent-sdk-<platform>-<arch>` or its `-musl` variant, returning the package folder or null. Masthead never runs that copy; it runs the person's own `claude`. The check is a warning only.
 - `awakeTool` in `main.ts` uses `awakeCommand(process.platform, process.pid)` and `onPath()` ([Keep awake](Source-Service.md#keep-awake-awakets)).
 

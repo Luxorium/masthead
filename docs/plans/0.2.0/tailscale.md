@@ -1,5 +1,8 @@
 # 0.2.0: Remote access over the person's own Tailscale
 
+> **History.** This plan was built in 0.2.0. It is kept as the record of the design and the evidence; where it
+> differs from the code, the code and `docs/wiki/` are right.
+
 Research and design, 2026-11-27, by golf. No code or Tailscale configuration was changed. Tailnet
 names, logins and addresses below are replaced with placeholders (`<host>.<tailnet>.ts.net`,
 `<login>`, `100.x.y.z`). Every claim is marked **[seen]** (a command here showed it), **[docs]**

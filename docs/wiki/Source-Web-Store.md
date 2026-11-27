@@ -2,7 +2,7 @@
 
 The store is everything the page knows, kept in step with the server over one WebSocket. The server owns the truth; the store is a view of it. It is one class, `Store`, with Svelte 5 runes for state, and one shared instance, `store`, that every component imports. It holds no secret of its own: the sign-in key and device token live in `signin.ts` ([Signing in](Source-Web-Front-End.md#signing-in)). This page describes Masthead 0.2.0.
 
-The 0.2.0 plan (`docs/plans/0.2.0/web.md` section 2) proposed splitting the store into `net/`, `state/` and `composer` modules. That split was not made: the store is still one file, about 840 lines. Only the pure helpers moved out, to `state/pure.ts` (below).
+The 0.2.0 plan (`docs/plans/0.2.0/web.md` section 2) proposed splitting the store into `net/`, `state/` and `composer` modules. That split was not made: the store is still one file, about 870 lines. Only the pure helpers moved out, to `state/pure.ts` (below).
 
 The store speaks two protocol versions on the same socket. Version 2 is what a 0.2.0 server speaks; version 1 is kept for an older server. The messages themselves are on [Browser/server protocol](Browser-Server-Protocol.md) and in `shared/protocol.ts` and `shared/protocol-v2.ts` ([Shared protocol](Source-Shared-Protocol.md)).
 
@@ -47,11 +47,11 @@ Public `$state` fields:
 
 `v2` is a plain field (not reactive): true once the server answered `hello` with protocol 2.
 
-Derived values: `rateLimit` (the worst usage notice unless dismissed), `conv`, `agentList` (sorted by `createdAt`, archived helpers left out), `archivedAgents` (helpers a tidy-up archived, newest first; shown under "Archived helpers"), `lead` (the agent whose `tier` is `'lead'`), `viewAgent` (falls back to the lead), `viewItems`, `viewDraft`, `canRun`, `convPending` (requests of the open chat), `liveCount` (helpers queued, running or waiting) and `composerKey` (`"<convId or new>:<agentId or lead>"`).
+Derived values: `rateLimit` (the worst usage notice unless dismissed), `conv`, `agentList` (sorted by `createdAt`, archived helpers left out), `archivedAgents` (helpers a tidy-up archived, newest first; shown under "Archived helpers"), `lead` (the agent nobody started, `!parentId`; its tier id is `'lead'` only in Claude's built-in team, others use `<profile>:0`), `viewAgent` (falls back to the lead), `viewItems`, `viewDraft`, `canRun`, `convPending` (requests of the open chat), `liveCount` (helpers, i.e. agents with a `parentId`, queued, running or waiting) and `composerKey` (`"<convId or new>:<agentId or lead>"`).
 
-`canRun` is true when `app.claude` has a path, or a version without a path (the test-only fake backend). Its comment says this stands in until the server sends `state.backends`. The server does send `backends` now, but `canRun` still reads only the Claude Code info, so a machine with only Codex sees the first-run screen ([FirstRun](Source-Web-Components.md#firstrunsvelte)).
+`canRun` is true when any entry of `backends` has `available === true`, or when `app.claude` has a path, or a version without a path (the test-only fake backend). When it is false the page shows the first-run screen ([FirstRun](Source-Web-Components.md#firstrunsvelte)).
 
-Private bookkeeping: the socket, the retry count, `refusals`, the `sent` list, `wanted` (agents whose transcript the page asked for), `seq`, `epoch`, `subscribed`, `subscribedOnServer`, `dseq` (step number per streaming draft), `v1State`, `helloTimer`, `helloPending`, `forgetting`, `dismissedLimit` and the `listeners` map.
+Private bookkeeping: the socket, the retry count, `errorTimer`, `pendingRef` (the `ref` of the new chat being created), `refusals`, the `sent` list, `wanted` (agents whose transcript the page asked for), `seq`, `epoch`, `subscribed`, `subscribedOnServer`, `dseq` (step number per streaming draft), `v1State`, `helloTimer`, `helloPending`, `forgetting`, `dismissedLimit` and the `listeners` map.
 
 ## Connecting
 
@@ -80,9 +80,9 @@ Private bookkeeping: the socket, the retry count, `refusals`, the `sent` list, `
 
 `forgetThisDevice()` sends `{t:'forget_me'}`, forgets the token and any pairing request (`forgetDevice()`), clears `deviceRole`, and closes the socket after 1.5 s if the server has not closed it already. `deviceApproved(token)` saves a token from the pairing screen and connects.
 
-**Roles.** `mayAct` is true on the computer's own page and for a `full` device. `mayAnswer` is true everywhere except a `read` device. Components hide controls with them: the composer (with its Stop and Stop all), New chat, delete, the team's Stop buttons, team controls and the settings fieldset need `mayAct`; approval cards need `mayAnswer`.
+**Roles.** `mayAct` is true on the computer's own page and for a `full` device. `mayStop` and `mayAnswer` are true everywhere except a `read` device. Components hide controls with them: the composer, New chat, delete, rename (the title is plain text otherwise), Restore for an archived helper, the team panel's controls and the settings fieldset need `mayAct`; the per-agent ■ Stop (`StopControl`) needs `mayStop`; the tidy-up card's answers and progress controls need `mayAnswer`.
 
-This leaves an `approve` device with no way to stop work, although the server allows that role to send `interrupt`, `stop_agent` and `stop_all` (`server/remote/authorise.ts`) and the role is labelled "Answer approvals and stop work". The chat title stays clickable on every device, and a rename from a non-`full` device is refused by the server.
+A device without `mayAct` sees a role line in place of the composer (what its role may do, and how to get more). For an `approve` device it also holds the stops the composer would have had: Stop reply (`interrupt`) while the lead runs, and Stop all while helpers are live. Approval cards show on every device; `PermissionCard` tells a read-only device it cannot answer.
 
 ## Protocol version 2
 
@@ -119,7 +119,7 @@ A version 2 `draft` carries `dseq` (the step number) and either `text` (the whol
 - `dseq === 1`: a new draft starts.
 - Anything else means a step was missed: the page sends `{t:'draft_sync', convId, agentId}` once and waits for the whole text.
 
-`draft_end` clears the draft. It names the item that replaces it (`itemId`); the store does not use that field. A `draft` without `dseq` is version 1 (the whole draft each time) and is handled by the version 1 code.
+`draft_end` clears the draft and its step number. It names the item that replaces it (`itemId`); the store does not use that field. A `draft` without `dseq` is version 1 (the whole draft each time) and is handled by the version 1 code.
 
 ### Paged transcripts
 
@@ -140,7 +140,7 @@ Full requests come with the subscribed chat: in the `conversation` snapshot (`pe
 For messages the store itself does not use:
 
 - `listen(t, fn)` calls `fn` for every server message of type `t`, after the store has handled it. It returns the function that stops listening. Used for `backends` (end of "Checking…"), `remote_audit` and `error` in the settings pieces.
-- `request(msg)` sends any message; when offline it shows `T.errors.notConnected` and returns false. Used for `check_backends`, `reset_profile`, `remote_settings`, `device_decision`, `device_role`, `device_revoke`, `remote_audit` and `forget_me`.
+- `request(msg)` sends any message; when offline it shows `T.errors.notConnected` and returns false. Used for `check_backends`, `reset_profile`, `delete_profile`, `remote_settings`, `device_decision`, `device_role`, `device_revoke`, `remote_audit`, `forget_me`, and the store's own `compact_answer`, `compact_cancel`, `restore_agent` and `archive_items`.
 
 ## Receiving (`receive()`)
 

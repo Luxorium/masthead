@@ -44,6 +44,7 @@
         <p class="about">{T.device.staysSignedIn}</p>
         {#if store.deviceRole && store.deviceRole !== 'full'}
           <p class="about">{store.deviceRole === 'approve' ? T.device.roleApprove : T.device.roleRead}</p>
+          <p class="about small">{T.device.askMore}</p>
         {/if}
         <button class="btn danger forget" onclick={() => store.forgetThisDevice()}>{T.device.forget}</button>
         <p class="about small">{T.device.forgetHelp}</p>
@@ -52,9 +53,11 @@
 
     {#if store.settings}
       {@const s = store.settings}
-      <fieldset class="plain" disabled={!store.mayAct}>
+      <!-- Only server settings sit in the disabled fieldsets: a read-only or approve-only device may still
+           change what is kept in this browser alone (Show team controls, Colours). -->
       <section class="group" aria-labelledby="set-general">
         <h2 id="set-general">{T.settings.general}</h2>
+        <fieldset class="plain" disabled={!store.mayAct}>
         <label class="mode">
           <span>{T.settings.ask}</span>
           <select value={s.permissionMode} onchange={(e) => store.updateSettings((n) => (n.permissionMode = e.currentTarget.value as PermissionChoice))}>
@@ -87,17 +90,22 @@
             <span><b>{T.settings.keepAwake}</b><small>{T.settings.keepAwakeHelp}</small></span>
           </label>
         {/if}
+        </fieldset>
         <label class="check">
           <input type="checkbox" checked={ui.advanced} onchange={(e) => ui.setAdvanced(e.currentTarget.checked)} />
           <span><b>{T.settings.advanced}</b><small>{T.settings.advancedHelp}</small></span>
         </label>
         {#if ui.advanced}
+          <fieldset class="plain" disabled={!store.mayAct}>
           <label class="check">
             <input type="checkbox" checked={s.autoEffort} onchange={(e) => store.updateSettings((n) => (n.autoEffort = e.currentTarget.checked))} />
             <span><b>{T.settings.autoEffort}</b><small>{T.settings.autoEffortHelp}</small></span>
           </label>
+          </fieldset>
         {/if}
       </section>
+
+      <fieldset class="plain" disabled={!store.mayAct}>
 
       <!-- Teams and the agents on this computer (bravo, web/src/lib/settings). -->
       <section class="group plug"><ProfilesSection /></section>
@@ -109,6 +117,7 @@
           <RemoteSection />
         </section>
       {/if}
+      </fieldset>
 
       <section class="group" aria-labelledby="set-look">
         <h2 id="set-look">{T.settings.theme}</h2>
@@ -121,8 +130,6 @@
           </select>
         </label>
       </section>
-
-      </fieldset>
 
       <section class="group" aria-labelledby="set-about">
         <h2 id="set-about">{T.settings.about}</h2>

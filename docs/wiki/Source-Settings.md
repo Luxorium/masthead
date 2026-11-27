@@ -31,6 +31,8 @@ Returns `{ config, data }`. It is a pure function, so tests can try each platfor
 
 The macOS and Windows locations are new in 0.2.0. No earlier install existed there, so nothing has to move.
 
+`paths.ts` also exports `mastheadCommand(platform)` (`masthead.cmd` on Windows, else `masthead`) and the `AppDirs` type. See [server/paths.ts](Source-Paths.md) for the full page.
+
 ## server/settings/settings.ts
 
 The module-level patterns used for validation:
@@ -84,7 +86,7 @@ One tier from untrusted input, laid over a copy of `base`. The caller fixes the 
 
 - `model` must match `MODEL_ID`. If the label was the default one made from the old model, the label follows the new model.
 - `label`: a non-empty string after trimming, cut to 40 characters.
-- `backend` must match `BACKEND_ID`. This checks the form only. Whether the backend exists is decided at run time ([Backend interface](Backend-Interface.md)).
+- `backend`: a string that matches `BACKEND_ID` is taken and clears any `unusable` mark. This checks the form only. Whether the backend exists is decided at run time ([Backend interface](Backend-Interface.md)). A string that does not match is still kept (cut to 80 characters), never swapped for `claude-code`, and the tier gets `unusable: '"<backend>" is not a valid agent program name.'`, so it cannot start.
 - `effort`: one of `low`, `medium`, `high`, `xhigh`.
 - `max`: `clampInt` to 0–12 (`MAX_PER_TIER`). This is **never** taken for the first tier.
 - `lean`: a boolean.
@@ -119,17 +121,53 @@ Applies the 0.1.x shape (`tiers.<lead|opus|sonnet|haiku>` plus `leanSubagents` a
 6. `permissionMode` must be one of `PERMISSION_CHOICES`. `autoEffort`, `collapseReports`, `keepAwake` and `autoCompact` must be booleans. A `keepAwake` or `autoCompact` that is still missing (a file or `base` made before the field existed) becomes `true`, so automatic tidying starts on for existing installs. See [Compact team](Compact-Team.md). `maxRunMinutes` is clamped to 0–1440. `defaultCwd` must pass `absoluteFolder`.
 7. Return `withCompat(d)`.
 
+### `SETTINGS_FORMAT`
+
+`2`, the settings format this Masthead writes.
+
+### `v2CopyOf(file)`
+
+The name of the sibling copy written on every save: `settings.json` becomes `settings.v2.json` (any other name gets `.v2` appended). Masthead 0.1.x never touches that file, so going back to 0.1.x (which rewrites `settings.json` without the teams) and returning does not lose the teams.
+
+### `settingsProblem(file = SETTINGS_FILE)`
+
+Why `file` is not being saved, or `undefined`. The reason comes from a module-level `readOnly` map that `loadSettings` fills when the file is from a newer Masthead. `App` shows it to the person as a `settings` problem.
+
+### `readJson(file)` and `V1_FIELDS` (internal)
+
+`readJson` returns the parsed object, or `null` when the file cannot be read, is not JSON, or holds an array or a non-object. `V1_FIELDS` lists what 0.1.x could change in its file: `tiers`, `leanSubagents`, `leanOpus`, `permissionMode`, `autoEffort`, `collapseReports`, `maxRunMinutes`, `defaultCwd`.
+
 ### `loadSettings(file = SETTINGS_FILE)`
 
-Reads and parses the file. If the parsed object has no `version` (a 0.1.x file), the function copies the file to `<file>.v1.bak`, once only (never if that backup exists), before anything can overwrite it. It then returns `sanitizeSettings(raw)` over the defaults, so the migration happens in memory. The file is written in the new format at the next save. Any error (no file, bad JSON, a failed copy) gives `defaultSettings()`.
+1. Clears any `readOnly` note for `file`. No file: `defaultSettings()`.
+2. A file `readJson` cannot use is first copied to `<file>.unreadable-<Date.now()>` (a failed copy is ignored), then `defaultSettings()` is returned.
+3. A `version` above `SETTINGS_FORMAT` (a newer Masthead): the file is marked read-only with "These settings are from a newer Masthead (format N). This version will not change them; it runs on its defaults until you update." and `defaultSettings()` is returned. `saveSettings` then never writes it.
+4. No `version` (a 0.1.x file): the file is copied to `<file>.v1.bak` once only (never if that backup exists; a failed copy is ignored). If a v2 copy (`v2CopyOf(file)`) with `version: 2` exists, the person went back to 0.1.x and returned: the result is `sanitizeSettings(older, sanitizeSettings(copy))`, where `older` holds only the `V1_FIELDS` found in the file. So the teams and 0.2.0-only fields come from the copy.
+5. Otherwise `sanitizeSettings(raw)` over the defaults, so the migration happens in memory. The file is written in the new format at the next save.
 
 ### `saveSettings(s, file = SETTINGS_FILE)`
 
-Writes `JSON.stringify(s, null, 2)` plus a newline with `writeFileAtomic` (see [Storage](Source-Storage.md#atomicts)). The file gets mode `0600`, and its folder is created with mode `0700`.
+Does nothing for a file marked read-only (from a newer Masthead). Otherwise writes `JSON.stringify(s, null, 2)` plus a newline with `writeFileAtomic` (see [Storage](Source-Storage.md#atomicts)) to `file` and to `v2CopyOf(file)`. Each file gets mode `0600`, and its folder is created with mode `0700`.
+
+### `chatsUsing(id, convProfiles)`
+
+How many of the given conversation profile ids are `id`. A missing id counts as `claude`. `App` uses it before deleting a team.
+
+### `freshProfileIds(rawProfiles, current, heldByChats)`
+
+Used by `App` on every settings update that carries `profiles`. A raw profile whose `id` is not in the current settings but is still held by a chat (a deleted team, so a new team would reuse its id) gets the first free `<id>-<n>`, starting at 2. Free means not taken by a current profile, a held id or another raw profile. Every other profile is returned unchanged. Tested in `test/settings.test.ts` and `test/protocol-v2.test.ts`.
+
+### `deleteProfile(s, id)`
+
+The settings without profile `id`, validated through `sanitizeSettings({ profiles: ... }, s)`. Returns `s` unchanged for `claude` (it cannot be deleted) or an unknown id. `App` refuses first while chats use the team ("N chats use this team.", with `inUse`), unless the page sends the request again with `force: true`; when `deleteProfile` returns `s` unchanged, `App` answers "This team cannot be deleted."
 
 ### `tierLimit(s, tier)`
 
-The scheduler's limit for a tier id. The `Scheduler` in `App` is built with `(tier) => tierLimit(this.currentSettings, tier)`. It returns `Infinity` for the first tier of any profile (each conversation always has its lead), the tier's `max` for any other tier, and `0` for an id no profile has any more. A 0 means agents of that tier cannot start ([Scheduler](Source-Core-Scheduler.md)).
+The scheduler's limit for a tier id. The `Scheduler` in `App` is built with `(tier) => tierLimit(this.currentSettings, tier)`. It returns `Infinity` for the first tier of any profile (each conversation always has its lead) and the tier's `max` for any other tier. For an id no profile has any more (the profile was deleted or shrank), conversations still on it run on their own copy of the team: an id ending in `:0` is a lead and gives `Infinity`; otherwise it gives the `max` recorded by `rememberTeam`, or `0` when none was recorded. A 0 means agents of that tier cannot start ([Scheduler](Source-Core-Scheduler.md)).
+
+### `rememberTeam(tiers)`
+
+Records each tier of a conversation's copy of its team (`ConversationMeta.team`) by id in the module-level `teamCopies` map, for `tierLimit` once the profile itself is gone. `Conversation` calls it when a conversation is created and when one is restored.
 
 ### `withBuiltInProfiles(s, generated)`
 
@@ -141,7 +179,8 @@ Puts built-in profile `id` back to its defaults: `claude` from `claudeProfile()`
 
 ## Callers
 
-- `server/app/app.ts`: `loadSettings` in the constructor, `sanitizeSettings(msg.settings, currentSettings)` for `{t:'settings'}`, `saveSettings` in `updateSettings()`, `tierLimit` for the scheduler, `withBuiltInProfiles` in `backendsDetected()`, and `resetProfile` for `reset_profile`.
+- `server/app/app.ts`: `loadSettings` in the constructor (unless settings were passed in), `sanitizeSettings(msg.settings, currentSettings)` for `{t:'settings'}`, `saveSettings` in `updateSettings()`, `tierLimit` for the scheduler, `withBuiltInProfiles` in `backendsDetected()`, `chatsUsing` and `deleteProfile` for `delete_profile`, `resetProfile` for `reset_profile`, and `settingsProblem` for the problems list.
+- `server/core/conversation.ts`: `rememberTeam` on create and restore.
 - Tests: `test/settings.test.ts`.
 
 Not verified by running: this page was written from the code. The tests were not run for it.

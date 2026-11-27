@@ -1,0 +1,60 @@
+# Builds the package for a version tag and attaches the .tgz to a GitHub release, so people can install
+# without the npm registry:  npm install -g --os=none --cpu=none <url of the .tgz>
+# It never publishes to npm. It runs only when someone pushes a tag like v0.2.0 (after merging next into main).
+# A tag with a hyphen (v0.2.0-beta.3) makes a pre-release; any other tag makes the release marked latest.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Tag matches package.json
+        shell: bash
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $version." >&2
+            exit 1
+          fi
+      # A plain install: the build tools need their optional platform packages (esbuild, rolldown).
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run test:web
+      - name: Pack and try the package
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          npm pack --pack-destination "$RUNNER_TEMP/out"
+          npm install -g --os=none --cpu=none "$RUNNER_TEMP"/out/*.tgz
+          masthead --version
+          (cd "$RUNNER_TEMP/out" && sha256sum *.tgz > SHA256SUMS)
+      - name: Create the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--verify-tag --title "Masthead ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md")
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease --latest=false) ;; *) flags+=(--latest) ;; esac
+          # Release notes: this version's section of CHANGELOG.md (from its heading to the next one).
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            /^## / { if (found) exit; if ($2 == v) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          [ -s "$RUNNER_TEMP/notes.md" ] || echo "See CHANGELOG.md." > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" "$RUNNER_TEMP"/out/*.tgz "$RUNNER_TEMP/out/SHA256SUMS"

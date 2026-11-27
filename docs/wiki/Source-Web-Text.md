@@ -4,7 +4,7 @@ Every word the page shows lives in `web/src/lib/text.ts`, and the words for stat
 
 ## `text.ts`
 
-The file's own reason: plain language for anybody, no team jargon on first sight, and one file for wording reviews and, later, a translation. There are no translations yet.
+The file's own reason: plain language for anybody, no team jargon on first sight, and one file for wording reviews (and for any translation). There are no translations.
 
 It exports one object, `T` (declared `as const`), and two functions. Entries are plain strings, or functions that take what varies (a name, a count, a time) and return a string. The groups:
 
@@ -18,7 +18,7 @@ It exports one object, `T` (declared `as const`), and two functions. Entries are
 | `transcript` | Show earlier, inbound headings, thinking, tool labels |
 | `status` | Agent statuses (used by `words.ts`) |
 | `team` | Team panel: outline, Hide finished, the "N finished: …" row, expand and collapse labels, panel width, Stop, levels |
-| `map` | Left from the removed map: "Report from", "Message from" and "Thinking…" in the team panel's preview (`meta` and `onlyLead` are unused) |
+| `preview` | The team outline's preview: "Report from", "Message from" and "Thinking…" |
 | `compact` | Tidying the team ([Compact team](Compact-Team.md)): the setting and per-chat switch, the card, progress lines and Cancel, the "Archived helpers (M)" row, the Archived note, Restore, the `/compact` hint |
 | `usage` | Usage meter and the names of usage windows |
 | `settings` | Settings view: General, ask modes, thinking, Appearance, About |
@@ -32,17 +32,15 @@ It exports one object, `T` (declared `as const`), and two functions. Entries are
 | `wants` | The "wants to …" phrase per tool on approval cards |
 | `errors` | `notConnected` |
 
-Two private helpers: `plural(n, one, many)` and `when(ts)`, a short local date and time.
+Three private helpers: `plural(n, one, many)`; `roleWord(role)`, a device role in the page's words ("everything", "answer approvals and stop work", "only read") for the audit lines; and `when(ts)`, a short local date and time (also exposed as `T.remote.when`).
 
 The plain words follow the plan's table (`docs/plans/0.2.0/web.md` 0.4): "main assistant" and "helper", not lead and sub-agent; levels named by their model; "Thinking time" with Short to Longest, not effort; "When to ask you"; "Allow for this session"; "Don't answer"; "Memory used"; "Waiting its turn". Model names stay where a choice is made.
 
-`T.remote` and `T.teams` were moved in from `remote/text.ts` and `settings/text.ts`, which now only export `RT = T.remote` and `ST = T.teams`, so existing imports keep working. In the working tree on 2026-11-27 this move is uncommitted.
+`T.remote` and `T.teams` were moved in from `remote/text.ts` and `settings/text.ts`, which now only export `RT = T.remote` and `ST = T.teams`, so existing imports keep working.
 
 ### The jargon test
 
 `web/test/text.test.ts` walks every string in `T` (calling each function with sample arguments) and fails if any matches `\b(tiers?|sub-?agents?|lead|effort)\b`, case-insensitive. Model names (Opus, Sonnet) are allowed there, because levels are called by their model. The browser test is stricter on the first screen: the visible text of the first load must not contain tier, Opus, Sonnet, Haiku, effort, sub-agent or lead ([Page tests](Source-Web-Tests.md#browser-test-testuie2emjs)).
-
-The settings group still has `leanOpus`, `leanSub` and their help lines, which no component uses.
 
 ### Words outside `text.ts`
 

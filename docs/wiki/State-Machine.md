@@ -189,7 +189,7 @@ The rows are those of `docs/plans/0.2.0/core.md` §3.3. `test/machine.test.ts` h
   - `queued` / `running`: taken as the phase (and `end` cleared), unless a pause holds the agent;
   - `waiting` / `idle`: taken as the phase;
   - `done` / `failed` / `stopped`: the lead goes `waiting` or `idle` (it never ends); a sub-agent in `queued` keeps its state (second "runtime wins" rule); otherwise it becomes `ended` with that kind, holds and report debt cleared.
-- **`Archive` / `Unarchive` and the `archived` flag** (rows A1–A3, Compact team, 0.2.0-beta.2): `test/machine.test.ts` "archive: only a finished helper is archived; nothing but Unarchive changes it; never the lead". The flow that sends them is in [Compact team](Compact-Team.md).
+- **`Archive` / `Unarchive` and the `archived` flag** (rows A1–A3, Compact team, 0.2.0): `test/machine.test.ts` "archive: only a finished helper is archived; nothing but Unarchive changes it; never the lead". The flow that sends them is in [Compact team](Compact-Team.md).
 - **Review fixes** (two tests named "fix: …"): the background cap starts when a child ends and background work is left as the only hold (done by the epilogue); a pause that ends during a turn the person started leaves the agent `running` with its run clock on.
 
 ## Diagram

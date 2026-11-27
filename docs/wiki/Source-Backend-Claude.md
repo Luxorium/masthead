@@ -1,32 +1,32 @@
-# server/backends/claude/ (0.2.0)
+# server/backends/claude/
 
 **Role:** the Claude Code backend. One Agent SDK `query()` per session, driven in streaming-input mode, with its messages translated into the neutral events of [the backend interface](Backend-Interface.md). It decides nothing about when an agent's work is over; it only reports. The behaviour is carried over from 0.1.4's `server/agent.ts`.
 
 | File | Contents |
 |---|---|
-| `session.ts` | `ClaudeBackend`, `ClaudeSession`, `Channel`, `DISALLOWED`, `MISSING_SESSION`, `CLAUDE_CAPS`, `toolResultText` |
-| `mcp.ts` | The in-process MCP server holding the team tools |
-| `env.ts` | Finding Claude Code (`findClaude`) and the environment it runs in (`agentEnv`) |
+| `session.ts` | `ClaudeBackend`, `ClaudeBackendOptions`, `ClaudeSession`, `Channel`, `DISALLOWED`, `MISSING_SESSION`, `CLAUDE_CAPS`, `toolResultText` |
+| `mcp.ts` | The in-process MCP server holding the team tools: `MCP_NAME`, `zodShape`, `mcpServer` |
+| `env.ts` | Finding Claude Code (`claudeCandidates`, `resolveShim`, `locateClaude`, `findClaude`, types `ClaudeInfo` and `FindDeps`) and the environment it runs in (`agentEnv`) |
 
 ## `session.ts`
 
-### `Channel<T>` (line 24)
+### `Channel<T>` (line 25)
 
 An async queue used as the session's input stream. `push()` adds an item (ignored once closed), `close()` ends the stream after the items already queued.
 
-### `ClaudeBackend` (line 108)
+### `ClaudeBackend` (line 112)
 
-`id = 'claude-code'`, `label = 'Claude Code'`, `caps = CLAUDE_CAPS` (line 60; table on [the interface page](Backend-Interface.md#capabilities-per-backend)). Options: `path`, `version`, `error` as found by `findClaude()`, and for tests `treeDeps` and `query`.
+`id = 'claude-code'`, `label = 'Claude Code'`, `caps = CLAUDE_CAPS` (line 61; table on [the interface page](Backend-Interface.md#capabilities-per-backend)). Options (`ClaudeBackendOptions`): `path`, `version`, `error` as found by `findClaude()` at start-up; `find` (a function that looks for Claude Code again; the registry passes `findClaude` on a real start); and for tests `treeDeps` and `query`.
 
-- `detect()` looks for Claude Code again (path search and `--version`, through `findClaude`) each time on a real start, so "Check again" finds a Claude Code installed later; tests that hand in a fixed `claude` get what they gave. `available` needs a path and no error (a binary whose `--version` fails is not usable). `signedIn: null`.
-- `models()` returns `[]` (the comment says it is to be filled from `Query.supportedModels()` later).
+- `detect()` calls `find` each time when it was given, so "Check again" finds a Claude Code installed later; without `find` (tests that hand in a fixed `claude`) it reports what it was given. `available` needs a path and no error (a binary whose `--version` fails is not usable). `signedIn: null`.
+- `models()` returns `[]` (the code comment says it is to be filled from `Query.supportedModels()` in a catalogue step; the tiers name their models directly).
 - `open()` returns a `ClaudeSession`.
 
-### `ClaudeSession` (line 138)
+### `ClaudeSession` (line 149)
 
 The constructor calls `query({ prompt: channel, options })`. If that throws, `ended` resolves at once and `exited({ failure })` is sent in a microtask. Otherwise `ended` is the promise of `consume()`, which reads every SDK message.
 
-#### Options (`options()`, line 172)
+#### Options (`options()`, line 185)
 
 | SDK option | Value |
 |---|---|
@@ -45,13 +45,13 @@ The constructor calls `query({ prompt: channel, options })`. If that throws, `en
 | `resume` | When the spec has one. |
 | `permissionMode` | Unless the spec says `'inherit'`; `bypassPermissions` also sets `allowDangerouslySkipPermissions`. |
 
-`DISALLOWED` (line 51): `Agent`, `Task`, `Workflow`, `SendMessage`, `ListAgents`, `EnterPlanMode`, `ExitPlanMode`, `EnterWorktree`, `ExitWorktree`, `ScheduleWakeup`, `CronCreate`, `CronDelete`, `CronList`, `RemoteTrigger`, `SendToProject`, `SendToProjectContext`, `PushNotification`: tools that would bypass Masthead's team or start work later or elsewhere, or that it has no screen for.
+`DISALLOWED` (line 52): `Agent`, `Task`, `Workflow`, `SendMessage`, `ListAgents`, `EnterPlanMode`, `ExitPlanMode`, `EnterWorktree`, `ExitWorktree`, `ScheduleWakeup`, `CronCreate`, `CronDelete`, `CronList`, `RemoteTrigger`, `SendToProject`, `SendToProjectContext`, `PushNotification`: tools that would bypass Masthead's team or start work later or elsewhere, or that it has no screen for.
 
-#### Starting the process (`spawnProcess`, line 209)
+#### Starting the process (`spawnProcess`, line 222)
 
 Through `spawnClaudeCodeProcess` Masthead starts Claude Code itself with `spawnTree()` from [proctree.ts](Backend-Interface.md#serverbackendsproctreets), so a stop ends the commands it started too. Because a custom spawner gets no stderr handling from the SDK, stderr is read here into `stderrTail` (last 4,000 characters; the missing-session check needs it). The SDK's `kill()` and its abort signal (sent after its own graceful-close window) both call `killTree()`.
 
-#### Permissions (`canUseTool`, line 239)
+#### Permissions (`canUseTool`, line 252)
 
 | Direction | Rule |
 |---|---|
@@ -65,40 +65,42 @@ Through `spawnClaudeCodeProcess` Masthead starts Claude Code itself with `spawnT
 |---|---|
 | `send(id, content)` | Pushes a user message with `uuid: id`; images become base64 image blocks. |
 | `interrupt()` | `q.interrupt()`; marks the turn interrupted (unmarked if the call fails). |
-| `setEffort(e)` | `q.applyFlagSettings({ effortLevel: e })`. |
+| `setEffort(e)` | `q.applyFlagSettings({ effortLevel: e })`; resolves doing nothing when there is no process. |
 | `setModel(m)` | `q.setModel(m)`; rejects with "no process" when there is none. |
 | `close('graceful')` | Closes the input channel. |
 | `close('now')` | `q.close()`. Both set `closeRequested`, so no `exited` follows. |
-| `contextUsage()` | `q.getContextUsage()` → `{ used: totalTokens, max: maxTokens }`. |
+| `contextUsage()` | `q.getContextUsage()` → `{ used: totalTokens, max: maxTokens }`; throws "no process" when there is none. |
+| `compact()` | See [Compaction](#compaction-compact). |
 
-#### Message translation (`handle`, line 317; `stream`, line 418)
+#### Message translation (`handle`, line 347; `stream`, line 448)
 
 | SDK message | Neutral events |
 |---|---|
-| `system` / `init` | `turnStarted()`, then `sessionStarted(session_id)`. Every turn starts with `init`, also turns Claude Code starts by itself. Marks `sawInit`. |
+| `system` / `init` | `turnStarted()` (not while a `compact()` is running), then `sessionStarted(session_id)`. Every turn starts with `init`, also turns Claude Code starts by itself. Marks `sawInit`. |
 | `system` / `status` with `compacting` | `activity('Compacting its context')`. |
 | `system` / `background_tasks_changed` | `background(ids of the tasks that are not ambient)`. |
 | `system` / `compact_boundary` | `compacted()`. |
-| `stream_event` | `turnStarted()`, then by event: `message_start` with usage → `usage({ context })` where context = input + cache read + cache creation tokens; `message_delta` with `output_tokens` → context grows by it, `usage({ context, output })`; `content_block_start` of text or thinking → `draft({ kind, append: '' })`; `text_delta` / `thinking_delta` → `draft({ kind, append })`. |
+| `stream_event` | `turnStarted()`, then by event: `message_start` with usage → `usage({ context })` where context = input + cache read + cache creation tokens; `message_delta` with `output_tokens` → context grows by it, `usage({ context, output: output_tokens })`; `content_block_start` of text or thinking → `draft({ kind, append: '' })`; `text_delta` / `thinking_delta` → `draft({ kind, append })`. |
 | `assistant` | `draft(null)`, `turnStarted()`. Each non-blank text block → `text(text, isError)` (error when the message has `error`); each non-blank thinking block → `thinking()`; each `tool_use` → `toolStarted()`. An `error` is kept as the turn's `apiError` and error text (`<error>: <last text>`). |
 | `user` | Each `tool_result` → `toolFinished({ id, result, isError, images? })`. `result` is `toolResultText()` (text blocks, `[image]`, `[tool loaded: name]`, `[type]`); base64 image blocks in the result become `images`. |
 | `rate_limit_event` | See below. |
 | `result` | `turnEnded()` (see below), after `usage({ costUsd: total_cost_usd })`. |
 
-#### End of a turn (`result`, line 441)
+#### End of a turn (`result`, line 471)
 
 - **Consumed ids:** `user_message_uuids`, else the single `user_message_uuid`. When neither is present: `[]` if this process has already shown it names consumed messages (`namesConsumed`, set by a named result or by an `assistant` message with `user_message_uuid`), else `null`.
-- **Error:** for a non-success subtype (and not interrupted): the `errors` strings without those starting `[ede_diagnostic]`, joined with `; `, else the assistant error text, else the subtype with `_` as spaces. For `is_error` on a success: the result text, else "The turn ended with an error.".
+- **Error:** for a non-success subtype (and not interrupted): the `errors` strings without those starting `[ede_diagnostic]`, joined with `; `, else the assistant error text, else the subtype with `_` as spaces. For `is_error` on a success (not interrupted, and no assistant error already held): the result text, else "The turn ended with an error.".
+- **A compaction's result** (one with `local_command: 'compact'` or naming the `/compact` message's id while `compact()` runs) settles `compact()` instead and ends no turn; see below.
 - **Text:** the result string, else the last text block.
 - **apiError:** the assistant message's `error` from this turn.
 
 #### Missing session
 
-`MISSING_SESSION` (line 57) is `/No conversation found with session ID/`. A `result` that arrives on a resume **before `init`** and names it is set aside rather than reported as a turn. When the process ends (`consume`, line 300) without `close()`, `exited` gets `sessionMissing: true` only if the spec was a resume, no `init` was seen, and the set-aside result, the thrown failure or `stderrTail` names the missing session. Otherwise `exited({ failure, apiError })`.
+`MISSING_SESSION` (line 58) is `/No conversation found with session ID/`. A `result` that arrives on a resume **before `init`** and names it is set aside rather than reported as a turn. When the process ends (`consume`, line 328) without `close()`, `exited` gets `sessionMissing: true` only if the spec was a resume, no `init` was seen, and the set-aside result, the thrown failure or `stderrTail` names the missing session. Otherwise `exited({ failure, apiError })`.
 
-#### Rate limits (line 377)
+#### Rate limits (line 407)
 
-If `rate_limit_info.unifiedWindows` is present (it is not in the SDK's types, so it is read defensively), one `rateLimit()` per window: its own `status`, `utilization` and `resetsAt`, falling back to the event's figures for the window of the event's `rateLimitType`. Otherwise one notice from the event's own figures. `resetsAt` is passed on in **seconds**.
+If `rate_limit_info.unifiedWindows` is present (it is not in the SDK's types, so it is read defensively), one `rateLimit()` per window, with the window's key as `type`: its own `status`, `utilization` and `resetsAt`, falling back to the event's figures for the window of the event's `rateLimitType` (and to status `allowed` for any other window without one). Otherwise one notice from the event's own figures. `resetsAt` is passed on in **seconds**.
 
 ## `mcp.ts`
 
@@ -120,15 +122,15 @@ A property's `description` is kept; properties not in `required` become optional
 
 | Function | Behaviour |
 |---|---|
-| `claudeCandidates()` (line 51) | Where Claude Code may be, in order: `$MASTHEAD_CLAUDE`, each absolute `PATH` folder, then installer folders: `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, `~/.bun/bin`, `/opt/homebrew/bin` (macOS), `/usr/local/bin`, `/usr/bin`; on Windows `~\.local\bin` and `%APPDATA%\npm`, with each `PATHEXT` extension (`.exe` first). |
+| `claudeCandidates()` (line 51) | Where Claude Code may be, in order: `$MASTHEAD_CLAUDE`, each absolute `PATH` folder, then installer folders: `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, `~/.bun/bin`, `/opt/homebrew/bin` (macOS), `/usr/local/bin`, `/usr/bin`; on Windows `~\.local\bin` and `%APPDATA%\npm` (`~\AppData\Roaming\npm` when `APPDATA` is unset), with each `PATHEXT` extension (`.exe` first). |
 | `resolveShim()` (line 78) | Reads the real target (`.exe`, `.js`, `.cjs`, `.mjs`) out of an npm `.cmd`/`.bat` shim, since the SDK starts Claude Code without a shell. |
-| `locateClaude()` (line 84) | The first candidate that exists and can run without a shell. |
-| `findClaude()` (line 105) | Locates it and runs `--version` (a `.js` entry with this Node; 15 s timeout). Not found → error "Claude Code was not found. Install it and sign in with `claude`, then restart Masthead."; `--version` fails → path kept, `version: null`, error "Could not run …". |
-| `agentEnv()` (line 125) | `process.env` without the variables a running Claude Code session sets about itself (`SESSION_VARS`, line 8: `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, …) and any `CLAUDE_CODE_BRIDGE_*`, compared in upper case on Windows; adds `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/<version>`. Credentials pass through untouched. |
+| `locateClaude()` (line 86) | The first candidate that exists and can run without a shell. |
+| `findClaude()` (line 107) | Locates it and runs `--version` (a `.js` entry with this Node; 15 s timeout; with `agentEnv()`). Not found → error "Claude Code was not found. Install it and sign in with `claude`, then restart Masthead."; `--version` fails → path kept, `version: null`, error "Could not run …". |
+| `agentEnv()` (line 127) | `process.env` without the variables a running Claude Code session sets about itself (`SESSION_VARS`, line 8: `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, …) and any `CLAUDE_CODE_BRIDGE_*`, compared in upper case on Windows; adds `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/<version>`. Credentials pass through untouched. |
 
 ## Compaction: `compact()`
 
-Claude Code compacts when the user message `/compact` arrives (the SDK has no method for it). Seen on 2026-11-28 with Haiku: `system/status` (compacting), `init`, `compact_boundary` (`trigger: 'manual'`, 16,302 → 5,688 tokens, about 3 s), two replayed user messages (the summary and `<local-command-stdout>Compacted</local-command-stdout>`), then a result naming the message's id with `local_command: 'compact'` and empty text; the next turn still knew a word from before. `compact()` sends `/compact` under its own id; while it runs, `init` does not count as a turn start, and that result settles the promise instead of ending a turn (a failed result or the process ending rejects it). `getContextUsage` did not show the smaller context right after compaction, only after the next turn.
+Claude Code compacts when the user message `/compact` arrives (the SDK has no method for it). `compact()` rejects at once when there is no process ("Claude Code is not running.") or a compaction is already running ("Already compacting."). Seen with Claude Code 2.1.331 (the code comment at `session.ts` line 309; the figures below were recorded earlier with Haiku and not re-run for this page): `system/status` (compacting), `init`, `compact_boundary` (`trigger: 'manual'`, 16,302 → 5,688 tokens, about 3 s), two replayed user messages (the summary and `<local-command-stdout>Compacted</local-command-stdout>`), then a result naming the message's id with `local_command: 'compact'` and empty text; the next turn still knew a word from before. `compact()` sends `/compact` under its own id; while it runs, `init` does not count as a turn start, and that result settles the promise instead of ending a turn (a failed result rejects it with the errors, the result text or "The compaction failed."; the process ending rejects it too). `getContextUsage` did not show the smaller context right after compaction, only after the next turn.
 
 ## Observed with a real Claude Code 2.1.331
 

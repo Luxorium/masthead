@@ -51,7 +51,7 @@ A `StoredConversation`, written as compact JSON:
 - `stoppedByPerson` (since 0.1.4): ids of agents the person stopped, which other agents may not wake.
 - `agentMessages` (since 0.1.4): how many messages the agents have sent each other, counted against the limit of 1000.
 
-### Team compaction (0.2.0-beta.2)
+### Team compaction (new in 0.2.0)
 
 What [Compact team](Compact-Team.md) saves, all in `conversation.json` and all optional:
 

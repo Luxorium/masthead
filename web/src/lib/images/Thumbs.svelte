@@ -32,6 +32,8 @@
     flex-wrap: wrap;
     gap: 6px;
     margin: 4px 0;
+    /* A message bubble keeps its spaces (pre-wrap); here a kept space would add a blank line under each picture. */
+    white-space: normal;
   }
   .thumb {
     position: relative;

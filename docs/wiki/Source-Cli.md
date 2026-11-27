@@ -4,14 +4,16 @@
 
 > Checked against the 0.2.0 source on branch `next` (2026-11-27). The behaviour described here is read from the code, not verified by running.
 
-It imports `DEFAULT_PORT` (7717) from [server/paths.ts](Source-Paths.md), `proofOk` from [server/transport/auth.ts](Source-Transport-Auth.md), `randomBytes` from `node:crypto`, file functions from `node:fs` and `join`, `posix` and `win32` from `node:path`.
+It imports `DEFAULT_PORT` (7717) and `mastheadCommand` from [server/paths.ts](Source-Paths.md), `makeDirPrivate`, `proofOk` and the `Runner` type from [server/transport/auth.ts](Source-Transport-Auth.md), `randomBytes` from `node:crypto`, file functions from `node:fs` and `join`, `posix` and `win32` from `node:path`.
 
 ## Exports at a glance
 
 | Name | Kind | Used by `main.ts` for |
 |---|---|---|
 | `UsageError` | class | Telling a typing mistake (exit 2) apart from a real failure. |
-| `parsePort(args, env)` | function | The port every command talks to or serves on. |
+| `parsePort(args, env)` | function | The port `serve` serves on (`port()` in `main.ts`). |
+| `requestedPort(args, env)` | function | The port explicitly asked for, or null (used by `parsePort` and `commandPort`). |
+| `commandPort(cmd, args, env, installed)` | function | The port the other commands talk to (`portFor()` in `main.ts`): as asked, else the installed service's. |
 | `parseCommand(args)` | function | Which command to run. |
 | `unitPortFrom(showOutput)` | function | Whether the installed systemd unit serves the asked-for port. |
 | `parseDevWebPort(env)` | function | The Vite page's port in development mode. |
@@ -21,17 +23,18 @@ It imports `DEFAULT_PORT` (7717) from [server/paths.ts](Source-Paths.md), `proof
 | `onPath(cmd, env, platform, exists)` | function | Whether a program is on `PATH` (the opener and the keep-awake tool). |
 | `removeLaterArgs(file, ms)` | function | Arguments for a Node process that removes the sign-in file later. |
 | `SIGN_IN_STALE_MS` | constant | Age (2 minutes) after which a leftover sign-in file is removed. |
-| `writeSignInFile(dir, target, now)` | function | Writing the private sign-in page (used by `openSignedIn()`). |
+| `writeSignInFile(dir, target, now, platform, run)` | function | Writing the private sign-in page (used by `openSignedIn()`). |
+| `noBrowserCommand(base, platform)` | function | The `masthead --no-browser` hint, with the right command name and port. |
 | `OPENER_WAIT_MS` | constant | How long (3 seconds) `openSignedIn()` waits for the opener before counting it as having opened the browser. |
 | `serverProves(base, port, secret, fetchFn)` | function | Checking that the server on the port knows the secret before it is sent the key. |
 | `Opener` | interface | What `openSignedIn()` needs to run commands and print. |
 | `openSignedIn(opts)` | function | Opening the browser, signed in, without the key on a command line. |
 
-`checkPort(raw)` and `htmlAttr(s)` (escapes `&`, `"`, `<` and `>` for an HTML attribute) are private helpers.
+`checkPort(raw)`, `htmlAttr(s)` (escapes `&`, `"`, `<` and `>` for an HTML attribute), `PORT_COMMANDS` and `SIGN_IN_PREFIX` (`sign-in-`) are private.
 
 ## UsageError
 
-`class UsageError extends Error {}`. It marks a mistake in how the command was typed. `port()` in `main.ts` catches it, prints its message as it is, and exits with code 2. Any other error is not caught there and crashes as usual. Keeping a separate class means a bug never gets reported as "you typed it wrong".
+`class UsageError extends Error {}`. It marks a mistake in how the command was typed. `port()` and `portFor()` in `main.ts` catch it, print its message as it is, and exit with code 2. Any other error is not caught there and crashes as usual. Keeping a separate class means a bug never gets reported as "you typed it wrong".
 
 ## checkPort (private)
 
@@ -44,12 +47,12 @@ Turns a string into a port number or throws a `UsageError`.
 
 ## parsePort(args, env)
 
-The port asked for, in this order:
+`requestedPort` returns the port asked for, or null when none was; `parsePort` is `requestedPort(...) ?? DEFAULT_PORT`. The order:
 
 1. The first `--port N` in `args` (the next argument is the value).
 2. The first `--port=N` in `args`. Steps 1 and 2 are one scan, so whichever form comes first wins.
 3. `env.MASTHEAD_PORT`, if it is set and not empty.
-4. `DEFAULT_PORT` (7717).
+4. `parsePort`: `DEFAULT_PORT` (7717); `requestedPort`: null.
 
 Edge cases:
 
@@ -63,6 +66,10 @@ Edge cases:
 | `--port 7720` and `MASTHEAD_PORT=7730` | 7720: the option wins. |
 
 `env` defaults to `{}`, so a test that passes no environment gets the default port.
+
+## commandPort(cmd, args, env, installed)
+
+The port a command works on. An explicit `--port` or `MASTHEAD_PORT` (`requestedPort`) wins. Otherwise, for `open`, `status`, `stop`, `service` and `doctor` (`PORT_COMMANDS`), it asks `installed()` and uses the installed background service's port when there is one, so `masthead stop` finds a service installed with `--port 7727`. Any other command, no service, or `installed()` throwing gives `DEFAULT_PORT`. `main.ts` passes `serviceFor(process.platform)?.status()`. A bad `--port` still throws `UsageError`.
 
 ## parseCommand(args)
 
@@ -148,7 +155,7 @@ Arguments for `node`: `-e <script> <file>`, where the script waits `ms` (default
 
 ## writeSignInFile(dir, target, now)
 
-1. Creates `dir` with mode `0700` and then `chmod`s it to `0700`, so a folder that already existed with looser rights is tightened.
+1. Creates `dir` with mode `0700`, then makes it private with `makeDirPrivate(dir, platform, run)` from `server/transport/auth.ts`: `chmod 0700` off Windows (so a folder that already existed with looser rights is tightened); on Windows an `icacls` grant of full control to the current user's SID only, with inheritance removed. If that fails it throws `could not make <dir> private to you`. `platform` defaults to `process.platform`; `run` is the command runner, for tests.
 2. Removes every `sign-in-*` file in it whose modification time is more than `SIGN_IN_STALE_MS` (2 minutes) before `now`. A file that vanished meanwhile is skipped.
 3. Writes `sign-in-<12 random hex characters>.html` with mode `0600` and the flag `wx`, which fails if the name exists rather than writing through it (for example through a planted symlink).
 4. The page: `<meta charset="utf-8">`, `<meta name="referrer" content="no-referrer">`, `<meta http-equiv="refresh" content="0; url=<target>">`, the title `Masthead` and a plain `Open Masthead` link to the target, in case the refresh does not run. The target is escaped with `htmlAttr()`.
@@ -179,13 +186,13 @@ interface Opener {
 
 1. The target is `signInUrl(base, secret)`.
 2. Picks the first of `openersFor(platform)` that `opener.has()` finds.
-3. If one was found, writes the sign-in file with `writeSignInFile(dir, target)`. If that throws, it logs `Could not write the sign-in file in <dir>: <reason>`.
-4. If there is an opener and a file, it runs `<opener> <file>` (`gio open <file>` for `gio`). The opener gets the file's **path**, never the key, so the key is not in any process's arguments, which other users can read. It waits for the opener at most `waitMs`: some openers run the browser in the foreground, and one still running has opened it, so `masthead` never hangs on it. It counts as opened when the opener is still running after the wait, exits 0, or is `explorer.exe` with any exit code (the code comment: `explorer.exe` exits with 1 even when it opened the file, so only "could not start", a null code, is a failure there). When opened, it detaches `<node> removeLaterArgs(file)`, which removes the file a minute later; when `tty` it logs `If the browser did not open signed in, run: masthead --no-browser` (a confined browser may not have been able to read the file, which nothing here can see); and it returns true. On any other result it removes the file.
+3. If one was found, writes the sign-in file with `writeSignInFile(dir, target)` (with the real platform, not `opts.platform`). If that throws, it logs `Could not write the sign-in file in <dir>: <reason>`.
+4. If there is an opener and a file, it runs `<opener> <file>` (`gio open <file>` for `gio`). The opener gets the file's **path**, never the key, so the key is not in any process's arguments, which other users can read. It waits for the opener at most `waitMs`: some openers run the browser in the foreground, and one still running has opened it, so `masthead` never hangs on it. It counts as opened when the opener is still running after the wait, exits 0, or is `explorer.exe` with any exit code (the code comment: `explorer.exe` exits with 1 even when it opened the file, so only "could not start", a null code, is a failure there). When opened, it detaches `<node> removeLaterArgs(file)`, which removes the file a minute later; when `tty` it logs `If the browser did not open signed in, run: <noBrowserCommand>` (a confined browser may not have been able to read the file, which nothing here can see); and it returns true. On any other result it removes the file.
 5. Otherwise (no opener, no file, or the opener failed) it returns false, and no file is left behind. What it logs depends on `tty`:
-   - a terminal: `Open this address in your browser to sign it in (keep it private):` and the target on the next line, then `If the browser did not open signed in, run: masthead --no-browser`;
-   - not a terminal: only ``Could not open the browser. Run `masthead --no-browser` in a terminal to get the sign-in address.`` The key is never written to output that may end up in a log other people can read.
+   - a terminal: `Open this address in your browser to sign it in (keep it private):` and the target on the next line, then `If the browser did not open signed in, run: <noBrowserCommand>`;
+   - not a terminal: only ``Could not open the browser. Run `<noBrowserCommand>` in a terminal to get the sign-in address.`` The key is never written to output that may end up in a log other people can read.
 
-So in a terminal the output always ends with the `masthead --no-browser` hint. The tty and no-tty output and the wait (with a short `waitMs` and an opener that never exits) are tested in `test/launcher.test.ts`; the 3-second wait with a real browser was not verified by running.
+`noBrowserCommand(base, platform)` is `masthead --no-browser` (`masthead.cmd` on Windows, through `mastheadCommand()`), with ` --port <n>` inserted when the port in `base` is not 7717. So in a terminal the output always ends with that hint. The tty and no-tty output and the wait (with a short `waitMs` and an opener that never exits) are tested in `test/launcher.test.ts`; the 3-second wait with a real browser was not verified by running.
 
 A snap or flatpak browser may be unable to read a file in `$XDG_RUNTIME_DIR` or the data folder. Then `masthead --no-browser` in a terminal prints the address to paste.
 

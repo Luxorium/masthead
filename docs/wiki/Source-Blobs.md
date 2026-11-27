@@ -18,11 +18,12 @@ Anything else, or a width or height under 1, is `null`. `EXT` maps the four type
 ### Types and caps
 
 - `BlobRef`, how an item refers to a stored image: `{blob, mediaType, w, h, bytes}`, where `blob` is the SHA-256 hex.
-- `BlobError` with a `code` of `too_large`, `invalid` or `not_found`.
+- `BlobError` with a `code` (`BlobErrorCode`) of `too_large`, `invalid` or `not_found`.
+- From `images.ts`: `ImageType` (the four media types) and `ImageInfo` (`{mediaType, w, h}`).
 
 | Constant | Value | Where it is enforced |
 |---|---|---|
-| `MAX_BLOB_BYTES` | 5 MB | `BlobStore.put` and the upload route |
+| `MAX_BLOB_BYTES` | 5 MB (5 × 1024 × 1024 bytes) | `BlobStore.put` and the upload route |
 | `MAX_MESSAGE_IMAGE_BYTES` | 30 MB per message | Not referenced anywhere else in `server/`, `shared/`, `web/src/` or `test/` when this page was written. |
 | `MAX_CONVERSATION_BLOB_BYTES` | 500 MB per conversation | `BlobStore.put` |
 | `MAX_SIDE` | 8192 pixels a side | `BlobStore.put` |
@@ -47,7 +48,7 @@ It returns the `BlobRef`. Tested by "blobs: stored once by hash, 0600, type from
 
 **`total(convId)`** adds up the sizes of the files whose names match `<64 hex>.(png|jpg|gif|webp)`.
 
-**`collect(convId, referenced)`** deletes every such file whose hash is not in `referenced` and returns how many it removed. `Store.collectBlobs()` passes the hashes from `Store.referencedBlobs()`, and `App` runs it for each conversation it loads at start-up, wrapped in `safely()` (read from the code, not run).
+**`collect(convId, referenced)`** deletes every such file whose hash is not in `referenced` and returns how many it removed. `Store.collectBlobs()` passes the hashes from `Store.referencedBlobs()`, but removes nothing (returns 0, logged once per conversation) when one of the conversation's transcripts has a torn line, since a damaged line may have lost a reference. `App` runs it for each conversation it loads at start-up, wrapped in `safely('images', …)` (read from the code, not run).
 
 ### `blobsOf(item)`
 
@@ -61,7 +62,7 @@ Every blob hash an item refers to: the entries of `item.images` that have a 64-h
 
 Per-socket tokens that let a plain `<img src>` fetch an image, since an image request cannot carry a header.
 
-- `issue()` makes a 24-byte random token (base64url) and keeps only its SHA-256, valid until released. `attach()` in `http.ts` issues one per WebSocket and sends it to the page as `blobToken`; on close it calls `release`.
+- `issue()` makes a 24-byte random token (base64url) and keeps only its SHA-256, valid until released. `attach()` in `http.ts` issues one per WebSocket and sends it to the page as `blobToken` in the `state` message; on close it calls `release`. `release` and `check` hash the given token and compare it with `timingSafeEqual`.
 - `release(token)` keeps the token valid for a **60 s grace** period after the socket closes, so cached pages keep working across a quick reconnect.
 - `check(token)` refuses anything that is not a string of 1–100 characters, drops expired entries, then compares the hash against **every** live entry with `timingSafeEqual`, without stopping at the first match, so the time taken does not depend on which token matched.
 
@@ -93,7 +94,7 @@ Tested by "routes: upload checks the caller, the conversation, the type and the 
 
 ## Tests
 
-`test/storage.test.ts`; all its tests passed when this page was written. The route tests use a local test server, not the remote listener.
+`test/storage.test.ts`; all 13 of its tests passed on 2026-11-27. The route tests use a local test server, not the remote listener.
 
 ## Related pages
 

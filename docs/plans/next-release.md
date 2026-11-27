@@ -1,4 +1,7 @@
-# Next release: 0.1.1
+# 0.1.1 audit (history)
+
+> **History.** The plan for 0.1.1, released 2026-11-26. Kept as a record; the current plan is
+> `docs/plans/0.2.0/PLAN.md`.
 
 **Status, 2026-11-26:** items 1-20 below were implemented and released as 0.1.1, together with a usage
 section, a settings popup, folded agent reports and a reuse line in the lead's prompt. The "Later"

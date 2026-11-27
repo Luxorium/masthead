@@ -5,8 +5,8 @@ network, you can open Masthead on the phone and use it there. A device can get i
 it on this computer, by checking that a six-digit code matches. Nothing is opened to the internet.
 Remote access is off until you switch it on.
 
-Remote access has only ever run against a **fake Tailscale** in tests (`test/remote*.test.ts`). The
-first real use is described step by step in [Using Masthead from your phone](Using-Masthead-From-Your-Phone.md).
+Remote access has been checked on a real tailnet (a Linux computer running Masthead, an Android phone
+and a Windows device); its unit tests (`test/remote*.test.ts`) use a fake Tailscale. Setting it up is described step by step in [Using Masthead from your phone](Using-Masthead-From-Your-Phone.md).
 
 ## How it works
 
@@ -139,7 +139,7 @@ on 2026-11-27. The fix is on that device: turn on **Use Tailscale DNS** in the T
   not match your device.
 - **Your tailnet's own rules** decide which devices can reach port 7443 at all. Limiting it to your own
   devices in the Tailscale admin console is a good idea.
-- Untested against real Tailscale, Safari's handling of the page's `wss:` policy, and the exact errors
+- Not checked: Safari's handling of the page's `wss:` policy, and the exact errors
   Tailscale gives when it refuses.
 
 ## Related pages

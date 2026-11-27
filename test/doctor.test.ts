@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { doctor, doctorExitCode, formatChecks, sdkBinaryPackage, systemDoctorFs, type Check, type DoctorDeps } from '../server/doctor.ts';
 import type { ServiceManager, ServiceStatus } from '../server/service/types.ts';
+import { VERSION } from '../shared/protocol.ts';
 
 const paths = { configDir: '/c/masthead', dataDir: '/d/masthead', secretFile: '/d/masthead/secret' };
 
@@ -136,7 +137,9 @@ test('doctor: the SDK private binary package warns with the reinstall fix', asyn
   const c = byName(await doctor(deps({ sdkBinary: () => '/g/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64' })), 'SDK');
   assert.ok(c.ok && c.warn);
   // npm ignores --omit=optional for a global install; --os=none --cpu=none skips the platform package.
-  assert.match(c.fix!, /npm i -g --os=none --cpu=none @luxorium\/masthead/);
+  // Masthead is not on the npm registry: the fix names this version's release tarball.
+  assert.ok(c.fix!.endsWith(`npm i -g --os=none --cpu=none https://github.com/Luxorium/masthead/releases/download/v${VERSION}/luxorium-masthead-${VERSION}.tgz`), c.fix);
+  assert.ok(!c.fix!.includes('@luxorium'));
   // The resolver tries <platform>-<arch>, then the musl build.
   const asked: string[] = [];
   const found = sdkBinaryPackage('linux', 'arm64', (id) => {

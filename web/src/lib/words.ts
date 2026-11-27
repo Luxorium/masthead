@@ -25,7 +25,7 @@ export function childPath(parent: string, name: string): string {
 }
 
 /**
- * The words for what an agent is doing, wherever the page shows one (team panel, team map). A new
+ * The words for what an agent is doing, wherever the page shows one (the team outline, the chat's status line). A new
  * sub-state of a status belongs here, as one line.
  */
 export function statusWords(a: AgentInfo): string {

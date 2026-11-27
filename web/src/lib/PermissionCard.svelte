@@ -85,19 +85,23 @@
         <legend>{q.question}</legend>
         <div class="options">
           {#each Array.isArray(q.options) ? q.options : [] as opt, oi (oi)}
-            <button class="option" class:on={picked[qi]?.includes(opt.label)} onclick={() => toggle(qi, opt.label, !!q.multiSelect)} aria-pressed={!!picked[qi]?.includes(opt.label)}>
+            <button class="option" disabled={!store.mayAnswer} class:on={picked[qi]?.includes(opt.label)} onclick={() => toggle(qi, opt.label, !!q.multiSelect)} aria-pressed={!!picked[qi]?.includes(opt.label)}>
               <span class="opt-label">{opt.label}</span>
               {#if opt.description}<span class="opt-desc">{opt.description}</span>{/if}
             </button>
           {/each}
         </div>
-        <input class="other" placeholder={T.card.other} bind:value={other[qi]} oninput={() => !q.multiSelect && (picked[qi] = [])} />
+        <input class="other" disabled={!store.mayAnswer} placeholder={T.card.other} bind:value={other[qi]} oninput={() => !q.multiSelect && (picked[qi] = [])} />
       </fieldset>
     {/each}
-    <div class="actions">
-      <button class="btn ghost" onclick={() => store.answer(request.id, 'deny')}>{T.card.skip}</button>
-      <button class="btn primary" disabled={!complete} onclick={submitAnswers}>{T.card.answer}</button>
-    </div>
+    {#if store.mayAnswer}
+      <div class="actions">
+        <button class="btn ghost" onclick={() => store.answer(request.id, 'deny')}>{T.card.skip}</button>
+        <button class="btn primary" disabled={!complete} onclick={submitAnswers}>{T.card.answer}</button>
+      </div>
+    {:else}
+      <p class="cannot" role="note">{T.device.cannotAnswer}</p>
+    {/if}
   {:else}
     <div class="head">
       <span class="who">{displayName(request.agentName)}</span>
@@ -111,13 +115,18 @@
       {#if showDetail}<pre class="detail">{detail}</pre>{/if}
     {/if}
     {#if request.description}<p class="desc">{request.description}</p>{/if}
-    <div class="actions">
-      <button class="btn danger" onclick={() => store.answer(request.id, 'deny')}>{T.card.deny}</button>
-      {#if request.canAlways}
-        <button class="btn" onclick={() => store.answer(request.id, 'always')} title={T.card.alwaysTitle}>{T.card.always}</button>
-      {/if}
-      <button class="btn primary" onclick={() => store.answer(request.id, 'allow')}>{T.card.allow}</button>
-    </div>
+    {#if store.mayAnswer}
+      <div class="actions">
+        <button class="btn danger" onclick={() => store.answer(request.id, 'deny')}>{T.card.deny}</button>
+        {#if request.canAlways}
+          <button class="btn" onclick={() => store.answer(request.id, 'always')} title={T.card.alwaysTitle}>{T.card.always}</button>
+        {/if}
+        <button class="btn primary" onclick={() => store.answer(request.id, 'allow')}>{T.card.allow}</button>
+      </div>
+    {:else}
+      <!-- A read-only device sees what is waiting, but the server refuses its answers: no buttons. -->
+      <p class="cannot" role="note">{T.device.cannotAnswer}</p>
+    {/if}
   {/if}
 </div>
 
@@ -169,6 +178,11 @@
   }
   .desc {
     margin: 8px 0 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .cannot {
+    margin: 12px 0 0;
     font-size: 13px;
     color: var(--muted);
   }

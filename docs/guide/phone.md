@@ -3,8 +3,9 @@
 You can use Masthead from a phone, tablet or another computer, as long as both are on your own
 Tailscale network. Nothing is opened to the internet, and a device gets in only after you allow it.
 
-> This has been tested only with a stand-in for Tailscale so far. If something here does not match
-> what you see, please say what happened.
+> This has been checked on a real Tailscale network with a Linux computer, an Android phone and a
+> Windows computer. If something here does not match what you see, please
+> [say what happened](https://github.com/Luxorium/masthead/issues).
 
 ## What you need
 
@@ -22,9 +23,10 @@ Tailscale network. Nothing is opened to the internet, and a device gets in only 
    - It says Tailscale needs your password once, and shows a command such as
      `sudo tailscale serve --bg --https=7443 unix:/run/user/1000/masthead/remote.sock`. Copy it, run it
      once in a terminal (it asks for your password), then turn the switch on again. This lets Tailscale
-     share Masthead's private connection; you only do it once.
-   - On Windows it may instead say Tailscale did not let Masthead change its settings: run Tailscale as
-     an administrator, then turn the switch on again. The message ends with what Tailscale said.
+     share Masthead's private connection; you only do it once. The folder in the command differs from
+     computer to computer: press **Copy** and run exactly what your settings show.
+   - On Windows it may instead say Tailscale did not let Masthead change its settings, with "Run
+     Tailscale as an administrator, or ask your tailnet admin." Do that, then turn the switch on again. The message ends with what Tailscale said.
    - It says the port already serves something else. Turn the switch off, choose another port, and
      turn it on again.
 
@@ -55,8 +57,16 @@ In **Settings → Remote access**, under **Allowed devices**:
 ## On the phone itself
 
 In the phone's Settings, **This device** says: "This browser stays signed in to Masthead until you
-forget it here, or the computer removes it." If the device may only follow along, it says so (for
-example "This device can follow the chats but not change anything.").
+forget it here, or the computer removes it." If the device may do less than everything, a note takes the place of the message
+box, followed by "To do more, change what this device may do on the computer, in Settings → Remote
+access.":
+
+- **Answer approvals and stop work**: "This device can answer requests and stop work. It cannot send
+  messages, add pictures or change settings." It can answer permission requests and questions, and the
+  note has **Stop reply** and **Stop all**.
+- **Only read**: "This device can only read. It cannot send messages, answer requests or stop work."
+  Requests still show, greyed, with "This device can only read, so it cannot answer. Answer on the
+  computer." (the tidy-up card says "… so it cannot choose. Choose on the computer.").
 
 **Forget this device** signs this browser out and removes it from the computer's list. Use it on a
 phone or computer that is not yours.
@@ -77,7 +87,7 @@ them. Allow a device only while you are pairing it yourself, and only when the c
 
 | What you see | What to do |
 |---|---|
-| "Tailscale is not available on this computer" | Install Tailscale, sign in, and make sure it is connected. |
+| "Tailscale is not available", "not installed or not running" or "not connected" on this computer | Install Tailscale, sign in, and make sure it is connected. |
 | "HTTPS certificates are switched off" | Enable HTTPS certificates in the Tailscale admin console. |
 | A command to run, e.g. `sudo tailscale serve --bg --https=7443 unix:…` | Run it once in a terminal, then switch on again. |
 | After switching off: "Tailscale still has Masthead's entry" and `sudo tailscale serve --https=7443 off` | Nothing can reach Masthead; run the command once to tidy up, or leave it. |

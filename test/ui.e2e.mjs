@@ -304,7 +304,7 @@ try {
   check('the stepper changes the limit', raised !== before && lowered === before);
   await axeCheck(page, 'chat with the team panel');
 
-  // The team panel: one outline that scrolls only up and down (0.2.0-beta.2 replaced the map).
+  // The team panel: one outline that scrolls only up and down (0.2.0 replaced the map).
   const panel = page.locator('aside.right');
   // A tree item contains its children, so find agents by their own row, then step up to the item.
   const rowOf = (text) => panel.locator('div.row', { hasText: text }).first();
@@ -472,6 +472,95 @@ try {
     await page.waitForFunction(() => [...document.querySelectorAll('.user .thumbs img')].some((i) => i.complete && i.naturalWidth > 0), null, { timeout: 10_000 }).catch(() => {});
     check('the sent picture shows in the message', await loaded('.user .thumbs img'));
     await page.screenshot({ path: `${shots}/5b-pictures-${scheme}.png` });
+    // Paste: a clipboard paste of a PNG into the message box adds it like the picker does.
+    const before = await page.locator('.user .thumbs img').count();
+    const putFile = (kind) =>
+      page.evaluate(([b64, kind]) => {
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const dt = new DataTransfer();
+        dt.items.add(new File([bytes], `${kind}.png`, { type: 'image/png' }));
+        if (kind === 'pasted') {
+          document.querySelector('.composer textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+          return null;
+        }
+        const box = document.querySelector('.composer');
+        const over = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true });
+        box.dispatchEvent(over);
+        // The page redraws after the event; look once it has.
+        return new Promise((done) => requestAnimationFrame(() => {
+          const lit = over.defaultPrevented && box.classList.contains('dragging');
+          box.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+          done(lit);
+        }));
+      }, [png.toString('base64'), kind]);
+    const uploaded = (n) =>
+      page.waitForFunction((k) => {
+        const t = [...document.querySelectorAll('.composer .thumb')];
+        return t.length === k && t.every((x) => !x.classList.contains('busy'));
+      }, n, { timeout: 10_000 }).then(() => true, () => false);
+    await putFile('pasted');
+    check('a pasted picture is added to the message and uploads', (await uploaded(1)) && (await page.locator('.composer .thumb.bad').count()) === 0 && (await page.locator('.composer .thumb img[alt="pasted.png"]').count()) === 1);
+    // Drag and drop: the box lights up while a file is over it, and the dropped picture is added too.
+    const lit = await putFile('dropped');
+    check('dragging a picture over the message box lights it up', lit === true);
+    check('a dropped picture is added beside the pasted one and uploads', (await uploaded(2)) && (await page.locator('.composer .thumb.bad').count()) === 0 && (await page.locator('.composer .thumb img[alt="dropped.png"]').count()) === 1);
+    check('the box is no longer lit after the drop', (await page.locator('.composer.dragging').count()) === 0);
+    // Dropping a file beside the box must not make the browser leave the app to show the file.
+    const navigated = await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'stray.png', { type: 'image/png' }));
+      const ev = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true });
+      document.querySelector('main, body').dispatchEvent(ev);
+      return !ev.defaultPrevented;
+    });
+    check('a picture dropped outside the box is not opened by the browser', !navigated);
+    // Dragged text is not a picture: the box is not lit and the browser drops the text as usual.
+    const textDrag = await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', 'some words');
+      const ev = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true });
+      document.querySelector('.composer textarea').dispatchEvent(ev);
+      return new Promise((done) => requestAnimationFrame(() => done(!ev.defaultPrevented && !document.querySelector('.composer.dragging'))));
+    });
+    check('dragging text over the box leaves it to the browser', textDrag);
+    await page.locator('textarea').fill('Reply with exactly the word both');
+    await page.locator('textarea').press('Enter');
+    await page.locator('.user .bubble', { hasText: 'Reply with exactly the word both' }).waitFor({ timeout: 10_000 });
+    await page.waitForFunction((k) => [...document.querySelectorAll('.user .thumbs img')].filter((i) => i.complete && i.naturalWidth > 0).length >= k + 2, before, { timeout: 10_000 }).catch(() => {});
+    check('the pasted and dropped pictures show in the sent message', (await page.locator('.user .thumbs img').count()) >= before + 2 && (await loaded('.user .thumbs img')));
+    check('the composer is empty again after sending', (await page.locator('.composer .thumb').count()) === 0);
+    await page.waitForFunction(() => !document.querySelector('.working'), null, { timeout: 30_000 }).catch(() => {});
+    // Reload: the sent pictures and the tool's picture come back from disk and still load.
+    const toolBefore = await page.locator('.tool-images img').count();
+    const sentBefore = await page.locator('.user .thumbs img').count();
+    await page.reload();
+    await page.locator('.user .thumbs img').first().waitFor({ timeout: 15_000 }).catch(() => {});
+    const allLoaded = (sel) => page.waitForFunction((q) => {
+      const imgs = [...document.querySelectorAll(q)];
+      return imgs.length > 0 && imgs.every((i) => i.complete && i.naturalWidth > 0);
+    }, sel, { timeout: 15_000 }).then(() => true, () => false);
+    // Tool output may sit folded inside a tool group after a reload; open it if so.
+    if (!(await page.locator('.tool-images img').count())) {
+      const groups = page.locator('.tool-group summary, .tools summary, .tool summary');
+      for (let i = 0; i < (await groups.count()); i++) await groups.nth(i).click().catch(() => {});
+    }
+    check('after a reload every sent picture is still there and loads', (await page.locator('.user .thumbs img').count()) === sentBefore && (await allLoaded('.user .thumbs img')));
+    check("after a reload the tool's picture is still there and loads", (await page.locator('.tool-images img').count()) === toolBefore && (await allLoaded('.tool-images img')));
+    // A message bubble keeps its spaces; a thumbnail must still be exactly as tall as its picture.
+    const snug = await page.evaluate(() => [...document.querySelectorAll('.thumbs .thumb')].every((b) => b.getBoundingClientRect().height - b.querySelector('img').getBoundingClientRect().height <= 2));
+    check('thumbnails in sent messages have no blank band under the picture', snug);
+    const sentThumb = page.locator('.user .thumbs .thumb').last();
+    await sentThumb.click();
+    await page.locator('.viewer img').waitFor({ timeout: 5000 }).catch(() => {});
+    check('after a reload a sent picture still opens full size', await page.evaluate(() => {
+      const i = document.querySelector('.viewer img');
+      return !!i && i.complete && i.naturalWidth > 0;
+    }));
+    await page.keyboard.press('Escape');
+    await page.locator('.viewer').waitFor({ state: 'detached' });
+    await page.screenshot({ path: `${shots}/5c-pictures-reloaded-${scheme}.png` });
+
+
   }
 
   if (fake) {
@@ -579,9 +668,188 @@ try {
     await p.locator('.backdrop').tap({ position: { x: 10, y: 400 } });
     await p.waitForFunction(() => !document.querySelector('aside.right'), null, { timeout: 5000 }).catch(() => {});
     check('phone: tapping outside closes the drawer', (await p.locator('aside.right').count()) === 0);
+    if (fake) {
+      // A helper that keeps working (a long background task) so its row has the Stop square.
+      const task = '[[background 900s]] Reply with exactly the word phone';
+      const n = await p.locator('.user .bubble').count();
+      await p.locator('textarea').fill(`Call the tool spawn_agent with input ${JSON.stringify({ title: 'phone busy', task }).replace(/\[/g, '\\u005b')}`);
+      await p.locator('textarea').press('Enter');
+      await p.waitForFunction((k) => document.querySelectorAll('.user .bubble').length > k, n);
+      if (!(await p.locator('aside.right').count())) await p.locator('.team-btn').tap();
+      const row = p.locator('aside.right div.row', { hasText: 'phone busy' });
+      await row.waitFor({ timeout: 20_000 });
+      const stop = row.locator('button.stop');
+      await stop.waitFor({ timeout: 20_000 });
+      const box = await stop.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const aside = document.querySelector('aside.right').getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return { w: r.width, h: r.height, inside: r.left >= aside.left && r.right <= aside.right + 0.5 && r.right <= window.innerWidth, onTop: el.contains(hit) };
+      });
+      log(`phone: stop square ${JSON.stringify(box)}`);
+      check("phone: a working helper's row has the Stop square, at least 44 px and fully on screen", box.w >= 44 && box.h >= 44 && box.inside && box.onTop);
+      check('phone: the Stop square says Stop on touch screens (no hover there)', (await stop.locator('.label').isVisible()) && /Stop/.test((await stop.getAttribute('aria-label')) ?? ''));
+      check('phone: the team drawer does not scroll sideways with a working helper', await noSideways(p));
+      await p.screenshot({ path: `${shots}/8b-phone-stop-light.png` });
+      await stop.tap();
+      await stop.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
+      await p.waitForFunction(() => [...document.querySelectorAll('aside.right div.row')].some((r) => r.textContent.includes('phone busy') && r.querySelector('.dot.stopped')), null, { timeout: 15_000 }).catch(() => {});
+      const stopped = await row.first().evaluate((el) => el.classList.contains('ended') && !!el.querySelector('.dot.stopped')).catch(() => false);
+      check('phone: tapping Stop stops the helper (its Stop square goes, the row ends)', (await stop.count()) === 0 && stopped);
+      check('phone: team rows do not flash the blue tap colour', await row.first().evaluate((el) => getComputedStyle(el).webkitTapHighlightColor === 'rgba(0, 0, 0, 0)'));
+      check('phone: the drawer is still open after stopping a helper', (await p.locator('aside.right').count()) === 1);
+      check('phone: nothing scrolls sideways after stopping', await noSideways(p));
+      await p.screenshot({ path: `${shots}/8c-phone-stopped-light.png` });
+    }
+
     await ctx.close();
   }
 
+  // ---- Team profiles and the Simple/Advanced switch (hotel-iii) ----
+  // Paste into test/ui.e2e.mjs just before `check('no page errors', ...)` at the end of the try block:
+  // it adds teams of its own and removes them again, so put it after every check that expects the
+  // built-in Claude team. Uses page, base, fake, check and log from the file.
+  {
+    const answers = [];
+    const onDialog = (d) => {
+      const no = answers.shift() === false;
+      log(`dialog: ${d.message()} -> ${no ? 'no' : 'yes'}`);
+      void (no ? d.dismiss() : d.accept());
+    };
+    page.on('dialog', onDialog);
+    await page.goto(base);
+    await page.waitForSelector('text=What are we working on?');
+    const gear = page.getByRole('button', { name: 'Settings', exact: true });
+    const menu = page.getByRole('dialog', { name: 'Settings' });
+    const teams = menu.locator('section.teams');
+    const teamItem = (name) => teams.locator('li.team', { has: page.getByRole('button', { name: `Edit ${name}`, exact: true }) });
+    await gear.click();
+    await menu.waitFor();
+
+    // Simple/Advanced: "Let them decide how long to think" shows only in Advanced; the switch is per device.
+    const advanced = menu.getByLabel(/Show team controls/);
+    const autoEffort = () => menu.getByText('Let them decide how long to think').count();
+    await advanced.uncheck();
+    check('Simple hides the thinking-time setting', (await autoEffort()) === 0);
+    await advanced.check();
+    check('Advanced shows the thinking-time setting', (await autoEffort()) === 1);
+
+    // Create: a copy of Claude, renamed, with 2 levels (on the fake backend, moved to its program).
+    await teamItem('Claude').getByRole('button', { name: 'Make a copy' }).click();
+    let editor = teams.locator('form.editor');
+    await editor.getByLabel('Team name').fill('E2E pair');
+    if (fake) await editor.getByLabel('Agent program').selectOption({ label: 'Fake backend' });
+    while ((await editor.locator('li.level').count()) > 2) await editor.getByRole('button', { name: 'Remove this level' }).last().click();
+    await editor.getByRole('button', { name: 'Save team' }).click();
+    await teamItem('E2E pair').waitFor();
+    check('a new team saves with 2 levels', (await teamItem('E2E pair').locator('ol.mini li').count()) === 2);
+
+    // Edit: out-of-range helpers are refused in plain words (not the browser's own bubble), then fixed.
+    await teams.getByRole('button', { name: 'Edit E2E pair', exact: true }).click();
+    editor = teams.locator('form.editor');
+    await editor.getByLabel('Helpers at a time').fill('99');
+    await editor.getByRole('button', { name: 'Save team' }).click();
+    check('too many helpers is refused in plain words', (await menu.getByRole('alert').filter({ hasText: 'may have from 0 to 12 helpers at a time' }).count()) === 1);
+    await editor.getByLabel('Helpers at a time').fill('3');
+    await editor.getByLabel('Name shown').nth(1).fill('Quick one');
+    await editor.getByRole('button', { name: 'Save team' }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('section.teams ol.mini li')].some((li) => li.textContent.includes('Level 2 helper: Quick one')));
+    check('editing a team saves its new level name', (await teamItem('E2E pair').getByText('Level 2 helper: Quick one').count()) === 1);
+
+    // A second team with 3 levels (Add a helper level), so the new-chat screen offers a choice.
+    await teamItem('E2E pair').getByRole('button', { name: 'Make a copy' }).click();
+    editor = teams.locator('form.editor');
+    await editor.getByLabel('Team name').fill('E2E trio');
+    await editor.getByRole('button', { name: 'Add a helper level' }).click();
+    await editor.getByRole('button', { name: 'Save team' }).click();
+    await teamItem('E2E trio').waitFor();
+    check('a team with an added level saves with 3 levels', (await teamItem('E2E trio').locator('ol.mini li').count()) === 3);
+    await menu.getByRole('button', { name: 'Close settings' }).click();
+    await menu.waitFor({ state: 'detached' });
+
+    // Start a chat with E2E trio from the chip; the team panel's levels (Advanced) are that team's.
+    // Only on the fake backend: with a real Claude, the copies run Claude's models and cost money.
+    if (fake) {
+      const chip = page.locator('.chip-wrap .chip');
+      check('the new-chat screen offers the team choice', (await chip.count()) === 1);
+      await chip.click();
+      await page.getByRole('menuitemradio', { name: /E2E trio/ }).click();
+      check('the chip names the picked team', (await chip.textContent())?.trim() === 'Uses E2E trio');
+      const n = await page.locator('.user .bubble').count();
+      // One helper, so the team panel (and its levels, Advanced) shows; as the fake backend's spawn above.
+      const task = JSON.stringify({ title: 'trio helper', task: 'Reply with exactly the word fruit' }).replace(/\[/g, '\\u005b');
+      await page.locator('textarea').fill(`Call the tool spawn_agent with input ${task}`);
+      await page.locator('textarea').press('Enter');
+      await page.waitForFunction(() => location.hash.startsWith('#/c/'), null, { timeout: 15_000 });
+      await page.waitForFunction((k) => document.querySelectorAll('.user .bubble').length > k, n, { timeout: 15_000 }).catch(() => {});
+      // The lead of a team other than Claude's has tier '<team>:0', not 'lead': the chat must still show.
+      check("a chat on a team other than Claude's shows its messages", (await page.locator('.user .bubble').count()) > n);
+      await page.locator('.team-btn').waitFor({ timeout: 30_000 }).catch(() => {});
+      if (!(await page.locator('section.levels').count())) await page.locator('.team-btn').click().catch(() => {});
+      await page.locator('section.levels').waitFor({ timeout: 10_000 }).catch(() => {});
+      check('the chat runs on the picked team (3 levels in the team panel)', (await page.locator('section.levels .tier').count()) === 3);
+      const chatUrl = page.url();
+
+      // Removing a team a chat uses: refused, asked again in plain words; "no" keeps it and says so.
+      await gear.click();
+      await menu.waitFor();
+      answers.push(true, false);
+      await teamItem('E2E trio').getByRole('button', { name: 'Remove team' }).click();
+      const kept = page.locator('.toast', { hasText: /^Kept “E2E trio”: (1 chat uses|\d+ chats use) it\.$/ });
+      await kept.waitFor({ timeout: 5000 }).catch(() => {});
+      check('declining keeps the team and says why in plain words', (await kept.count()) === 1 && (await teamItem('E2E trio').count()) === 1);
+      // "Yes" removes it; the chat keeps its levels, shown as they are and no longer changeable.
+      answers.push(true, true);
+      await teamItem('E2E trio').getByRole('button', { name: 'Remove team' }).click();
+      await teamItem('E2E trio').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+      check('confirming twice removes a team chats use', (await teamItem('E2E trio').count()) === 0);
+      check('no server wording is left showing after the removal', (await page.locator('.toast', { hasText: 'use this team' }).count()) === 0);
+      await menu.getByRole('button', { name: 'Close settings' }).click();
+      await page.goto(chatUrl);
+      await page.waitForTimeout(1500);
+      if (!(await page.locator('section.levels').count())) await page.locator('.team-btn').click().catch(() => {});
+      await page.locator('section.levels').waitFor({ timeout: 10_000 }).catch(() => {});
+      check("a chat whose team was removed still shows its own 3 levels", (await page.locator('section.levels .tier').count()) === 3);
+      check('and says they can no longer be changed', (await page.locator('section.levels', { hasText: 'can no longer be changed' }).count()) === 1 && (await page.locator('section.levels select:not([disabled])').count()) === 0);
+
+      // A new copy must not take the removed team's id (its chat would join the new team).
+      await gear.click();
+      await menu.waitFor();
+      await teamItem('E2E pair').getByRole('button', { name: 'Make a copy' }).click();
+      editor = teams.locator('form.editor');
+      await editor.getByLabel('Team name').fill('E2E again');
+      await editor.getByRole('button', { name: 'Save team' }).click();
+      await teamItem('E2E again').waitFor();
+      answers.push(true, true);
+      await teamItem('E2E again').getByRole('button', { name: 'Remove team' }).click();
+      await teamItem('E2E again').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+      check('a new copy is not counted as used by the removed team’s chat', (await teamItem('E2E again').count()) === 0 && (await page.locator('.toast', { hasText: /chats? uses? it/ }).count()) === 0);
+    } else {
+      await gear.click();
+      await menu.waitFor();
+      answers.push(true);
+      await teamItem('E2E trio').getByRole('button', { name: 'Remove team' }).click();
+      await teamItem('E2E trio').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    }
+    // Clean up: E2E pair is used by no chat, so one "yes" removes it.
+    answers.push(true);
+    await teamItem('E2E pair').getByRole('button', { name: 'Remove team' }).click();
+    await teamItem('E2E pair').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    check('a team no chat uses is removed after one yes', (await teamItem('E2E pair').count()) === 0);
+
+    // Simple: the composer's model line and the team panel's levels go; the choice survives a reload.
+    await advanced.uncheck();
+    await menu.getByRole('button', { name: 'Close settings' }).click();
+    check('Simple hides the model line under the box', (await page.locator('.meta').count()) === 0);
+    await page.reload();
+    await page.waitForSelector('textarea');
+    check('Simple survives a reload', (await page.evaluate(() => localStorage.getItem('masthead.advanced'))) === '0' && (await page.locator('.meta').count()) === 0);
+    if (await page.locator('.team-btn').count()) {
+      if (!(await page.locator('aside.right').count())) await page.locator('.team-btn').click();
+      check('Simple hides the levels in the team panel', (await page.locator('section.levels').count()) === 0);
+    }
+    page.off('dialog', onDialog);
+  }
   check('no page errors', errors.length === 0);
   if (errors.length) log(errors.join('\n'));
 } catch (e) {

@@ -48,9 +48,19 @@ if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.j
 fi
 npm run --silent build
 
-# Restarting stops every agent that is working. Ask the running copy first (port 7717, the unit's).
-busy="$("$node_bin" -e '
-fetch("http://127.0.0.1:7717/api/health", { signal: AbortSignal.timeout(1500) })
+# The service's port: MASTHEAD_PORT if set, else the one an installed unit already uses (a service installed
+# with `masthead service install --port N` keeps N), else the default 7717.
+port="${MASTHEAD_PORT:-}"
+if [ -z "$port" ] && [ -f "$unit_dir/masthead.service" ]; then
+  port="$(grep -o 'MASTHEAD_PORT=[0-9]*' "$unit_dir/masthead.service" | head -n 1 | cut -d= -f2 || true)"
+fi
+port="${port:-7717}"
+case "$port" in ''|*[!0-9]*) echo "MASTHEAD_PORT must be a port number (found $port)." >&2; exit 2 ;; esac
+if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then echo "MASTHEAD_PORT must be between 1 and 65535 (found $port)." >&2; exit 2; fi
+
+# Restarting stops every agent that is working. Ask the running copy first (on the service's port).
+busy="$(MASTHEAD_PORT="$port" "$node_bin" -e '
+fetch(`http://127.0.0.1:${process.env.MASTHEAD_PORT}/api/health`, { signal: AbortSignal.timeout(1500) })
   .then((r) => r.json())
   .then((b) => console.log(b.name !== "masthead" ? 0 : typeof b.busy === "number" ? b.busy : "unknown"))
   .catch(() => console.log(0));
@@ -127,6 +137,7 @@ unit_path="$(clean_path "$unit_path")"
 unit_env="Environment=$(unit_quote "PATH=$unit_path")"
 [ -n "$claude_bin" ] && unit_env="$unit_env"$'\n'"Environment=$(unit_quote "MASTHEAD_CLAUDE=$claude_bin")"
 # Settings, conversations and the local secret must be where the `masthead` command looks for them.
+[ "$port" != 7717 ] && unit_env="$unit_env"$'\n'"Environment=$(unit_quote "MASTHEAD_PORT=$port")"
 [ -n "${XDG_CONFIG_HOME:-}" ] && unit_env="$unit_env"$'\n'"Environment=$(unit_quote "XDG_CONFIG_HOME=$XDG_CONFIG_HOME")"
 [ -n "${XDG_DATA_HOME:-}" ] && unit_env="$unit_env"$'\n'"Environment=$(unit_quote "XDG_DATA_HOME=$XDG_DATA_HOME")"
 

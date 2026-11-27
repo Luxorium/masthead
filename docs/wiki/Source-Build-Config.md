@@ -1,6 +1,6 @@
 # Build configuration
 
-Files: `package.json`, `package-lock.json`, `tsconfig.server.json`, `tsconfig.web.json`, `vite.config.ts`, `svelte.config.js`, `web/vitest.config.ts`, `.gitignore`. How to use them is on [Building, testing and installing](Building-Testing-Installing.md). This page explains what each file says, as read on branch `next` on 2026-11-27 (version 0.1.4, on the way to 0.2.0).
+Files: `package.json`, `package-lock.json`, `tsconfig.server.json`, `tsconfig.web.json`, `vite.config.ts`, `svelte.config.js`, `web/vitest.config.ts`, `.gitignore`. How to use them is on [Building, testing and installing](Building-Testing-Installing.md). This page explains what each file says, as read on branch `next` on 2026-11-27 (release 0.2.0).
 
 ## `package.json`
 
@@ -8,8 +8,8 @@ Files: `package.json`, `package-lock.json`, `tsconfig.server.json`, `tsconfig.we
 
 | Field | Value | Why |
 |---|---|---|
-| `name` | `@luxorium/masthead` | A **placeholder**. The person has not yet decided the name (gate 3 in `docs/plans/0.2.0/PLAN.md`). The `//` note says so. |
-| `version` | `0.1.4` | The one version for the package. |
+| `name` | `@luxorium/masthead` | The package name inside the release tarball (hence the asset name `luxorium-masthead-<version>.tgz`). The product is called Masthead. 0.2.0 is not published to the npm registry, only as a GitHub release tarball, so `private: true` stays. |
+| `version` | the 0.2.0 release | The one version for the package. `VERSION` in `shared/protocol.ts` carries the same string (it is what `/api/health` and `masthead --version` report), and the release workflow refuses a tag that does not match `package.json` (see [CI](Source-CI.md#the-release-workflow)). |
 | `private` | `true` | Stays until the name is decided, so nothing can be published by accident. npm refuses to publish a private package. |
 | `type` | `module` | Every `.js` file is an ES module (`import`/`export`). |
 | `bin` | `masthead` → `dist/server/main.js` | The `masthead` command. `server/main.ts` starts with `#!/usr/bin/env node`, so npm can link it on Linux and macOS and make a `.cmd` shim on Windows. |
@@ -19,11 +19,11 @@ Files: `package.json`, `package-lock.json`, `tsconfig.server.json`, `tsconfig.we
 | `publishConfig` | `access: public`, `provenance: true` | A scoped package is private on npm unless `access` is public. Provenance links the package to the CI run that built it. |
 | `license`, `homepage`, `repository`, `bugs`, `keywords` | MIT, the GitHub project | Shown on the npm page. |
 
-`npm pack --dry-run` on 2026-11-27, after the clean build and the Codex exclusions, gave `luxorium-masthead-0.1.4.tgz`: 57 files, 289.9 kB packed. Apart from `dist/` it held only `CHANGELOG.md`, `LICENSE`, `README.md` and `package.json`. (The count grows with the code.)
+History (2026-11-27, at version 0.1.4): `npm pack --dry-run`, after the clean build and the Codex exclusions, gave 57 files, 289.9 kB packed. Apart from `dist/` it held only `CHANGELOG.md`, `LICENSE`, `README.md` and `package.json`. The count grows with the code and was not re-measured for this page.
 
 ### Optional packages
 
-`package.json` has a `//` field (npm ignores it) with three notes: the name is a placeholder, `private` stays until then, and **users install globally with `--os=none --cpu=none`**.
+`package.json` has a `//` field (npm ignores it) with three notes about the name and `private`, and **users install globally with `--os=none --cpu=none`**.
 
 The reason: `@anthropic-ai/claude-agent-sdk` has one optional dependency per platform, for example `@anthropic-ai/claude-agent-sdk-linux-x64`. Each holds a private Claude Code binary. Masthead never runs it, because it always runs the person's own `claude` (see [Platforms](Platforms.md#finding-claude-code)). `--omit=optional` skips it. `masthead doctor` says when that package is present (`sdkBinaryPackage()` in `server/doctor.ts`).
 
@@ -35,7 +35,8 @@ The two places that use `--omit=optional` are installs that need no build: the i
 
 | Script | Runs |
 |---|---|
-| `build` | `build:server`, then `build:web` |
+| `build` | `clean`, then `build:server`, then `build:web` |
+| `clean` | `node -e "require('fs').rmSync('dist',{recursive:true,force:true})"` |
 | `build:server` | `tsc -p tsconfig.server.json` |
 | `build:web` | `vite build` |
 | `dev:web` | `vite` (the page with hot reload) |
@@ -46,7 +47,7 @@ The two places that use `--omit=optional` are installs that need no build: the i
 | `start` | `node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED dist/server/main.js serve` |
 | `prepack` | `npm run build` |
 
-`build` starts with `clean` (deletes `dist/` with a one-line Node script, so it works on Windows too): files of moved or deleted sources can no longer linger in `dist/` and ship. `prepack` runs before `npm pack` and `npm publish`, so the tarball always holds a fresh `dist/`. A clean checkout has no `dist/` (it is git-ignored), and without `prepack` the `bin` would point at nothing. What each script is for: [Building, testing and installing](Building-Testing-Installing.md#npm-scripts).
+`build` starts with `clean` (deletes `dist/` with a one-line Node script rather than `rm -rf`, so it works on Windows too): files of moved or deleted sources can no longer linger in `dist/` and ship. `prepack` runs before `npm pack` and `npm publish`, so the tarball always holds a fresh `dist/`. A clean checkout has no `dist/` (it is git-ignored), and without `prepack` the `bin` would point at nothing. What each script is for: [Building, testing and installing](Building-Testing-Installing.md#npm-scripts).
 
 ### Dependencies
 
@@ -86,7 +87,7 @@ Type-checks `web/src/**/*.ts`, `web/src/**/*.svelte` and `shared/**/*.ts` for th
 - `root: 'web'`: the page's source is in `web/`, with `web/index.html` as the entry.
 - The Svelte plugin, pointed at `../svelte.config.js` (relative to `web/`).
 - Build output `../dist/web`, emptied on each build, target ES2022.
-- Dev server: port `MASTHEAD_DEV_WEB_PORT` (default 7718), `strictPort` (stops instead of picking another port). It forwards `/ws` (as WebSocket) and `/api` to `127.0.0.1:MASTHEAD_PORT` (default 7717).
+- Dev server: port `MASTHEAD_DEV_WEB_PORT` (default 7718), `strictPort` (stops instead of picking another port). It forwards `/ws` (as WebSocket), `/api` and `/blob` (pictures) to `127.0.0.1:MASTHEAD_PORT` (default 7717).
 - `envPort(name, fallback)` reads those two variables. Empty or unset gives the default. Anything but a whole number from 1024 to 65535 throws `Invalid <name>: <value> (use a number from 1024 to 65535).`, so Vite stops at once instead of serving on a wrong port.
 
 ## `svelte.config.js`
@@ -105,7 +106,7 @@ Its comment says what it covers: pure helpers, the store driven by fake server m
 
 ## `.gitignore`
 
-Ignores `node_modules/`, `dist/`, `*.log`, `e2e-shots/` (the browser test's screenshots) and `.playwright-browsers/` (the Chromium that CI caches).
+Ignores `node_modules/`, `dist/`, `*.log`, `e2e-shots/` (the browser test's screenshots), `.playwright-browsers/` (the Chromium that CI caches) and `.tmp-*` (scratch folders).
 
 ## Related pages
 

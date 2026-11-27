@@ -144,7 +144,7 @@ export class RemoteAccess {
         port: Number.isInteger(r.port) && r.port! >= 1024 && r.port! <= 65535 ? r.port! : DEFAULT_REMOTE_PORT,
         allowOtherTailnets: r.allowOtherTailnets === true,
         allowTagged: r.allowTagged === true,
-        // Files from before beta 2 have no such field: an entry is ours if the switch was on.
+        // Files from 0.2.0-beta.1 have no such field: an entry is ours if the switch was on.
         hadEntry: typeof r.hadEntry === 'boolean' ? r.hadEntry : r.enabled === true,
       };
     } catch {

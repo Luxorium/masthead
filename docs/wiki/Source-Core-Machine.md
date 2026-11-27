@@ -2,7 +2,7 @@
 
 **Role:** the life cycle of one agent as a **pure state machine**. `step(state, event, ctx)` returns the next state and a list of *effects*; it never touches a process, a timer, the disk or another agent. The shell, `Conversation` in `server/core/conversation.ts`, keeps one `AgentState` per agent, feeds it events and carries out the effects (see [server/core/conversation.ts](Source-Core-Conversation.md#the-state-machine)). Effects that concern other agents (a report, a reminder, stopping children) are requests: the shell fulfils them by feeding events to *those* agents' machines.
 
-The transition table (rows 1–27) and the reasoning behind it are on [State machine](State-Machine.md); this page is the code reference. The design is `docs/plans/0.2.0/core.md` §3; where the two differ, the code is described here. Every row has a test in `test/machine.test.ts` (the test names start with the row number, e.g. "row 11: a usage limit pauses…").
+The transition table (rows 1–27) and the reasoning behind it are on [State machine](State-Machine.md); this page is the code reference. The design is `docs/plans/0.2.0/core.md` §3; where the two differ, the code is described here. Every row has a test in `test/machine.test.ts` (the test names start with the row number, e.g. "row 11: a usage limit pauses…"; rows 12–14 share the test "rows 12-14: …").
 
 The file imports only the `AgentStatus` type from `shared/protocol.ts`.
 
@@ -166,7 +166,7 @@ Returns `{ state, effects }`. The input state is not changed (the invariant test
 
 ## Tests
 
-`test/machine.test.ts`: one test per row of the table, two "fix" regressions (the background cap starting when a child ends; a pause ending during a person's turn keeps the clock on), "archive: only a finished helper is archived; nothing but Unarchive changes it; never the lead", and two invariant sweeps that run many event sequences and check that a waiting sub-agent always has a hold, the lead never ends, an ended agent holds nothing and `step()` is pure. Not run for this page; read only.
+`test/machine.test.ts`: one test per row of the table (rows 12–14 share one test), two "fix" regressions (the background cap starting when a child ends; a pause ending during a person's turn keeps the clock on), "archive: only a finished helper is archived; nothing but Unarchive changes it; never the lead", and two invariant sweeps that run many event sequences and check that a waiting sub-agent always has a hold, the lead never ends, an ended agent holds nothing and `step()` is pure. Not run for this page; read only.
 
 ## Related pages
 

@@ -4,14 +4,14 @@ Files: `scripts/install.sh`, `scripts/uninstall.sh`, `scripts/path.sh`, `packagi
 
 ## Which way to install
 
-From 0.2.0 there are two ways:
+There are two ways:
 
 | Way | For | Systems |
 |---|---|---|
-| `npm install -g --os=none --cpu=none <package>`, then `masthead service install` | everyone, once the package is published | Linux, macOS, Windows ([Platforms](Platforms.md#background-service)) |
-| `scripts/install.sh` from a checkout | **developers**, and 0.1.x installs until then | Linux with bash only |
+| `npm install -g --os=none --cpu=none <.tgz>`, then optionally `masthead service install` | everyone. The `.tgz` is attached to each GitHub release by `.github/workflows/release.yml` (see [CI](Source-CI.md#the-release-workflow)); nothing is on the npm registry | Linux, macOS, Windows ([Platforms](Platforms.md#background-service)) |
+| `scripts/install.sh` from a checkout | **developers**, and 0.1.x installs | Linux with bash only |
 
-`masthead service install` is the cross-platform way to start Masthead at login. It writes the same systemd unit as `install.sh` on Linux, a launchd agent on macOS and a Task Scheduler task on Windows. `install.sh` does not call it yet: it still builds, copies and writes its own unit, as described below. The plan to make it "`npm pack`, `npm i -g`, `masthead service install`" is in `docs/plans/0.2.0/distribution.md` §2.2.
+`masthead service install` is the cross-platform way to start Masthead at login. It writes a systemd user unit on Linux, a launchd agent on macOS and a Task Scheduler task on Windows. `install.sh` does not call it: it builds, copies and writes its own unit, as described below. (`docs/plans/0.2.0/distribution.md` §2.2 has the plan to reduce it to "`npm pack`, `npm i -g`, `masthead service install`"; that is not done.)
 
 The scripts install for the current user. Nothing needs root. Running `install.sh` again updates an existing installation.
 
@@ -25,7 +25,7 @@ The scripts install for the current user. Nothing needs root. Running `install.s
 | The desktop entry | `$XDG_DATA_HOME/applications/masthead.desktop` (default `~/.local/share/…`) | `apps` |
 | The icon | `$XDG_DATA_HOME/icons/hicolor/scalable/apps/masthead.svg` | `icons` |
 
-The unit always goes to `~/.config/systemd/user`, where `systemctl --user` reads it. The desktop entry and icon follow `XDG_DATA_HOME`, and a set `XDG_CONFIG_HOME`/`XDG_DATA_HOME` is baked into the unit (see step 6), so run `install.sh` from a shell where those are either unset or set to the folders you really use. Any value with a line break is refused before the unit is written. `uninstall.sh` runs `masthead remote off` first (Masthead's own Tailscale entry), and removes the unit both from `~/.config/systemd/user` and from an older `$XDG_CONFIG_HOME` location.
+The unit always goes to `~/.config/systemd/user`, where `systemctl --user` reads it. The desktop entry and icon follow `XDG_DATA_HOME`, and a set `XDG_CONFIG_HOME`/`XDG_DATA_HOME` is baked into the unit (see step 9), so run `install.sh` from a shell where those are either unset or set to the folders you really use. Any value with a line break is refused before the unit is written. `uninstall.sh` runs `masthead remote off` first (Masthead's own Tailscale entry), and removes the unit both from `~/.config/systemd/user` and from an older `$XDG_CONFIG_HOME` location.
 
 ## What `install.sh` does
 
@@ -100,7 +100,7 @@ The service always serves port 7717. The launcher's `masthead`, `masthead stop` 
 |---|---|---|
 | `packaging/masthead.desktop` | `Type=Application`, `Name=Masthead`, `Comment=Run a tiered team of Claude agents`, `Exec=masthead` (replaced on install), `Icon=masthead`, `Terminal=false`, `Categories=Development;Utility;`, `StartupNotify=false`, and a `#` comment saying the installer replaces `Exec`. It puts Masthead in the Linux desktop's application launcher. | used by `install.sh` |
 | `packaging/masthead.svg` | A 32×32 icon: a dark rounded square with three light bars of falling length, like lines of text, over a thin blue line. `Icon=masthead` finds it by name in the hicolor theme. | used by `install.sh` |
-| `packaging/README.md` | Lists the outlines below and their status. Says nothing may be published until the person has decided the package name and the gates in `docs/plans/0.2.0/PLAN.md` are cleared, and that `@luxorium/masthead` is a placeholder. | – |
+| `packaging/README.md` | Lists the outlines below and their status. Says nothing there is published yet, that every outline installs the GitHub release tarball, and that the package (`@luxorium/masthead`, `private: true`) is not on npm. | – |
 | `packaging/homebrew/masthead.rb` | A tap formula (`Luxorium/homebrew-tap`): `depends_on "node"`, installs the npm tarball with `npm install *std_npm_args --os=none --cpu=none`, links the `bin`. A `service do` block runs `masthead serve`, restarts only after a crash, logs to `var/log/masthead.log`. Its test checks `masthead --version`. URL and `sha256` are placeholders. | outline, not published |
 | `packaging/aur/PKGBUILD` | `arch=(any)`, `depends=(nodejs)`, `makedepends=(npm)`, `optdepends` Claude Code. `package()` runs `npm install -g --os=none --cpu=none --prefix "$pkgdir/usr"` on the tarball, makes folders 755 and installs the licence. `sha256sums=('SKIP')` until release. | outline; to be checked against Arch's Node.js packaging rules |
 | `packaging/scoop/masthead.json` | Windows without admin: `depends: nodejs-lts`, the npm tarball as URL, an installer script running `npm install -g --os=none --cpu=none --prefix $dir`, then removing the tarball; `bin: masthead.cmd`. Hash is a placeholder. | outline, untested on Windows |
@@ -111,13 +111,13 @@ Every outline installs with `--os=none --cpu=none`, which skips the Agent SDK's 
 
 It runs with `set -euo pipefail`, but every command that may fail ignores its errors.
 
-1. If `~/.local/bin/masthead` is executable, runs `masthead stop`. That stops the service, and also a copy started without it, on 7717 or `MASTHEAD_PORT`.
+1. If `~/.local/bin/masthead` is executable, runs `masthead remote off` (turns off Masthead's own Tailscale entry if remote access was on; its output is shown), then `masthead stop` (output hidden). That stops the service, and also a copy started without it, on 7717 or `MASTHEAD_PORT`.
 2. If `systemctl` exists, `systemctl --user disable --now masthead.service`.
-3. Removes the unit file, `~/.local/bin/masthead`, the desktop entry, the icon, `~/.local/lib/masthead`, and any leftover `masthead.new` or `masthead.old`.
+3. Removes the unit file (from `~/.config/systemd/user` and from the older `$XDG_CONFIG_HOME/systemd/user` location), `~/.local/bin/masthead`, the desktop entry, the icon, `~/.local/lib/masthead`, and any leftover `masthead.new` or `masthead.old`.
 4. Reloads systemd (`daemon-reload`).
 5. Prints "Masthead was removed." and where the kept data is. Conversations and the local secret (`$XDG_DATA_HOME/masthead`) and settings (`$XDG_CONFIG_HOME/masthead`) are **not** removed.
 
-Like the installer, it finds the unit, desktop entry and icon through `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, so run it with the same values the installer had.
+Like the installer, it finds the desktop entry, icon and the older unit location through `XDG_DATA_HOME` and `XDG_CONFIG_HOME`, so run it with the same values the installer had. The current unit location, `~/.config/systemd/user`, is fixed.
 
 ## Points to be aware of
 

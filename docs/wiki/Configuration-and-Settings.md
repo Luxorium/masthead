@@ -19,7 +19,11 @@ Settings types: `Settings` in `shared/protocol.ts`. Validation and defaults: `se
 | macOS | `~/Library/Application Support/Masthead/settings.json` |
 | Windows | `%APPDATA%\Masthead\settings.json` |
 
-`MASTHEAD_CONFIG_DIR` overrides the folder on every platform. The file is format version 2. A 0.1.x file is backed up to `settings.json.v1.bak` once and migrated; see [Team profiles and settings](Team-Profiles-and-Settings.md#migration-from-01x). If the file cannot be read or parsed, the defaults apply, and the file is overwritten at the next change.
+`MASTHEAD_CONFIG_DIR` overrides the folder on every platform. The file is format version 2, and every save also writes a copy, `settings.v2.json` (`v2CopyOf()`). What `loadSettings()` in `server/settings/settings.ts` does with the file it finds:
+
+- A 0.1.x file (no `version`) is backed up to `settings.json.v1.bak` once and migrated in memory. If `settings.v2.json` exists, the person went back to 0.1.x and returned: the copy's teams and 0.2.0-only fields are kept, and only the fields 0.1.x could change come from the file. See [Team profiles and settings](Team-Profiles-and-Settings.md#migration-from-01x).
+- A file that cannot be read or parsed is first copied to `settings.json.unreadable-<time>`; then the defaults apply, and the file is overwritten at the next change.
+- A file from a newer Masthead (a `version` above 2) is never written: Masthead runs on the defaults in memory and says why.
 
 ## Every setting
 

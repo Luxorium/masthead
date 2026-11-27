@@ -8,7 +8,7 @@
 |---|---|
 | `types.ts` | The shared types and `ServiceError`. |
 | `index.ts` | `serviceFor(platform)` and the real `systemDeps()`. |
-| `common.ts` | Helpers: `NODE_FLAGS`, `cleanPath`, `checkValue`, `serviceEnv`, `dataDirNote`, `portOf`, `must`, `xmlEscape`. |
+| `common.ts` | Helpers: `NODE_FLAGS`, `DIR_VARS`, `cleanPath`, `checkValue`, `serviceEnv`, `dataDirNote`, `portOf`, `must`, `xmlEscape`, `statusSummary`. |
 | `systemd.ts` | Linux: a systemd user unit. |
 | `launchd.ts` | macOS: a per-user launchd agent. |
 | `taskscheduler.ts` | Windows: a per-user scheduled task. |
@@ -28,7 +28,8 @@
 
 ## index.ts
 
-- `systemDeps()`: the real system. `run` is `spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true })` with `status` null when `spawnSync` reports an error (and that error's message as `stderr` when there is none); `fs` uses `writeFileSync`, `mkdirSync(..., { recursive: true })`, `rmSync(..., { force: true })`, `existsSync`; `home` is `os.homedir()`; `env` is `process.env`.
+- `systemDeps()`: the real system. `run` is `spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true })` with `status` null when `spawnSync` reports an error (and that error's message as `stderr` when there is none); `fs` uses `writeFileSync`, `mkdirSync(..., { recursive: true })`, `rmSync(..., { force: true })`, `existsSync`; `home` is `os.homedir()`; `env` is `process.env`. It sets neither `uid` nor `tmpdir`, so launchd falls back to `process.getuid()` and Task Scheduler to `os.tmpdir()`.
+- It re-exports the types of `types.ts` and `ServiceError`.
 - `serviceFor(platform, deps?)`: `linux` → `systemdService`, `darwin` → `launchdService`, `win32` → `taskSchedulerService`, anything else → null (Masthead then runs only in the foreground). Without `deps` it uses `systemDeps()`.
 
 `main.ts` calls `serviceFor(process.platform)` for `masthead service` and for the `Service` check of `masthead doctor`. The launcher's own "does the unit serve this port" test (`unitServes()` in `main.ts`) does not use `serves()`; it runs `systemctl` itself and is Linux only.
@@ -45,12 +46,14 @@
 | `portOf(raw)` | A port from text (digits only, 1024–65535), else null. |
 | `must(run, cmd, args)` | Runs a command that must succeed. On a non-zero or null status it throws `ServiceError('<cmd> <args> failed: <why>')`, where `why` is stderr, else stdout, else `it could not be started` or `exit code <n>`. |
 | `xmlEscape(s)` | Escapes `& < > " '` for XML. |
+| `DIR_VARS` | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `MASTHEAD_CONFIG_DIR`, `MASTHEAD_DATA_DIR`: the folder variables passed on to a POSIX service, in the order `paths.ts` reads them. |
+| `statusSummary(kind, st, answers, port)` | The plain-words line `main.ts` prints for `masthead service status` and at the end of `service install`: `Not installed (<kind>).` or `Installed (<kind>).`, then whether Masthead answers on the port and whether the service or the person started it (a copy started by hand keeps the port, so the service's own copy cannot start), then the status `detail` in brackets. |
 
 ## systemd.ts
 
 Linux. The same unit that `scripts/install.sh` writes ([Installing](Source-Install-Scripts.md)).
 
-**File:** `unitPath(home)` = `~/.config/systemd/user/masthead.service`, always. Not the shell's `$XDG_CONFIG_HOME`: systemd's user manager searches `$XDG_CONFIG_HOME/systemd/user` only when its own environment has that variable, while `~/.config/systemd/user` is always on its search path. (`scripts/install.sh` still writes under `$XDG_CONFIG_HOME`; `uninstall` also removes a unit found there.) `unitContent(o, home)`:
+**File:** `unitPath(home)` = `~/.config/systemd/user/masthead.service`, always. Not the shell's `$XDG_CONFIG_HOME`: systemd's user manager searches `$XDG_CONFIG_HOME/systemd/user` only when its own environment has that variable, while `~/.config/systemd/user` is always on its search path. (`scripts/install.sh` also writes to `$HOME/.config/systemd/user`; earlier installs may have written under `$XDG_CONFIG_HOME`, so `uninstall` also removes a unit found there, `legacyUnitPath()`.) The unit name is `UNIT` = `masthead.service`. `unitContent(o, home)`:
 
 ```ini
 [Unit]
@@ -72,9 +75,9 @@ WantedBy=default.target
 
 | Action | Commands (all `systemctl --user …`) |
 |---|---|
-| `install` | `show-environment` (a failure throws `systemd user services are not available here; start Masthead with: masthead`), build the unit (a bad value throws before anything is written), write the file, `daemon-reload`, `cat masthead.service` (non-zero: systemd did not find the unit, the folder is not on its search path; a `# <path>` header naming another file: systemd would run that one instead), `enable --quiet masthead.service`, `restart masthead.service`. Any failure after the write rolls back (`disable --now`, remove the file, `daemon-reload`, results ignored) and rethrows. Returns `Wrote <file>` and `Masthead is running as a user service and will start when you log in.` |
-| `uninstall` | When neither `~/.config/systemd/user/masthead.service` nor one under the shell's `$XDG_CONFIG_HOME` exists and the unit is not loaded: returns `Nothing was installed.` and runs nothing else. Otherwise `disable --now masthead.service` (its failure is ignored: removing the file is what matters), remove the files found, `daemon-reload` (not checked). |
-| `status` | `show -p LoadState -p ActiveState -p Environment masthead.service`. A failing `systemctl` gives `installed: false, running: null` with `systemctl failed: …`. `LoadState` other than `loaded`: `Not installed.`. Otherwise installed, running when `ActiveState` is `active` or `reloading`, port from `unitPortFrom()`, `dataDir` from the unit's `Environment=` (`unitEnvFrom()`), detail `masthead.service <state>, port <n>, data <dir>` plus `(this shell uses <dir>)` on a mismatch. |
+| `install` | `show-environment` (a failure throws `systemd user services are not available here; start Masthead with: masthead`), build the unit (a bad value throws before anything is written), make the folder and write the file, `daemon-reload` (must succeed), `cat masthead.service` (non-zero: systemd did not find the unit, the folder is not on its search path; a `# <path>` header naming another file: systemd would run that one instead), `enable --quiet masthead.service`, `restart masthead.service`. Any failure after the write rolls back (`disable --now`, remove the file, `daemon-reload`, results ignored) and rethrows. Returns `Wrote <file>` and `Installed Masthead as a user service; it starts when you log in.` |
+| `uninstall` | When neither `~/.config/systemd/user/masthead.service` nor one under the shell's `$XDG_CONFIG_HOME` exists and the unit is not loaded: returns `Nothing was installed.` and runs nothing else. Otherwise `disable --now masthead.service` (its failure is ignored: removing the file is what matters), remove the files found, `daemon-reload` (not checked). Returns `Stopped and disabled the user service.` and a `Removed <file>` line per file. |
+| `status` | `show -p LoadState -p ActiveState -p Environment masthead.service`. A failing `systemctl` gives `installed: false, running: null` with `systemctl failed: …`. `LoadState` other than `loaded`: `installed: false, running: false`, `Not installed.`. Otherwise installed, running when `ActiveState` is `active` or `reloading`, port from `unitPortFrom()`, `dataDir` from the unit's `Environment=` (`unitEnvFrom()`), detail `masthead.service <state>, port <n>, data <dir>` plus `(this shell uses <dir>)` on a mismatch. |
 | `serves(port)` | The same `show`, and `unitPortFrom()` equals `port`. |
 
 `unitPortFrom(show)` here is like the one in [server/cli.ts](Source-Cli.md#unitportfromshowoutput): null when not `loaded`, else `MASTHEAD_PORT` from `Environment=` if valid (`portOf`), else 7717.
@@ -91,9 +94,9 @@ macOS. **Unverified without a Mac** (file header): the plist keys follow `launch
 
 | Action | What it does |
 |---|---|
-| `install` | Builds the plist (a bad value throws before anything is written), makes the LaunchAgents and log folders, writes the plist, `launchctl bootout gui/<uid>/<label>` (failure ignored: an agent already loaded keeps its old definition until booted out), `launchctl bootstrap gui/<uid> <file>` (must succeed; on failure `bootout` again and remove the plist before rethrowing). Returns `Wrote <file>`, the running message and `Logs: <log>`. |
-| `uninstall` | No plist and `print` fails: `Nothing was installed.` Otherwise `bootout` (not checked), removes the plist. |
-| `status` | `launchctl print gui/<uid>/<label>`. Non-zero: not installed. Otherwise running when a `state = running` line is found, `null` when there is no `state =` line; port from `launchdPortFrom()` (a `MASTHEAD_PORT => N` line, else 7717); `dataDir` and the detail's `data <dir>` note from the `environment = { … }` block (`launchdEnvFrom()`; `inherited environment` is not read). |
+| `install` | Builds the plist (a bad value throws before anything is written), makes the LaunchAgents and log folders, writes the plist, `launchctl bootout gui/<uid>/<label>` (failure ignored: an agent already loaded keeps its old definition until booted out), `launchctl bootstrap gui/<uid> <file>` (must succeed; on failure `bootout` again and remove the plist before rethrowing). Returns `Wrote <file>`, `Installed Masthead as a launchd agent; it starts when you log in.` and `Logs: <log>`. |
+| `uninstall` | No plist and `print` fails: `Nothing was installed.` Otherwise `bootout` (not checked), removes the plist; returns `Stopped the launchd agent.` and `Removed <file>` when there was one. |
+| `status` | `launchctl print gui/<uid>/<label>`. Non-zero: not installed (`Not installed (not loaded in launchd).`). Otherwise running when a `state = running` line is found, `null` when there is no `state =` line; port from `launchdPortFrom()` (a `MASTHEAD_PORT => N` line, else 7717); `dataDir` and the detail's `data <dir>` note from the `environment = { … }` block (`launchdEnvFrom()`; `inherited environment` is not read). |
 | `serves(port)` | The same `print`, and the port matches. |
 
 ## taskscheduler.ts
@@ -110,9 +113,9 @@ Windows. **Unverified without a Windows machine** (file header): the XML follows
 
 | Action | Commands |
 |---|---|
-| `install` | Writes the XML to `<tmpdir>/masthead-task-<pid>.xml`; `schtasks /End /TN Masthead` (failure ignored: `/Create /F` would leave a running copy on the old definition); `schtasks /Create /TN Masthead /XML <file> /F` and `schtasks /Run /TN Masthead` (both must succeed; if either fails, `schtasks /Delete /TN Masthead /F` runs before rethrowing). The temp file is removed whatever happens. |
-| `uninstall` | `schtasks /End /TN Masthead` (not checked), then `schtasks /Delete /TN Masthead /F`. When `/Delete` fails and `/Query` also fails (the task does not exist, in any display language): `Nothing was installed.` Any other `/Delete` failure throws. |
-| `status` | `schtasks /Query /TN Masthead /FO LIST /V`. Non-zero: not installed. Otherwise `parseTaskQuery()` reads `Status:` (running when it is `Running`, null when missing) and the port from `--port N` in `Task To Run:` (else 7717). |
+| `install` | Writes the XML to `<tmpdir>/masthead-task-<pid>.xml`; `schtasks /End /TN Masthead` (failure ignored: `/Create /F` would leave a running copy on the old definition); `schtasks /Create /TN Masthead /XML <file> /F` and `schtasks /Run /TN Masthead` (both must succeed; if either fails, `schtasks /Delete /TN Masthead /F` runs before rethrowing). The temp file is removed whatever happens. Returns `Created the scheduled task "Masthead" (runs at logon, no admin rights).` and `It starts Masthead when you log in.`, plus the `setx` note above when it applies. |
+| `uninstall` | `schtasks /End /TN Masthead` (not checked), then `schtasks /Delete /TN Masthead /F` (success: `Stopped and deleted the scheduled task "Masthead".`). When `/Delete` fails and `/Query` also fails (the task does not exist, in any display language): `Nothing was installed.` Any other `/Delete` failure throws. |
+| `status` | `schtasks /Query /TN Masthead /FO LIST /V`. Non-zero: not installed (`Not installed.`). Otherwise `parseTaskQuery()` reads `Status:` (running when it is `Running`, null when missing) and the port from `--port N` in `Task To Run:` (else 7717). No `dataDir`. Detail: `Task "Masthead" <status>, port <n>`. |
 | `serves(port)` | The same query, and the port matches. |
 
 ## Keep awake (awake.ts)
@@ -137,7 +140,8 @@ Each one therefore ends by itself when the server exits, even if it crashes (fil
 - `set(working)`: with `true`, cancels a pending release and starts the hold if it is not already wanted. With `false`, if a hold is wanted it schedules the release after `RELEASE_AFTER_MS` (**5 seconds**), so short gaps between work do not flap it. Repeated calls are harmless. The release timer is `unref`'d.
 - `stop()`: releases at once and cancels any timer.
 - Release closes the child's stdin and then kills it.
-- `status()`: `holding`, `unavailable` (with the last error) or `off`.
+- `status()`: an `AwakeStatus`, `{ state, detail }`, where `state` (`AwakeState`) is `holding`, `unavailable` (with the last error as `detail`) or `off`.
+- `new Awake(options?)`: `AwakeOptions` lets tests pass `platform`, `pid`, a `Spawner`, `releaseAfterMs` and their own timers.
 - Errors are recorded, not thrown: no command for the platform (`Keeping the computer awake is not supported on <platform>.`), a spawn that throws or emits `error` (`Could not start <cmd>: …`), or the child exiting while still wanted (`<cmd> ended (exit <code>); the computer may sleep while agents work.`, for example no logind or a policy refusal). A failed hold is not retried until work starts again, so a missing tool costs one attempt per busy period. Masthead carries on without it; `masthead doctor` reports whether the tool is on `PATH` ([server/doctor.ts](Source-Doctor.md)).
 
 ### How the app uses it
@@ -149,7 +153,7 @@ Each one therefore ends by itself when the server exits, even if it crashes (fil
 
 ### The sleep notice
 
-Separately, `server/core/conversation.ts` notices when the computer **did** sleep: an awake-time clock read every 15 seconds sees a gap larger than its step (60 s) and calls `Conversation.wokeFromSleep(from, to)` on every conversation. A conversation that is busy adds an info notice to its lead's transcript: `This computer was asleep from <time> to <time>; work carried on afterwards.` The time asleep never counts as running time ([Agent life cycle](Agent-Life-Cycle.md)).
+Separately, `server/core/conversation.ts` notices when the computer **did** sleep: an awake-time clock read every 15 seconds sees a gap larger than its step (60 s) and calls `Conversation.wokeFromSleep(from, to)` on every conversation. A conversation that is busy adds an info notice to its lead's transcript: `This computer was asleep from <time> to <time>; work carried on afterwards.` Of each gap the clock counts at most 60 s, so the time asleep does not count as running time ([Agent life cycle](Agent-Life-Cycle.md)).
 
 ## Related pages
 

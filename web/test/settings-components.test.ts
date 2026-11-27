@@ -82,6 +82,12 @@ describe('ProfilesSection', () => {
     (store as unknown as { listeners: Map<string, Set<(m: Record<string, unknown>) => void>> }).listeners.get('error')!.forEach((fn) => fn({ t: 'error', code: 'refused', message: 'in use', inUse: { id: copy.id, chats: 3 } }));
     expect((window.confirm as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0]).toMatch(/^3 chats use the team “Claude \(copy\)”/);
     expect(request).toHaveBeenLastCalledWith({ t: 'delete_profile', id: copy.id, force: true });
+    // Asked again and the person says no: the team stays and the page says why in its own words.
+    (window.confirm as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const sent = request.mock.calls.length;
+    (store as unknown as { listeners: Map<string, Set<(m: Record<string, unknown>) => void>> }).listeners.get('error')!.forEach((fn) => fn({ t: 'error', code: 'refused', message: 'in use', inUse: { id: copy.id, chats: 1 } }));
+    expect(request.mock.calls.length).toBe(sent);
+    expect(store.error).toBe('Kept “Claude (copy)”: 1 chat uses it.');
     await fireEvent.click(screen.getAllByRole('button', { name: 'Reset to the built-in team' })[0]!);
     expect(request).toHaveBeenLastCalledWith({ t: 'reset_profile', id: 'claude' });
   });
@@ -118,6 +124,14 @@ describe('ProfileChip', () => {
     await fireEvent.click(chip);
     await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Codex' }));
     expect(onchange).toHaveBeenCalledWith('codex');
+  });
+
+  it('when the asked-for team cannot start, picks the one it shows', () => {
+    store.backends = backends(false) as unknown as Record<string, unknown>[];
+    const onchange = vi.fn();
+    render(ProfileChip, { value: 'codex', onchange });
+    expect(screen.getByRole('button', { name: 'Uses Claude' })).toBeTruthy();
+    expect(onchange).toHaveBeenCalledWith('claude');
   });
 
   it('lists only teams that can start', async () => {

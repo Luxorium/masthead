@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VERSION } from '../shared/protocol.js';
 import { App } from './app/app.js';
-import { UsageError, onPath, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, unitPortFrom, type Opener } from './cli.js';
+import { UsageError, commandPort, onPath, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, unitPortFrom, type Opener } from './cli.js';
 import { DATA_DIR, DEFAULT_PORT, mastheadCommand, SECRET_FILE } from './paths.js';
 import { isPrivate, loadSecret, readSecret } from './transport/auth.js';
 import { serve } from './transport/http.js';
@@ -34,6 +34,17 @@ const webDir = join(here, '..', 'web');
 function port(): number {
   try {
     return parsePort(process.argv.slice(2), process.env);
+  } catch (e) {
+    if (!(e instanceof UsageError)) throw e;
+    console.error(e.message);
+    process.exit(2);
+  }
+}
+
+/** The port for `cmd`: as asked, else the installed service's, else the default (see commandPort). */
+async function portFor(cmd: string): Promise<number> {
+  try {
+    return await commandPort(cmd, process.argv.slice(2), process.env, async () => serviceFor(process.platform)?.status() ?? null);
   } catch (e) {
     if (!(e instanceof UsageError)) throw e;
     console.error(e.message);
@@ -269,7 +280,7 @@ async function start(p: number): Promise<boolean> {
 
 async function main(): Promise<void> {
   const cmd = parseCommand(process.argv.slice(2));
-  const p = port();
+  const p = await portFor(cmd);
   switch (cmd) {
     case 'serve':
       await runServer();
@@ -366,7 +377,7 @@ async function main(): Promise<void> {
   masthead doctor     check the set-up and say how to fix what is wrong (--json)
   masthead remote off turn off Masthead's Tailscale entry (remote access)
 
-  --port N            use a port other than ${DEFAULT_PORT} (or set MASTHEAD_PORT)
+  --port N            use a port other than the installed service's or ${DEFAULT_PORT} (or set MASTHEAD_PORT)
   --no-browser        with the default command: do not open the browser; print the
                       sign-in address instead (when run in a terminal)`);
       process.exit(cmd === 'help' || cmd === '--help' ? 0 : 2);

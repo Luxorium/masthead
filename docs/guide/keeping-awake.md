@@ -16,8 +16,8 @@ It is on by default.
 
 ## What it does, and what it does not
 
-- It only stops the computer **falling asleep on its own** while any helper is working.
-- About five seconds after the last helper stops working, your normal sleep settings apply again.
+- It only stops the computer **falling asleep on its own** while the main assistant or any helper is working, in any chat.
+- About five seconds after the last one stops working, your normal sleep settings apply again.
 - The screen can still turn off on its usual schedule.
 - **Closing the lid, pressing the power button or choosing Sleep still put the computer to sleep at
   once.**

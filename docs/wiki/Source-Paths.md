@@ -30,11 +30,16 @@ On **every** platform, each folder is chosen in this order (the first that is se
 
 An empty variable counts as not set. So `XDG_CONFIG_HOME` also moves the settings on macOS and Windows, and a `MASTHEAD_*_DIR` value is not given a `masthead` subfolder. Relative values are not rejected here.
 
+## mastheadCommand(platform = process.platform)
+
+The command a person should type: `masthead.cmd` on `win32`, else `masthead`. Stock Windows PowerShell refuses npm's `masthead.ps1` ("running scripts is disabled"); `masthead.cmd` works in PowerShell and Command Prompt alike. Used in the hints printed by `main.ts`, `cli.ts` and `doctor.ts`.
+
 ## Constants
 
 | Name | Value |
 |---|---|
 | `DEFAULT_PORT` | `7717`. The port when neither `--port` nor `MASTHEAD_PORT` is given ([server/cli.ts](Source-Cli.md#parseportargs-env)). |
+| `AppDirs` (type) | `{ config: string; data: string }`, what `appDirs()` returns. |
 | `HOME` | `os.homedir()`. |
 | `CONFIG_DIR` | `appDirs(process.platform, process.env, HOME).config`. |
 | `DATA_DIR` | `appDirs(...).data`. |
@@ -46,12 +51,15 @@ The constants are computed once when the module loads. Changing an environment v
 
 ## Who uses it
 
-- [server/main.ts](Source-Main.md): `DATA_DIR` (the remote-access folder `<DATA_DIR>/remote`, sign-in files, messages), `SECRET_FILE`, `CONFIG_DIR` (for `doctor`), `DEFAULT_PORT`.
-- [server/cli.ts](Source-Cli.md): `DEFAULT_PORT`.
-- [server/service](Source-Service.md): `DEFAULT_PORT`, to decide whether to write `MASTHEAD_PORT` or `--port`.
-- [server/doctor.ts](Source-Doctor.md) gets the folders from `main.ts` and checks they exist and are writable.
+- [server/main.ts](Source-Main.md): `DATA_DIR` (the remote-access folder `<DATA_DIR>/remote`, sign-in files, messages), `SECRET_FILE`, `CONFIG_DIR` (for `doctor`), `DEFAULT_PORT`, `mastheadCommand`.
+- [server/cli.ts](Source-Cli.md): `DEFAULT_PORT`, `mastheadCommand`.
+- [server/doctor.ts](Source-Doctor.md): `mastheadCommand`; it gets the folders from `main.ts` and checks they exist and are writable.
+- [server/service](Source-Service.md): `DEFAULT_PORT` (all three service kinds), to decide whether to write `MASTHEAD_PORT` or `--port`; `common.ts` also calls `appDirs()` in `dataDirNote()` to show which data folder an installed service uses.
+- [server/settings/settings.ts](Source-Settings.md) and [server/app/app.ts](Source-App.md): `HOME`, `SETTINGS_FILE`.
+- `server/storage/store.ts`: `CONVERSATIONS_DIR`. `server/transport/auth.ts`: `SECRET_FILE`. `server/backends/claude/env.ts`: `HOME`.
+- `server/transport/remote.ts`: `appDirs(platform, {}, home)` and `HOME`, to name the remote socket `remote.sock` for the default data folder and `remote-<hash>.sock` otherwise.
 
-A service started at login must look in the same folders as the `masthead` command. On Linux and macOS `masthead service install` passes `XDG_CONFIG_HOME` and `XDG_DATA_HOME` on to the service, but not `MASTHEAD_CONFIG_DIR` or `MASTHEAD_DATA_DIR`; on Windows it passes none of them ([server/service](Source-Service.md#commonts)).
+A service started at login must look in the same folders as the `masthead` command. On Linux and macOS `masthead service install` passes `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `MASTHEAD_CONFIG_DIR` and `MASTHEAD_DATA_DIR` on to the service when set (`DIR_VARS` in `server/service/common.ts`); on Windows the scheduled task carries none of them, and `install` says which ones would be lost ([server/service](Source-Service.md#commonts)).
 
 ## Related pages
 

@@ -1,6 +1,6 @@
 # Compact team
 
-A long chat gathers many finished helpers, and the lead's memory (its context) fills up. **Compacting the team** ("tidying the team" in the page and the guide) archives the finished helpers the lead no longer needs and compacts the memory of everyone who stays, the lead last. It is new in 0.2.0-beta.2. The design is `docs/plans/0.2.0/compact.md`; the code is the section "archived helpers and team compaction" of `server/core/conversation.ts`. The user guide's page is [`docs/guide/tidying-a-long-chat.md`](../guide/tidying-a-long-chat.md).
+A long chat gathers many finished helpers, and the lead's memory (its context) fills up. **Compacting the team** ("tidying the team" in the page and the guide) archives the finished helpers the lead no longer needs and compacts the memory of everyone who stays, the lead last. It is new in 0.2.0. The design is `docs/plans/0.2.0/compact.md`; the code is the section "archived helpers and team compaction" of `server/core/conversation.ts`. The user guide's page is [`docs/guide/tidying-a-long-chat.md`](../guide/tidying-a-long-chat.md).
 
 Everything here was read from the code. It is covered by `test/compact-app.test.ts`, `test/machine.test.ts`, `web/test/compact.test.ts` and the live test described on [Live tests](Live-Tests.md).
 

@@ -28,14 +28,15 @@ flowchart LR
 
 ### `class Store`
 
-- **`constructor(root = CONVERSATIONS_DIR)`**: creates `root` (mode `0700`) and its `BlobStore`, then writes the whole-store format marker. The marker is `<root>/../format` when `root` is named `conversations` (the normal data folder). Otherwise, as with a test store in a temporary folder, it is `<root>/.format`. The marker holds `2` and a newline, and it is rewritten only when its text differs. A read-only data folder still loads, because a failed write is ignored.
+- **`constructor(root = CONVERSATIONS_DIR)`**: creates `root` (mode `0700`) and its `BlobStore`, then writes the whole-store format marker. The marker is `<root>/../format` when `root` is named `conversations` (the normal data folder). Otherwise, as with a test store in a temporary folder, it is `<root>/.format`. The marker holds `2` and a newline. It is only ever raised: it is written (with `writeFileAtomic`) when it is missing, unreadable or below `FORMAT`, and a marker from a newer Masthead is left as it is. A read-only data folder still loads, because a failed write is ignored.
 - **`loadAll()`**: reads every folder whose name matches `SAFE_ID`. A conversation is skipped silently when its `conversation.json` does not parse, when its `meta.id` does not match the folder name, or when `agents` is not an array. Each file goes through `migrateConversation()`. A `null` result means a newer Masthead wrote the file, and it is left alone and not loaded. A file from an older format is remembered in `needsBackup`.
 - **`saveConversation(conv)`**: creates `<id>/items/`. For a conversation in `needsBackup`, it first copies the old file to `conversation.json.v1.bak`, unless that backup already exists. It then writes `{ ...conv, format: FORMAT }` as compact JSON with `writeFileAtomic`.
-- **`appendItem(convId, agentId, item)`**: appends `JSON.stringify(item)` and a newline to `items/<agent>.jsonl` (mode `0600`). If the append fails, it creates the folder and tries once more.
+- **`appendItem(convId, agentId, item)`**: appends `JSON.stringify(item)` and a newline to `items/<agent>.jsonl` (mode `0600`). The first append to a file in a run checks whether the file ends without a newline (a line torn by a crash, `endsWithoutNewline()`); if so it writes a newline first, so the new item does not join the torn line. If the append fails, it creates the folder and tries once more.
+- **`hasTornLine(convId)`**: whether any `items/*.jsonl` of the conversation has a non-empty line that does not parse.
 - **`loadItems(convId, agentId)`**: reads the whole transcript. The last line for an id wins, and the item keeps the position where its id first appeared (a `Map` keeps a key's place when it is set again). Lines that do not parse, such as a torn last line after a crash, are skipped. A missing file gives `[]`.
 - **`readItems(convId, agentId, { before, limit })`**: one page, from `readPage()` (below).
 - **`referencedBlobs(convId)`**: the set of blob hashes that any item in any of the conversation's transcripts refers to (`blobsOf`).
-- **`collectBlobs(convId)`**: `blobs.collect(convId, referencedBlobs(convId))`, which removes images that no item refers to. `App`'s constructor runs it for every conversation it loads.
+- **`collectBlobs(convId)`**: `blobs.collect(convId, referencedBlobs(convId))`, which removes images that no item refers to. When `hasTornLine(convId)` is true it removes nothing and returns 0, logging once per conversation, because a damaged line may have lost a reference. `App`'s constructor runs it for every conversation it loads.
 - **`deleteConversation(convId)`**: removes the conversation's whole folder (transcripts and images) with `rmSync(..., { recursive, force, maxRetries: 5, retryDelay: 100 })`. The retries cover Windows, where a file that is still open somewhere else blocks removal for a moment.
 
 ## transcript.ts
@@ -63,7 +64,7 @@ Image files of one conversation are stored at `<conversation>/blobs/<sha256>.<ex
 | Constant | Value |
 |---|---|
 | `MAX_BLOB_BYTES` | 5 MB per image |
-| `MAX_MESSAGE_IMAGE_BYTES` | 30 MB per message (exported, but nothing in `server/` uses it yet) |
+| `MAX_MESSAGE_IMAGE_BYTES` | 30 MB per message (exported, but nothing in `server/` uses it) |
 | `MAX_CONVERSATION_BLOB_BYTES` | 500 MB per conversation |
 | `MAX_SIDE` | 8192 pixels a side |
 | `MAX_PIXELS` | 40 000 000 |
@@ -90,20 +91,21 @@ The HTTP routes `POST /blob?conv=<id>` and `GET /blob/<convId>/<hash>?t=<token>`
 ## migrate.ts
 
 - `FORMAT = 2`: the current `conversation.json` format.
-- `migrateConversation(raw)` returns `{ value, from }`, or `null` when `raw.format` is above `FORMAT`. A file without `format` counts as format 1. Formats 1 and 2 have the same shape, so the 1 → 2 step only stamps `format: 2`. Each later format adds one step here. `from < FORMAT` tells `Store` to back up the file before it rewrites it.
+- `Migrated<T>`: `{ value, from }`.
+- `migrateConversation(raw)` returns `{ value, from }`, or `null` when `raw.format` is above `FORMAT`. A file without `format` counts as format 1. Formats 1 and 2 have the same shape, so the 1 → 2 step only stamps `format: 2`. Each later format is to add one step here. `from < FORMAT` tells `Store` to back up the file before it rewrites it.
 
 `core.md` also planned adding `profileId: 'claude'` and a tier snapshot in this step. The code does not do that. A conversation without `meta.profileId` is simply treated as a `claude` conversation, because its agents' tier ids (`lead`, `opus`, …) belong to the claude profile.
 
 ## atomic.ts
 
 - `writeFileAtomic(path, data)`: creates the folder (mode `0700`), writes `<path>.<pid>.tmp` (mode `0600`), then renames it over `path`. A crash leaves either the old file or the new one, never half of one. Used for `settings.json`, `conversation.json` and the format marker.
-- `renameRetry(from, to, platform, rename)`: a plain rename. On Windows only, an `EPERM`, `EBUSY` or `EACCES` error (another program, such as antivirus or the search indexer, briefly holding the target) is retried up to ten times, waiting 20 ms × attempt between tries (about a second in all).
+- `renameRetry(from, to, platform, rename)`: a plain rename. On Windows only, an `EPERM`, `EBUSY` or `EACCES` error (another program, such as antivirus or the search indexer, briefly holding the target) is retried, up to ten tries in all, waiting 20 ms × attempt between tries (about a second in all).
 
-## Not in the code yet
+## Not in the code
 
 `core.md` (section 6) also planned transcript **compaction** (rewriting a `.jsonl` file that holds more than twice as many lines as distinct ids) and optional `items/<agent>.idx` offset files. Neither exists in `server/storage/` today: transcripts only grow, and paging always scans from the end.
 
-Not verified by running: this page was written from the code. Tests: `test/storage.test.ts`, `test/storage-wiring.test.ts`.
+Written from the code; `test/storage.test.ts` (13 tests) passed on 2026-11-27. Tests: `test/storage.test.ts`, `test/storage-wiring.test.ts`.
 
 ## Related pages
 

@@ -1,24 +1,26 @@
 # Building, testing and installing
 
-How Masthead is installed, built, checked and tested on Linux, macOS and Windows. Read from `package.json`, `vite.config.ts`, `web/vitest.config.ts`, `test/`, `scripts/`, `.github/workflows/ci.yml` and `AGENTS.md` on branch `next` on 2026-11-27 (0.1.4, on the way to 0.2.0). Detailed pages: [Build configuration](Source-Build-Config.md), [Tests](Source-Tests.md), [Installing](Source-Install-Scripts.md), [CI](Source-CI.md), [Platforms](Platforms.md).
+How Masthead is installed, built, checked and tested on Linux, macOS and Windows. Read from `package.json`, `vite.config.ts`, `web/vitest.config.ts`, `test/`, `scripts/`, `.github/workflows/ci.yml` and `AGENTS.md` on branch `next` on 2026-11-27 (release 0.2.0). Detailed pages: [Build configuration](Source-Build-Config.md), [Tests](Source-Tests.md), [Installing](Source-Install-Scripts.md), [CI](Source-CI.md), [Platforms](Platforms.md).
 
 ## Requirements
 
-- **Linux, macOS 13+ or Windows 10 1809+ / 11** (`os` in `package.json`). WSL counts as Linux.
+- **Linux, macOS or Windows** (`os` in `package.json`: `linux`, `darwin`, `win32`). The supported minimums, macOS 13+ and Windows 10 1809+ / 11, match Claude Code's and are decision D8 in `docs/plans/0.2.0/distribution.md`; nothing in the code checks them. WSL counts as Linux.
 - **Node.js 22 or newer** (`engines`).
 - **Claude Code**, installed and signed in. It is not an npm dependency: Masthead finds the one on the machine ([Platforms](Platforms.md#finding-claude-code)).
 - For the browser test only: Chromium (Playwright's own, or a system one).
 
-## Installing from npm (once published)
+## Installing from a release
 
-**The package is not published yet.** `package.json` has `"private": true` and the name `@luxorium/masthead` is a placeholder until the person decides. The commands below are the planned way (`docs/plans/0.2.0/distribution.md` §2), with that placeholder. They are the same on all three systems:
+Each release's `.tgz` is attached to its GitHub release by `.github/workflows/release.yml` ([CI](Source-CI.md#the-release-workflow)); nothing is published to the npm registry. `package.json` keeps `"private": true`, and the name `@luxorium/masthead` (and so the tarball's file name) is a placeholder until the person decides. The commands are the same on all three systems:
 
 ```sh
-npm install -g --os=none --cpu=none @luxorium/masthead
+npm install -g --os=none --cpu=none https://github.com/Luxorium/masthead/releases/download/v0.2.0/luxorium-masthead-0.2.0.tgz
 masthead service install      # start at login (optional)
 masthead doctor               # one line per check, exit 1 if something is wrong
 masthead                      # open the page, signed in
 ```
+
+The release also carries `SHA256SUMS` for the tarball. The address above is the one in `docs/guide/installing.md`.
 
 `--os=none --cpu=none` skips the Agent SDK's private Claude Code binary, which Masthead never runs: no platform package matches the operating system and processor "none". npm ignores `--omit=optional` for a global install (seen with npm 11.19.1 on Windows and 12.2.3 on Linux) ([Build configuration](Source-Build-Config.md#optional-packages)).
 
@@ -28,13 +30,13 @@ masthead                      # open the page, signed in
 | macOS | launchd agent `io.github.luxorium.masthead` | `open` |
 | Windows | Task Scheduler task `Masthead` (no admin) | `explorer.exe` |
 
-On Windows npm installs a `masthead.cmd` shim, so `masthead` works from PowerShell and `cmd`. Package-manager outlines (Homebrew, AUR, Scoop) exist but are not published ([Installing](Source-Install-Scripts.md#the-packaging-files)). Only the Linux path has been run on a real machine; macOS and Windows are covered by CI's pack-and-install and by the release checklist ([Platforms](Platforms.md#what-ci-proves-and-what-needs-a-real-machine)).
+On Windows npm installs a `masthead.cmd` shim (and a `masthead.ps1`). In Command Prompt plain `masthead` works; in stock Windows PowerShell type `masthead.cmd`, because PowerShell's default execution policy refuses `masthead.ps1` (`docs/guide/installing.md`). Package-manager outlines (Homebrew, AUR, Scoop) exist but are not published ([Installing](Source-Install-Scripts.md#the-packaging-files)). The packaged install has been run by a person on Linux and on a Windows 11 PC (`docs/plans/0.2.0/release-checklist.md`); macOS is covered by CI's pack-and-install, and the hands-on Mac checks were deferred ([Platforms](Platforms.md#what-ci-proves-and-what-needs-a-real-machine)).
 
 To try the packed package from a checkout, as CI and the release checklist do:
 
 ```sh
 npm pack                                                    # runs prepack (a build)
-npm install -g --os=none --cpu=none ./luxorium-masthead-0.1.4.tgz
+npm install -g --os=none --cpu=none ./luxorium-masthead-<version>.tgz
 masthead --version
 ```
 
@@ -47,7 +49,7 @@ masthead --version
 
 | Script | Runs | Purpose |
 |---|---|---|
-| `npm run build` | `build:server`, then `build:web` | Full build into `dist/`. |
+| `npm run build` | `clean`, then `build:server`, then `build:web` | Full build into `dist/`. `clean` deletes `dist/` first, so files of removed sources cannot linger. |
 | `npm run build:server` | `tsc -p tsconfig.server.json` | Compiles `server/` and `shared/` into `dist/server/` and `dist/shared/`. |
 | `npm run build:web` | `vite build` | Bundles the page from `web/` into `dist/web/`. |
 | `npm run dev:web` | `vite` | The page with hot reload on `MASTHEAD_DEV_WEB_PORT` (default 7718), forwarding `/ws`, `/api` and `/blob` (pictures) to `127.0.0.1:<MASTHEAD_PORT>` (default 7717). Stops if the port is taken or a port value is invalid. |
@@ -58,7 +60,7 @@ masthead --version
 | `npm start` | `node --disable-warning=… dist/server/main.js serve` | Runs the built server in the terminal, on 7717 unless `--port` or `MASTHEAD_PORT` says otherwise. |
 | `npm pack` | `prepack` (`npm run build`), then packs | The tarball, from the `files` list. |
 
-On 2026-11-27 (working tree on `next`, Linux, other agents editing): `npm run check` found 0 errors; `npm test` ran 379 tests, 378 passed, 1 skipped, 0 failed; `npm run test:web` ran 15 files, 62 tests, all passed. `npm pack --dry-run` gave 425 files, 325.8 kB.
+On 2026-11-27 (working tree on `next`, Linux, Node 26.13.1, other agents editing): each server test file run on its own gave 433 tests, 432 passed, 1 skipped, 0 failed; `npm run test:web` ran 20 files, 93 tests, all passed. After the last server changes `npm test` gave 435 tests, 434 passed, 1 skipped. `npm run check` and `npm pack` were not re-run for this revision (an earlier run the same day found 0 type errors).
 
 ## Output layout
 
@@ -91,7 +93,7 @@ npx playwright-core install chromium     # once
 node scripts/ci-e2e.mjs e2e-shots
 ```
 
-`scripts/ci-e2e.mjs` makes fresh temporary folders, picks a free port (never 7717), starts the built server with `MASTHEAD_BACKEND=fake` and `MASTHEAD_ALLOW_FAKE=1` plus its own `MASTHEAD_DATA_DIR` and `MASTHEAD_CONFIG_DIR`, waits for `/api/health`, runs `test/ui.e2e.mjs` with `MASTHEAD_E2E_BACKEND=fake`, and stops the server through `/api/shutdown`. It needs no Claude account and runs the same on all three systems. Step by step: [CI](Source-CI.md#scriptsci-e2emjs-step-by-step).
+`scripts/ci-e2e.mjs` makes fresh temporary folders, picks a free port (never 7717), starts a copy of the built server with `MASTHEAD_BACKEND=fake`, `MASTHEAD_ALLOW_FAKE=1` and `MASTHEAD_TAILSCALE=off` plus its own `MASTHEAD_DATA_DIR` and `MASTHEAD_CONFIG_DIR`, waits for `/api/health`, runs `test/ui.e2e.mjs` with `MASTHEAD_E2E_BACKEND=fake`, and stops the server through `/api/shutdown`. It needs no Claude account and runs the same on all three systems. Step by step: [CI](Source-CI.md#scriptsci-e2emjs-step-by-step).
 
 `MASTHEAD_BACKEND=fake` alone is refused ("for tests only and also needs MASTHEAD_ALLOW_FAKE=1"), so a stray variable cannot put a real install on the fake backend. `MASTHEAD_E2E_BACKEND=fake` is read only by the test: it builds the team one tool call per message and skips checks that need a model's writing.
 
@@ -117,9 +119,9 @@ Set the folder variables per command, not exported. A shell left with exported t
 
 `AGENTS.md` asks for:
 
-1. `npm run check && npm test && npm run build`, always. CI also runs `npm run test:web`, so run that too.
+1. `npm run check && npm test && npm run test:web && npm run build`, always.
 2. `npm run test:live` for anything touching agents, messaging, limits or effort.
-3. The browser test for page changes, against a test server with its own folders, never the installed one.
+3. `node scripts/ci-e2e.mjs` (the browser test on the fake backend, with its own folders and port) for page changes, never against the installed one.
 4. Update this wiki when behaviour changes.
 
 ## Development set-up
@@ -127,7 +129,7 @@ Set the folder variables per command, not exported. A shell left with exported t
 ```mermaid
 flowchart LR
   B["Browser<br/>http://localhost:7718/#key=…"] --> V["Vite dev server :7718<br/>(npm run dev:web)"]
-  V -- "/ws, /api forwarded" --> M["Masthead server :7717<br/>MASTHEAD_DEV=1 npm start"]
+  V -- "/ws, /api, /blob forwarded" --> M["Masthead server :7717<br/>MASTHEAD_DEV=1 npm start"]
 ```
 
 1. `npm ci`: a **plain** install. Do not add `--omit=optional`: esbuild and rolldown keep their native parts in optional packages, and the build and web tests fail without them ([Build configuration](Source-Build-Config.md#optional-packages)).

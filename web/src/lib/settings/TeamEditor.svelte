@@ -64,7 +64,7 @@
   };
 </script>
 
-<form class="editor" onsubmit={(e) => (e.preventDefault(), save())} aria-label={ST.teams.edit(draft.label || '…')}>
+<form class="editor" novalidate onsubmit={(e) => (e.preventDefault(), save())} aria-label={ST.teams.edit(draft.label || '…')}>
   <label class="field">
     <span>{ST.teams.teamName}</span>
     <input type="text" bind:value={draft.label} maxlength="40" />

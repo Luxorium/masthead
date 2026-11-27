@@ -1,5 +1,8 @@
 # 0.2.0: the page
 
+> **History.** This plan was built in 0.2.0. It is kept as the record of the design and the evidence; where it
+> differs from the code, the code and `docs/wiki/` are right.
+
 Design for the web page (`web/`) in Masthead 0.2.0. Written by charlie from the 0.1.4 code on branch
 `next` (478601f) and from `core.md` (foxtrot), `backends.md` (echo) and `tailscale.md` (golf).
 Nothing here has been built or tried in a browser. Sizes: S = under a day, M = 1–3 days, L = a week.

@@ -4,6 +4,35 @@ Written 2026-11-27 by the lead from six designs in this folder: `core.md` (foxtr
 (echo), `codex.md` (bravo), `tailscale.md` (golf), `web.md` (charlie), `distribution.md` (delta).
 Those files hold the detail and the evidence; this page is the order of work and the decisions.
 
+## Status (updated for the final 0.2.0)
+
+All stages below were built and shipped as pre-releases: 0.2.0-beta.1 (9644554) and 0.2.0-beta.2
+(0609cb2, adding the team outline and Compact team), and beta.2 was installed on Linux and on a real
+Windows 11 PC. What is left before the final tag is only:
+
+1. ~~The person's decisions on the gates below~~: decided 2026-11-27, see "Decided for the final".
+   Codex for the final: checked for real by bravo on 2026-11-27 (see the CHANGELOG's Known limits);
+   gate 4 is solved by switching Codex's own sub-agents off.
+2. The real-machine checks still open in [release-checklist.md](release-checklist.md). macOS on a real
+   Mac is not one of them: the person decided to ship without it and check it later.
+3. The version bump to 0.2.0 (`package.json`, `shared/protocol.ts`), a green CI run, and the tag.
+
+The stages and decisions below are kept as written; they are history now.
+
+## Decided for the final (the person, 2026-11-27)
+
+1. **Terms: ship 0.2.0 with a clear notice.** The README has a short notice near the top; the full
+   notice, and how to run Claude Code on a Claude Console account or API key and Codex on an OpenAI
+   API key, is `docs/guide/accounts-and-terms.md`. Sources, fetched 2026-11-27:
+   https://code.claude.com/docs/en/legal-and-compliance and
+   https://code.claude.com/docs/en/agent-sdk/overview (for the API-key steps also
+   https://code.claude.com/docs/en/authentication and https://learn.chatgpt.com/docs/auth).
+2. **Name: keep "Masthead".**
+3. **npm: not published for 0.2.0.** Install from the GitHub release's `.tgz`
+   (`.github/workflows/release.yml` attaches it with `SHA256SUMS`) or from source. npm may come later;
+   the package name `@luxorium/masthead` stays as it is meanwhile (`"private": true`).
+4. **macOS: ship without a check on a real Mac**, stated in the CHANGELOG's Known limits; check later.
+
 ## What 0.2.0 is
 
 Masthead for anybody, not one person's machine: simple by default, on Linux, macOS and Windows,
@@ -35,7 +64,8 @@ text gathered in one file, no translations yet. No telemetry. Single-file instal
 
 ## Gates before anything is published outside GitHub pre-releases
 
-These are the person's, and nobody has done them:
+These are the person's. Gates 1 to 3 were decided on 2026-11-27 (see "Decided for the final");
+gate 4 is a known limit of the Codex backend.
 
 1. **Anthropic's terms.** The Agent SDK page says third-party developers may not offer claude.ai
    login, including agents built on the SDK, unless approved; the legal page allows an end user signing
@@ -46,6 +76,8 @@ These are the person's, and nobody has done them:
    exists for business/financial services and there is a company Masthead Data. No check has been done.
 4. **Codex's own sub-agents** could not be switched off in tests (`codex.md`). Until solved, a Codex
    team cannot guarantee the tier rules. Blocker for the Codex stage, not for the others.
+   Solved for 0.2.0: Codex's own sub-agents, image generation and goals are switched off (bravo,
+   checked for real 2026-11-27).
 
 ## Stages
 

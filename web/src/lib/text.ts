@@ -155,6 +155,7 @@ export const T = {
     stopWord: 'Stop',
     levels: 'Levels',
     levelsHelp: 'Each level can start helpers on the level below it.',
+    levelsGone: 'This chat’s team was removed in Settings. The chat keeps working with these levels, but they can no longer be changed.',
     startedBy: (name: string) => `Started by ${name}`,
     theOne: 'The one you talk to',
     atATime: 'Helpers at a time',
@@ -165,8 +166,6 @@ export const T = {
     more: (model: string) => `More ${model} helpers`,
     thinking: 'Thinking time',
     thinkingUpTo: 'Thinking time up to',
-    openChat: (name: string) => `Open ${name}'s chat`,
-    clickToOpen: 'Click to open the chat',
     task: 'Task',
     loading: 'Loading…',
     nothingYet: 'Nothing yet.',
@@ -222,10 +221,6 @@ export const T = {
     bypassWarning: 'Every agent can run any command and change any file without asking.',
     autoEffort: 'Let them decide how long to think',
     autoEffortHelp: 'Everyone starts with short thinking time; the main assistant raises its own, helpers ask the one above them.',
-    leanOpus: 'Keep Opus helpers light',
-    leanOpusHelp: 'They skip your connected services too.',
-    leanSub: 'Keep Sonnet and Haiku helpers light',
-    leanSubHelp: 'They skip your connected services, which keeps their memory small.',
     fold: 'Show helper reports as one line',
     foldHelp: 'Reports from helpers stay folded in a chat until you open them.',
     runLimit: 'Longest a helper may work',
@@ -278,8 +273,16 @@ export const T = {
     staysSignedIn: 'This browser stays signed in to Masthead until you forget it here, or the computer removes it.',
     forget: 'Forget this device',
     forgetHelp: 'Signs this browser out and removes it from the computer’s list. Use it on a phone or computer that is not yours.',
-    roleRead: 'This device can follow the chats but not change anything.',
-    roleApprove: 'This device can follow the chats and answer questions and permission requests, but not send messages or change settings.',
+    roleRead: 'This device can only read. It cannot send messages, answer requests or stop work.',
+    roleApprove: 'This device can answer requests and stop work. It cannot send messages, add pictures or change settings.',
+    /** Under the role line: how to get more. */
+    askMore: 'To do more, change what this device may do on the computer, in Settings → Remote access.',
+    /** On a request card a read-only device sees. */
+    cannotAnswer: 'This device can only read, so it cannot answer. Answer on the computer.',
+    /** On the tidy-up card a read-only device sees. */
+    cannotTidy: 'This device can only read, so it cannot choose. Choose on the computer.',
+    /** The reply stop control for a device that may stop but not send. */
+    stopReply: 'Stop reply',
   },
 
   /** Remote access (web/src/lib/remote). */
@@ -399,8 +402,8 @@ export const T = {
     duplicate: 'Make a copy',
     remove: 'Remove team',
     removeConfirm: (name: string) => `Remove the team “${name}”? Chats that used it keep their history.`,
+    kept: (name: string, chats: number) => `Kept “${name}”: ${chats === 1 ? '1 chat uses it' : `${chats} chats use it`}.`,
     reset: 'Reset to the built-in team',
-    resetDone: 'Restored the built-in team.',
     builtIn: 'Built in',
     copyOf: (name: string) => `${name} (copy)`,
     proposalTitle: 'A team for Codex is ready',
@@ -474,12 +477,11 @@ export const T = {
     other: (tool: string) => `wants to use ${tool}`,
   } as { [tool: string]: string | ((tool: string) => string); other: (tool: string) => string },
 
-  map: {
+  /** The team outline's preview of an agent's latest lines. */
+  preview: {
     reportFrom: (name: string) => `Report from ${name}`,
     messageFrom: (name: string) => `Message from ${name}`,
-    meta: (thinking: string, memory: string) => `${thinking} thinking · ${memory} memory`,
     thinking: 'Thinking…',
-    onlyLead: (name: string) => `Only ${name} so far. Helpers it starts appear under it here, with what each one is doing.`,
   },
 
   compact: {
@@ -488,7 +490,6 @@ export const T = {
     settingHelp: 'When many helpers have finished, Masthead archives the ones no longer needed and frees up memory, then tells you what it did. Archived helpers can still be read and brought back. Turn this off to be asked first.',
     cardTitle: 'Tidy the team?',
     cardIntro: (keep: number, archive: number) => `Keep ${keep}, archive ${archive}. Archived helpers leave the team list; you can still read them and bring them back.`,
-    keepLabel: 'Keep',
     forced: 'Stays: still working, or needed by a helper that stays',
     why: (why: string) => `Why: ${why}`,
     noteFrom: (name: string) => `${name} says:`,

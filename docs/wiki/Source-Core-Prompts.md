@@ -63,7 +63,7 @@ All input reaches an agent as "user" messages. The tags let it tell three source
 
 ## Tests
 
-`test/prompts.test.ts`: the shared text names no backend or model and takes tier labels from the profile; lines follow capabilities; tool names appear as the backend shows them; the appended text is no longer than in 0.1.4; plus a `teamToolDefs` test. `test/unit.test.ts` ("prompts: each tier is told what it can do") and `test/conversation.test.ts` check the per-tier lines, the real effort level, a/an, the background line, envelope escaping, the reply line and the wait line. Read for this page, not run.
+`test/prompts.test.ts`: the shared text names no backend or model and takes tier labels from the profile; lines follow capabilities; tool names appear as the backend shows them; the appended text is no longer than in 0.1.4; plus two `teamToolDefs` tests (one neutral definition per agent, spawn only with a child tier, effort tools only with levels; `compact_team` accepts plain names as well as `{name, why}`). `test/unit.test.ts` ("prompts: each tier is told what it can do") and `test/conversation.test.ts` check the per-tier lines, the real effort level, a/an, the background line, envelope escaping, the reply line and the wait line. Read for this page, not run.
 
 ## Callers
 

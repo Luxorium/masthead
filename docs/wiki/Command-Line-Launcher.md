@@ -2,7 +2,7 @@
 
 `masthead` is the command you run. It is the compiled [server/main.ts](Source-Main.md) (`dist/server/main.js`), with its argument parsing in [server/cli.ts](Source-Cli.md). `scripts/install.sh` installs a small shell script, `~/.local/bin/masthead`, that runs that file with the Node it found; a global npm install puts the same file on `PATH`. The same file is the **launcher** (it starts a server if needed and opens the browser), the **server** itself (`masthead serve`), the **service installer** (`masthead service`) and the **set-up check** (`masthead doctor`). Folders differ per platform ([server/paths.ts](Source-Paths.md)); what differs between Linux, macOS and Windows is summed up on [Platforms](Platforms.md).
 
-> Checked against the 0.2.0 source on branch `next` (2026-11-27). The behaviour described here is read from the code, not verified by running. The macOS and Windows paths are not verified on those systems.
+> Checked against the 0.2.0 source on branch `next` (2026-11-27, including the working-tree change that makes commands follow the installed service's port). The behaviour described here is read from the code, not verified by running. The macOS and Windows paths are not verified on those systems.
 
 ## Commands
 
@@ -10,12 +10,13 @@
 |---|---|---|
 | `masthead` (same as `masthead open`) | Checks that the web page has been built, starts a server if none answers on the port, checks that the server proves it knows this data folder's secret, prints the address and opens the browser signed in (through a private sign-in file, see below). | 0; 1 if the page is not built, the server did not start, the secret cannot be read, or the server on the port did not prove it knows the secret |
 | `masthead serve` | Runs the server in this terminal until Ctrl+C. | 1 if the port is taken or it cannot start |
-| `masthead status` | Says whether a Masthead server answers on the port, with its version and process id. | 0 running, 3 not running |
+| `masthead status` | Says whether a Masthead server answers on the port: `Masthead <version> is running at http://127.0.0.1:<port> (pid <pid>)` or `Masthead is not running.` | 0 running, 3 not running |
 | `masthead stop` | Stops the server on the port and checks that it stopped. Working agents are stopped too. | 0 (also when nothing was running); 1 if it is still running, did not prove it knows the secret, refused the secret, or there is no local secret file |
 | `masthead service install` | Installs and starts a background service that starts Masthead when you log in: a systemd user unit (Linux), a launchd agent (macOS) or a Task Scheduler task (Windows). Refuses while agents are working unless `--force`. See [`service`](#service). | 0; 1 if agents are working (without `--force`), a step failed, or there is no service manager for this platform |
 | `masthead service uninstall` | Stops and removes that service. | 0; 1 if a step failed |
 | `masthead service status` (also plain `masthead service`) | Says whether the service is installed and running, and its port. | 0 installed; 3 not installed; 1 no service manager for this platform |
 | `masthead service <other>` | Prints `Usage: masthead service install\|uninstall\|status [--port N] [--force]`. | 2 |
+| `masthead remote off` | Turns off Masthead's own `tailscale serve` entry if remote access was on. See [`remote off`](#remote-off). | 0; 2 for any other word after `remote` (`Usage: masthead remote off   (switch remote access on in Settings → Remote access)`) |
 | `masthead doctor` | Checks the set-up, one line per check, with a fix for each problem. `--json` prints the checks as JSON instead. See [`doctor`](#doctor). | 0 when no check failed (warnings allowed); 1 otherwise |
 | `masthead version`, `masthead --version` | Prints the version (`VERSION` in `shared/protocol.ts`). `--version` anywhere wins over every other word. | 0 |
 | `masthead help`, `--help`, `-h` | Prints the usage. `--help` or `-h` anywhere wins over the command word. | 0 |
@@ -23,7 +24,8 @@
 
 Options can come before or after the command word.
 
-- **`--port N`**, **`--port=N`**, or the **`MASTHEAD_PORT`** variable, in that order; the default is 7717. The value must be digits only and from 1024 to 65535, and `--port` must be followed by a value that does not start with `-`. Otherwise the command prints the reason and exits 2, for every command (`parsePort()`). An empty `MASTHEAD_PORT` is ignored.
+- **`--port N`**, **`--port=N`**, or the **`MASTHEAD_PORT`** variable, in that order (`requestedPort()` in `server/cli.ts`). The value must be digits only and from 1024 to 65535, and `--port` must be followed by a value that does not start with `-`. Otherwise the command prints the reason and exits 2, for every command. An empty `MASTHEAD_PORT` is ignored.
+- **When no port is asked for**, `open`, `status`, `stop`, `service` and `doctor` use the installed background service's port if a service is installed and reports one, so `masthead stop` finds a service installed with `--port 7727`; otherwise, or if the service manager cannot be asked, 7717 (`commandPort()` in `server/cli.ts`, `portFor()` in `server/main.ts`). `serve`, `remote`, `version` and `help` always use the asked-for port or 7717 (`parsePort()`).
 - **`--force`**: with `service install`, install even though agents are working (installing restarts Masthead, which stops them).
 - **`--json`**: with `doctor`, print the checks as a JSON array of `{ name, ok, warn?, detail, fix? }`.
 - **`--no-browser`**: with `open`, start the server and print the address but do not open a browser. When stdout is a terminal it also prints the sign-in address, key included, to paste into a browser by hand.
@@ -69,7 +71,7 @@ systemd is Linux's service manager; a *user unit* is a service that runs as you.
 
 If the unit's port is the port you asked for, `open` runs `systemctl --user start masthead.service` and `stop` runs `systemctl --user stop masthead.service`. Any other port gets a separate server of its own, so `masthead --port 7720` never touches the installed service.
 
-That separate server is a second copy of `masthead serve --port N`, started with the same Node, detached from the terminal (with no console window on Windows), with its output thrown away. It keeps running after the launcher exits and has the launcher's environment. Because you cannot see its output, a failure only says "Masthead did not start. Try `masthead serve` to see why." Running `masthead serve --port N` shows the real error.
+That separate server is a second copy of `masthead serve --port N`, started with the same Node, detached from the terminal (with no console window on Windows), with its output thrown away. It keeps running after the launcher exits and has the launcher's environment. Because you cannot see its output, a failure only says "Masthead did not start. Try `masthead serve` to see why." (with `--port N` added when N is not 7717, and `masthead.cmd` on Windows, as in every hint the launcher prints: `mastheadCommand()` in `server/paths.ts`). Running `masthead serve --port N` shows the real error.
 
 ### Opening the browser
 
@@ -86,7 +88,7 @@ The key is never put on a command line, where other users could read it with `ps
 The page saves the key in that browser for this address and removes it from the address bar, so it is not left in the address or in bookmarks (the browser may still record the addresses in its history; not verified). There is no cookie and no login. See [Security model](Security-Model.md#the-local-secret).
 
 - If neither opener exists, the file cannot be written, or the opener fails, no file is left. In a terminal it prints `Open this address in your browser to sign it in (keep it private):` with the address, key included. When output goes to a pipe or a file, the key is not printed; it prints ``Could not open the browser. Run `masthead --no-browser` in a terminal to get the sign-in address.`` instead.
-- In a terminal, the output always ends with `If the browser did not open signed in, run: masthead --no-browser`, also after the browser was opened.
+- In a terminal, the output always ends with `If the browser did not open signed in, run: masthead --no-browser`, also after the browser was opened. The command named there carries `--port N` when N is not 7717 and is `masthead.cmd` on Windows (`noBrowserCommand()`).
 - With `--no-browser` nothing is opened. In a terminal it prints `Sign-in address (keep it private):` and the address; when output goes to a pipe or a file the key is not printed. A tab you open by hand at the plain address works only if that browser already holds the key for that address (each address, such as `127.0.0.1:7717` and `localhost:7717`, has its own storage).
 - A snap or flatpak browser may be unable to read the sign-in file in `$XDG_RUNTIME_DIR` or the data folder. Then run `masthead --no-browser` in a terminal and paste the printed address.
 - Whether a real browser follows the sign-in file's redirect was not verified by running.
@@ -124,7 +126,7 @@ The page saves the key in that browser for this address and removes it from the 
 | other | none | ``Masthead has no background service for <platform>; run `masthead serve` instead.``, exit 1. |
 
 - `install` first asks the server on the port how many conversations are working (`busy` in `/api/health`). If any are and `--force` is not given: `Masthead has agents working in <n> conversation(s); installing restarts it and stops them. Run again when they have finished, or with --force.`, exit 1.
-- The service gets the port you asked for (`--port` or `MASTHEAD_PORT`) when it is not 7717. On Linux and macOS it also gets a cleaned `PATH`, the Claude Code that was found (`MASTHEAD_CLAUDE`) and `MASTHEAD_DATA_DIR`/`MASTHEAD_CONFIG_DIR` and `XDG_CONFIG_HOME`/`XDG_DATA_HOME` if set; `status` shows the data folder the service uses. On Windows only the port is passed; `install` says so when `MASTHEAD_CLAUDE`, `MASTHEAD_*_DIR` or `XDG_*` were set, so you can set them with `setx`.
+- The service gets the port you asked for (`--port` or `MASTHEAD_PORT`) when it is not 7717. Without either, the port is that of the service already installed (see the options above), so installing again keeps its port. On Linux and macOS it also gets a cleaned `PATH`, the Claude Code that was found (`MASTHEAD_CLAUDE`) and `MASTHEAD_DATA_DIR`/`MASTHEAD_CONFIG_DIR` and `XDG_CONFIG_HOME`/`XDG_DATA_HOME` if set; `status` shows the data folder the service uses. On Windows only the port is passed; `install` says so when `MASTHEAD_CLAUDE`, `MASTHEAD_*_DIR` or `XDG_*` were set, so you can set them with `setx`.
 - A value containing a line break (or NUL) is refused before anything is written. A step that fails after the file was written removes what was written (and the task or agent) before the error.
 - `uninstall` first turns off Masthead's own Tailscale entry if remote access was on (or prints `tailscale serve --https=<port> off` to run). Uninstalling when nothing is installed says `Nothing was installed.`
 - `status` prints `statusSummary()` (`server/service/common.ts`): whether Masthead answers on the port and who started it, e.g. `Installed (taskscheduler). Masthead is running on port 7727, started by hand; the service starts it at login. (<detail>)`, or `Not installed (<kind>). Masthead is not running on port N.` After `install` the same line is printed, once Masthead answers (or after about 5 s); when a copy started by hand holds the port, it adds how to hand over: `masthead stop`, then `masthead service install` again.
@@ -132,7 +134,7 @@ The page saves the key in that browser for this address and removes it from the 
 
 ## `remote off`
 
-`masthead remote off` turns off Masthead's own `tailscale serve` entry if remote access was on, and nothing else: only an entry on Masthead's port that points at Masthead's own target is removed. If Tailscale refuses, it prints the exact command (`tailscale serve --https=<port> off`). Switching remote access on is done in the page. `scripts/uninstall.sh` runs it.
+`masthead remote off` turns off Masthead's own `tailscale serve` entry if remote access was on, and nothing else: only an entry on Masthead's port that points at Masthead's own target is removed. If Tailscale refuses, it prints the exact command (`tailscale serve --https=<port> off`). Switching remote access on is done in the page. When remote access is off or there is no entry of Masthead's it prints `Masthead has no Tailscale entry to turn off.`; it does not use the port options. `scripts/uninstall.sh` runs it.
 
 ## `doctor`
 
@@ -157,7 +159,7 @@ Exit 0 when no check failed (warnings allowed), else 1. `--json` prints the same
 |---|---|
 | 0 | Success; `stop` with nothing running; `help` |
 | 1 | Page not built; server did not start; port in use; secret unreadable; the server on the port did not prove it knows the secret; `stop` refused, had no local secret, or server still running; `service`: no service manager here, agents working without `--force`, or a step failed; `doctor`: a check failed |
-| 2 | Bad `--port`, `MASTHEAD_PORT` or (for `serve`) `MASTHEAD_DEV_WEB_PORT`; unknown command (the usage is printed); unknown `service` sub-command |
+| 2 | Bad `--port`, `MASTHEAD_PORT` or (for `serve`) `MASTHEAD_DEV_WEB_PORT`; unknown command (the usage is printed); unknown `service` sub-command; `remote` without `off` |
 | 3 | `status` and nothing is running; `service status` and no service installed |
 
 ## Related pages

@@ -5,7 +5,8 @@
 ## Where things are kept
 
 Everything stays on your computer. Masthead sends nothing anywhere except through the agent program
-you use (Claude Code or Codex).
+you use (Claude Code or Codex) and, if you switch on remote access, to your own approved devices
+over Tailscale.
 
 | | Settings | Chats and the local secret |
 |---|---|---|
@@ -36,12 +37,19 @@ safest way back.
 
 Updating restarts Masthead, which stops any helper that is working. Wait until they have finished.
 
-**Once Masthead is published:** run `npm i -g --os=none --cpu=none @luxorium/masthead` again (the name may
-change before it is published), then `masthead stop` and `masthead`.
+New versions are listed on the [releases page](https://github.com/Luxorium/masthead/releases).
+Masthead is not on the npm registry; it may be later.
 
-**From source, today:**
+**If you installed with the install command:** run the install command from
+[Installing Masthead](installing.md) again, with the new version's address from the releases page
+(the `.tgz` file listed under the release), then `masthead stop` and `masthead`. If you use the
+service, run `masthead service install` instead of `masthead`; it restarts the service with the new
+version.
 
-1. In the `masthead` folder you downloaded: `git pull`.
+**If you installed from source:**
+
+1. In the `masthead` folder you downloaded: `git fetch --tags`, then `git checkout v<new version>`
+   (for example `git checkout v0.2.1`).
 2. Windows and macOS (and Linux if you installed with npm):
    1. `npm ci`
    2. `npm pack`

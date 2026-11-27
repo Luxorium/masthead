@@ -1,9 +1,12 @@
 # Compact team (0.2.0-beta.2)
 
-Status: design, 2026-11-28, foxtrot (core) with echo (backends), golf (app/protocol), charlie (page).
+> **History.** This plan was built in 0.2.0 (it first shipped in the 0.2.0-beta.2 pre-release). It is kept as the record of the design and the evidence; where it
+> differs from the code, the code and `docs/wiki/` are right.
+
+Status: design, 2026-11-27, foxtrot (core) with echo (backends), golf (app/protocol), charlie (page).
 Nothing happens unless the person agrees.
 
-## What the person sees (decided 2026-11-28: fully automatic, told afterwards)
+## What the person sees (decided 2026-11-27: fully automatic, told afterwards)
 
 1. **Automatic** (setting `autoCompact`, default on; "Tidy the team automatically"): when the lead's
    turn ends and the team has about 15 finished helpers, or the lead's memory is past about 70 %,

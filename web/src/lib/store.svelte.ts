@@ -175,7 +175,8 @@ export class Store {
   archivedAgents = $derived(Object.values(this.agents).filter((a) => !!a.archived).sort((a, b) => (b.archived ?? 0) - (a.archived ?? 0)));
   /** A team tidy-up (compaction) under way or just ended in the open chat; null when none. */
   compact = $state<CompactState | null>(null);
-  lead = $derived(this.agentList.find((a) => a.tier === 'lead') ?? null);
+  /** The one the person talks to: the agent nobody started. Its tier id is 'lead' only in Claude's built-in team (other teams use '<profile>:0'). */
+  lead = $derived(this.agentList.find((a) => !a.parentId) ?? null);
   viewAgent = $derived((this.viewAgentId ? this.agents[this.viewAgentId] : null) ?? this.lead);
   viewItems = $derived(this.viewAgent ? (this.items[this.viewAgent.id] ?? []) : []);
   viewDraft = $derived(this.viewAgent ? (this.drafts[this.viewAgent.id] ?? null) : null);
@@ -188,7 +189,7 @@ export class Store {
       (this.backends.some((b) => b.available === true) || !!this.app.claude.path || !!this.app.claude.version),
   );
   convPending = $derived(this.pending.filter((p) => p.convId === this.convId));
-  liveCount = $derived(this.agentList.filter((a) => a.tier !== 'lead' && (a.status === 'queued' || a.status === 'running' || a.status === 'waiting')).length);
+  liveCount = $derived(this.agentList.filter((a) => !!a.parentId && (a.status === 'queued' || a.status === 'running' || a.status === 'waiting')).length);
 
   /** The key in the composer map for what is on screen now. */
   composerKey = $derived(`${this.convId ?? 'new'}:${this.viewAgentId ?? 'lead'}`);
@@ -803,7 +804,7 @@ export class Store {
 
   /** Shows one agent's transcript. */
   viewOf(agentId: string): void {
-    const isLead = this.agents[agentId]?.tier === 'lead';
+    const isLead = !this.agents[agentId]?.parentId;
     this.viewAgentId = isLead ? null : agentId;
     this.loadItems(agentId);
   }

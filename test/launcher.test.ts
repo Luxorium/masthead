@@ -7,7 +7,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { SIGN_IN_STALE_MS, UsageError, noBrowserCommand, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, onPath, openersFor, removeLaterArgs, unitPortFrom, writeSignInFile, type Opener } from '../server/cli.ts';
+import { SIGN_IN_STALE_MS, UsageError, noBrowserCommand, openSignedIn, parseCommand, parseDevWebPort, parsePort, commandPort, serverProves, signInDir, signInUrl, onPath, openersFor, removeLaterArgs, unitPortFrom, writeSignInFile, type Opener } from '../server/cli.ts';
 
 /** File modes and bash exist only on POSIX systems; Windows runners skip those checks. */
 const POSIX = process.platform !== 'win32';
@@ -23,6 +23,22 @@ test('launcher: the port comes from --port, then MASTHEAD_PORT, then the default
   assert.equal(parsePort([], { MASTHEAD_PORT: '7722' }), 7722);
   assert.equal(parsePort(['--port', '7723'], { MASTHEAD_PORT: '7722' }), 7723, '--port wins');
   assert.equal(parsePort([], { MASTHEAD_PORT: '' }), DEFAULT_PORT);
+});
+
+test('launcher: without --port, commands follow the installed service port', async () => {
+  const svc = (port: number | null, installed = true) => async () => ({ installed, port });
+  for (const cmd of ['stop', 'status', 'open', 'doctor', 'service']) assert.equal(await commandPort(cmd, [cmd], {}, svc(7727)), 7727, cmd);
+  assert.equal(await commandPort('stop', ['stop', '--port', '7720'], {}, svc(7727)), 7720, '--port wins');
+  assert.equal(await commandPort('stop', ['stop'], { MASTHEAD_PORT: '7722' }, svc(7727)), 7722, 'MASTHEAD_PORT wins');
+  assert.equal(await commandPort('stop', ['stop'], {}, svc(7727, false)), DEFAULT_PORT, 'not installed');
+  assert.equal(await commandPort('stop', ['stop'], {}, async () => null), DEFAULT_PORT, 'no service manager');
+  assert.equal(await commandPort('stop', ['stop'], {}, async () => { throw new Error('schtasks failed'); }), DEFAULT_PORT, 'query failed');
+  let asked = false;
+  const spy = async () => ((asked = true), { installed: true, port: 7727 });
+  assert.equal(await commandPort('serve', ['serve'], {}, spy), DEFAULT_PORT, 'serve keeps the default');
+  assert.equal(await commandPort('version', ['version'], {}, spy), DEFAULT_PORT);
+  assert.equal(asked, false, 'the service is not asked for commands without a port');
+  await assert.rejects(commandPort('stop', ['stop', '--port', 'x'], {}, svc(7727)), UsageError);
 });
 
 test('launcher: a missing or bad port is an error, never a silent fallback', () => {

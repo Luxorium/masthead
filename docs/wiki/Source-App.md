@@ -45,6 +45,7 @@ Re-exported from `clients.ts` (see [Client and HubHost](Source-Clients.md#client
 - `scheduleSave(conv)`: if no save is pending, start a 400 ms timer; when it fires, save `conv.toStored()` if the conversation still exists. Changes during those 400 ms are included because state is read when the timer fires.
 - `flush()`: write all pending saves now.
 - `keepAwake()` (private): `awake.set(true)` while the `keepAwake` setting is not `false` and `workingCount() > 0`, else `awake.set(false)`. It is called when a conversation's busy state changes, on delete, and on every settings update. (A stray doc comment, "Stops every agent and writes everything to disk.", sits above the `awake` field; it belongs to `shutdown()`.)
+- `updateSettings(next)` (private): every settings change goes through it. It keeps `next`, saves it with `saveSettings()` (through `safely('settings')`; a file from a newer Masthead is not written, see [Settings](Source-Settings.md#savesettingss-file--settings_file)), calls `keepAwake()`, `scheduler.limitsChanged()` and `settingsChanged()` on every conversation, then broadcasts `{t:'settings'}`.
 - `shutdown()`: `awake.stop()`, deny all pending approvals ("Masthead is shutting down."), `shutdown()` every conversation, `flush()`, and dispose the registry.
 
 ## For the transport
@@ -62,6 +63,7 @@ Re-exported from `clients.ts` (see [Client and HubHost](Source-Clients.md#client
 - `state(client?)`: the `AppState`. It has the version, settings, `metas()`, Claude Code info, home folder, every open approval request and the kept usage notices. When a client is given it adds:
   - `remote` (from `remote.state()`) only for a local client, never for a device;
   - `backends` (`registry.status()`) only for a version 2 client;
+  - `problems` only for a version 2 client, and only when there are some: from the private `problems()`, plain-language notes about saved files this run leaves alone: `settingsProblem(settingsFile)` (settings from a newer Masthead, see [Settings](Source-Settings.md#settingsproblemfile--settings_file)) as `what: 'settings'`, and, when the remote-access device list was saved by a newer Masthead (`remote.registry.newerFile`), "The list of allowed devices was saved by a newer version of Masthead. Remote access stays off here so that list is not changed." as `what: 'devices'`;
   - `blobToken` when the client has one.
 - The Hub's host functions: `snapshot(convId)` (meta, agents, that conversation's pending requests, and each agent's newest stored item id via `store.readItems(…, {limit: 1})`), `fullItem()` (one stored item, only if the agent belongs to the conversation), and `state(client)`.
 
@@ -90,19 +92,19 @@ Returns true for the types it handles. The comment says these come from the loca
 - **`check_backends`**: re-runs `registry.detectAll()` in the background, then `backendsDetected()` and a broadcast of `{t:'backends', backends}` to every tab. The comment says any approved device may ask except `read` devices, because it runs programs to check versions.
 - **`forget_me`**: a device removing its own approval. It needs `client.deviceId` (`refused`, "Only a paired device can forget itself.") and calls `remote.forget(deviceId)`, which revokes the device, writes a `forget` audit entry and ends its sockets. The gate refuses it from the local browser.
 - **`remote_audit`**: sends this tab `{t:'remote_audit', entries: remote.audit()}`.
-- **`delete_profile`** (`id`, `force?`): an unknown team is `not_found`. If chats use it (`chatsUsing()` over every conversation's `meta.profileId`) and `force` is not true, the tab gets `{t:'error', code:'refused', message, inUse: {id, chats}}` and nothing changes. Otherwise `updateSettings(deleteProfile(...))`; the built-in Claude team cannot be deleted (`refused`). Tested in `test/protocol-v2.test.ts`.
-- **Team compaction** (foxtrot's flow in `server/core/conversation.ts`; tested in `test/compact-app.test.ts`):
+- **`delete_profile`** (`id`, `force?`): an unknown team is `not_found` ("There is no such team."). If chats use it (`chatsUsing()` over every conversation's `meta.profileId`) and `force` is not true, the tab gets `{t:'error', code:'refused', message, inUse: {id, chats}}` (message "1 chat uses this team." or "N chats use this team.") and nothing changes. Otherwise `updateSettings(deleteProfile(...))`; the built-in Claude team cannot be deleted (`refused`, "This team cannot be deleted."). Tested in `test/protocol-v2.test.ts`.
+- **Team compaction** (the flow is in `server/core/conversation.ts`; tested in `test/compact-app.test.ts`):
   - **`compact_answer`** (`convId`, `id`, `keep`, `accept`): `conv.answerCompact(id, keep, accept === true)`; `keep` keeps only strings, at most 200.
   - **`compact_cancel`** (`convId`): `conv.cancelCompact()`.
   - **`restore_agent`** (`convId`, `agentId`): `conv.restoreAgent(agentId)`.
-  - **`auto_compact`** (`convId`, `on`): `conv.setAutoCompact(on)`; a non-boolean `on` is `invalid`.
-  - **`archive_items`** (`convId`, `agentId`, `before?`, `limit?`): like `items`, paged when `limit` is given, and only for an agent with `info.archived` set (`not_found` otherwise). Replies `{t:'archive_items', convId, agentId, items, cursor?, more?}`.
+  - **`auto_compact`** (`convId`, `on`): `conv.setAutoCompact(on)`; a non-boolean `on` is `invalid` ("Say on or off.").
+  - **`archive_items`** (`convId`, `agentId`, `before?`, `limit?`): like `items`, paged when `limit` is given, and only for an agent with `info.archived` set (`not_found` "That agent is not archived here." otherwise). Replies `{t:'archive_items', convId, agentId, items, cursor?, more?}`.
 
 ### `/compact` and the compaction hooks
 
 - In **`send`** to an existing conversation, a message to the main assistant (no `agentId`, or the lead's) whose trimmed text is exactly `/compact` or `/compact <words>`, with no images, calls `conv.startCompact(words)` instead of `userSend()`. Anything else, including `/compact` to a helper, is chat.
 - **`readItems(convId, agentId)`** (ConversationHost) returns the stored transcript (`store.loadItems`), for the `read_archive` tool.
-- **`compactChanged(conv)`** (ConversationHost) broadcasts `{t:'compact', convId, compact: meta.compact ?? null}` and `{t:'archived', convId, agents}` (the agents with `archived` set) to every tab.
+- **`compactChanged(conv)`** (ConversationHost) does nothing for a conversation that is no longer registered; otherwise it broadcasts `{t:'compact', convId, compact: meta.compact ?? null}` and `{t:'archived', convId, agents}` (the agents with `archived` set) to every tab.
 
 ## dispatch(): the version 1 messages
 
@@ -117,7 +119,7 @@ One `switch` on `msg.t`. The message shapes are on [Browser/server protocol](Bro
 - **`send`**: see [below](#send).
 - **`interrupt`**: `conv.interruptLead()`. **`stop_agent`**: `conv.stopAgent(agentId, 'Stopped by the person.')`. **`stop_all`**: `conv.stopAll()`.
 - **`permission`**: `answerPermission()`.
-- **`settings`**: `updateSettings(sanitizeSettings(msg.settings, current))`, so a partial update changes only the fields it names.
+- **`settings`**: `updateSettings(sanitizeSettings(raw, current))`, so a partial update changes only the fields it names. When the update carries `profiles`, they first pass through `freshProfileIds(profiles, current, held)`, where `held` is every conversation's `meta.profileId` (default `claude`). A new team that would take the id of a deleted team still used by chats gets a fresh id (`mini` → `mini-2`), so those chats keep the old team's levels.
 - **`rename`**: whitespace collapsed, trimmed, cut to 120 characters; an empty result changes nothing. Then `metaChanged()`.
 - **`delete`**: `stopAll()` and `shutdown()` on the conversation, cancel its save timer, forget it and its busy entry, `keepAwake()`, delete its folder, and broadcast `deleted` and the new list. The Hub drops its ring and subscriptions.
 - **`dirs`**: `listDirs(path)`.

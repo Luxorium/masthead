@@ -4,7 +4,7 @@
 
 ## Levels
 
-`Effort` in `shared/protocol.ts` is `'low' | 'medium' | 'high' | 'xhigh'`, shown as Low, Medium, High and Extra (`EFFORT_LABEL`). Claude Code also knows a `max` level; Masthead deliberately leaves it out, so no agent can reach it. `effortRank()` orders the levels and `capEffort(wanted, ceiling)` returns the lower of two.
+`Effort` in `shared/protocol.ts` is `'low' | 'medium' | 'high' | 'xhigh'`, shown on the page as Short, Medium, Long and Longest (`T.effort` in `web/src/lib/text.ts`). Claude Code also knows a `max` level; Masthead deliberately leaves it out, so no agent can reach it. `effortRank()` orders the levels and `capEffort(wanted, ceiling)` returns the lower of two.
 
 ### Levels per backend
 

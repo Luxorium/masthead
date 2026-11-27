@@ -1,17 +1,24 @@
 <script lang="ts">
   // Advanced only: the levels of this chat's team (its profile), each with how many helpers may work at
   // a time and how long they may think. Levels come from the profile in the settings, 1 to 5 of them.
-  import { EFFORTS, MAX_PER_TIER, modelLabel, type Effort, type Settings } from '../../../../shared/protocol.ts';
+  import { EFFORTS, MAX_PER_TIER, PALETTE, modelLabel, type Effort, type Settings, type TierSpec } from '../../../../shared/protocol.ts';
   import { store } from '../store.svelte.ts';
   import { T } from '../text.ts';
   import { profileById, tierClass } from '../tiers.ts';
 
-  const profile = $derived(profileById(store.settings, store.conv?.profileId ?? store.settings?.defaultProfile));
+  // A chat whose team was removed from Settings keeps its stored copy of the levels (conv.team): shown
+  // as they are, not changeable, rather than falling back to another team's levels.
+  const gone = $derived(
+    !!store.conv?.profileId && !store.settings?.profiles.some((p) => p.id === store.conv?.profileId) && (store.conv?.team?.length ?? 0) > 0,
+  );
+  const profile = $derived(
+    gone ? { id: '', label: '', builtIn: false, tiers: store.conv!.team! } : profileById(store.settings, store.conv?.profileId ?? store.settings?.defaultProfile),
+  );
 
   /** Changes one level of this profile and saves (the whole profile list goes, as the server expects). */
   function change(index: number, edit: (t: Settings['profiles'][number]['tiers'][number]) => void) {
     const id = profile?.id;
-    if (!id) return;
+    if (!id || gone) return;
     store.updateSettings((s) => {
       const p = s.profiles.find((x) => x.id === id);
       if (p?.tiers[index]) edit(p.tiers[index]!);
@@ -22,6 +29,8 @@
   const running = (tier: string) => count(tier, (a) => a.status === 'running' || a.status === 'waiting');
   const queued = (tier: string) => count(tier, (a) => a.status === 'queued');
   const label = (t: { label: string; model: string }) => t.label || modelLabel(t.model);
+  /** The level's colour class; a removed team's levels are no longer in the settings, so their own colour. */
+  const cls = (s: Settings, t: TierSpec) => (gone && PALETTE.includes(t.colour) ? `pal-${t.colour}` : tierClass(s, t.id));
 </script>
 
 {#if store.settings && profile}
@@ -29,11 +38,11 @@
   {@const thinking = s.autoEffort ? T.team.thinkingUpTo : T.team.thinking}
   <section class="levels" aria-labelledby="levels-h">
     <h2 id="levels-h">{T.team.levels}</h2>
-    <p class="help">{T.team.levelsHelp}</p>
+    <p class="help">{gone ? T.team.levelsGone : T.team.levelsHelp}</p>
     {#each profile.tiers as t, i (t.id)}
-      <div class="tier tier-{t.id} {tierClass(s, t.id)}" class:off={i > 0 && t.max === 0}>
+      <div class="tier tier-{t.id} {cls(s, t)}" class:off={i > 0 && t.max === 0}>
         <div class="tier-head">
-          <span class="tier-badge {tierClass(s, t.id)}">{label(t)}</span>
+          <span class="tier-badge {cls(s, t)}">{label(t)}</span>
           <span class="under">{i === 0 ? T.team.theOne : T.team.startedBy(label(profile.tiers[i - 1]!))}</span>
         </div>
         {#if i > 0}
@@ -44,15 +53,15 @@
               {#if queued(t.id) > 0}<span class="queued"> · {T.team.queued(queued(t.id))}</span>{/if}
             </span>
             <span class="stepper">
-              <button onclick={() => change(i, (x) => (x.max = Math.max(0, x.max - 1)))} disabled={t.max <= 0} aria-label={T.team.fewer(label(t))}>−</button>
+              <button onclick={() => change(i, (x) => (x.max = Math.max(0, x.max - 1)))} disabled={gone || t.max <= 0} aria-label={T.team.fewer(label(t))}>−</button>
               <output aria-live="polite">{t.max === 0 ? T.team.off : t.max}</output>
-              <button onclick={() => change(i, (x) => (x.max = Math.min(MAX_PER_TIER, x.max + 1)))} disabled={t.max >= MAX_PER_TIER} aria-label={T.team.more(label(t))}>+</button>
+              <button onclick={() => change(i, (x) => (x.max = Math.min(MAX_PER_TIER, x.max + 1)))} disabled={gone || t.max >= MAX_PER_TIER} aria-label={T.team.more(label(t))}>+</button>
             </span>
           </div>
         {/if}
         <label class="line">
           <span>{thinking}</span>
-          <select value={t.effort} onchange={(e) => change(i, (x) => (x.effort = e.currentTarget.value as Effort))}>
+          <select value={t.effort} disabled={gone} onchange={(e) => change(i, (x) => (x.effort = e.currentTarget.value as Effort))}>
             {#each EFFORTS as e (e)}<option value={e}>{T.effort[e]}</option>{/each}
           </select>
         </label>

@@ -92,19 +92,23 @@ export function removeLevel(p: TeamProfile, index: number): TeamProfile {
   return { ...p, tiers: p.tiers.filter((_, i) => i !== index) };
 }
 
-/** A slug id for a person's own team that no other team has. */
-export function newProfileId(label: string, all: TeamProfile[]): string {
+/**
+ * A slug id for a person's own team that no other team has. `taken` are ids still named by chats
+ * (conversation.profileId): a removed team's id must not come back, or its chats would join the new team.
+ */
+export function newProfileId(label: string, all: TeamProfile[], taken: Iterable<string | undefined> = []): string {
   const base = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'team';
+  const used = new Set<string | undefined>([...all.map((p) => p.id), ...taken]);
   let id = base;
-  for (let i = 2; all.some((p) => p.id === id); i++) id = `${base}-${i}`;
+  for (let i = 2; used.has(id); i++) id = `${base}-${i}`;
   return id;
 }
 
 /** A copy of a team that the person owns (not built in), with its own id and level ids. */
-export function copyOf(p: TeamProfile, all: TeamProfile[]): TeamProfile {
+export function copyOf(p: TeamProfile, all: TeamProfile[], taken: Iterable<string | undefined> = []): TeamProfile {
   let label = ST.teams.copyOf(p.label);
   for (let i = 2; all.some((o) => o.label === label); i++) label = `${ST.teams.copyOf(p.label)} ${i}`;
-  const id = newProfileId(label, all);
+  const id = newProfileId(label, all, taken);
   return { id, label, builtIn: false, tiers: p.tiers.map((t, i) => ({ ...t, id: `${id}:${i}` })) };
 }
 

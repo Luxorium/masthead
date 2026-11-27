@@ -1,18 +1,10 @@
 // Types shared by the server and the browser. Nothing in here may import Node or DOM APIs.
 
-export const VERSION = '0.2.0-beta.2';
+export const VERSION = '0.2.0';
 
 /** The four levels of the team. `lead` is the agent the person talks to. */
 export type Tier = 'lead' | 'opus' | 'sonnet' | 'haiku';
 export const TIERS: readonly Tier[] = ['lead', 'opus', 'sonnet', 'haiku'];
-
-/** Which tier an agent of a given tier may start. Haiku starts nothing. */
-export const CHILD_TIER: Record<Tier, Tier | null> = {
-  lead: 'opus',
-  opus: 'sonnet',
-  sonnet: 'haiku',
-  haiku: null,
-};
 
 /**
  * A tier as data (0.2.0 team profiles). Ids are unique across all profiles: the built-in Claude profile
@@ -79,14 +71,6 @@ export function isLeadTier(s: Pick<Settings, 'profiles'>, tier: TierId): boolean
   return profileOfTier(s, tier)?.tiers[0]?.id === tier;
 }
 
-export const TIER_LABEL: Record<Tier, string> = {
-  lead: 'Fable 5.2',
-  opus: 'Opus 5.5',
-  sonnet: 'Sonnet 5.5',
-  haiku: 'Haiku 5.5',
-};
-
-/** Masthead deliberately offers no `max` level. */
 /** A readable name for a model id: "claude-opus-5-5" becomes "Opus 5.5". Unknown ids are shown as they are. */
 export function modelLabel(model: string): string {
   const m = /^claude-(fable|mythos|opus|sonnet|haiku)-(\d+)(?:-(\d{1,2}))?(?![\d])/.exec(model);
@@ -129,9 +113,9 @@ export function displayName(name: string): string {
   return m ? `${shown} ${m[2]!.toUpperCase()}` : shown;
 }
 
+/** Masthead deliberately offers no `max` level. */
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh';
 export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh'];
-export const EFFORT_LABEL: Record<Effort, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra' };
 
 export function effortRank(e: Effort): number {
   return EFFORTS.indexOf(e);
@@ -212,8 +196,6 @@ export type AgentStatus =
   | 'done'
   | 'failed'
   | 'stopped';
-
-export const LIVE_STATUSES: readonly AgentStatus[] = ['queued', 'running', 'waiting'];
 
 export interface AgentUsage {
   /** Tokens in the agent's context window at its latest request. */

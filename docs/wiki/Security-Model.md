@@ -6,8 +6,45 @@ it does not protect against. How the agents themselves are kept in hand is on
 [Safety model](Safety-Model.md); use from other devices is on [Remote access](Remote-Access.md).
 
 Everything here was read from the code of 0.2.0 (branch `next`). The HTTP checks are covered by unit
-tests (see [Tests](Source-Tests.md)). Remote access has run only against a **fake Tailscale** in tests;
-the first run against the real one is the person's (see [Using Masthead from your phone](Using-Masthead-From-Your-Phone.md)).
+tests (see [Tests](Source-Tests.md)). Remote access has been checked on a real tailnet (a Linux computer running Masthead, an Android phone and
+a Windows device); its unit tests use a fake Tailscale. Setting it up: [Using Masthead from your phone](Using-Masthead-From-Your-Phone.md).
+
+## In short: how Masthead stays safe
+
+- **Loopback plus a secret.** The local listener is on `127.0.0.1` only. A page or socket that drives
+  it must present the 64-hex local secret from a `0600` file in your data folder. Host and Origin
+  checks stop other websites from using it.
+- **Remote access only through Tailscale, to a private socket.** While remote access is on, a second
+  listener runs on a Unix socket (mode `0600`) in a folder that must belong to you and must not be a
+  link (`$XDG_RUNTIME_DIR/masthead/`, else `/tmp/masthead-<uid>/`). Only `tailscale serve` forwards to
+  it, and it is never published through Funnel.
+- **Why root is needed once.** Tailscale lets only root serve a Unix socket. An operator is enough
+  only if `sudo` works without a password. So on Linux and macOS the settings show the exact command,
+  `sudo tailscale serve --bg --https=<port> unix:<socket>`, which you run once with your password.
+  After that, switching remote access on finds the entry and needs no root. Masthead adds and removes
+  only its own entry (`server/remote/access.ts`, `server/remote/tailscale.ts`).
+- **One socket per data folder.** The usual data folder uses `remote.sock`. Any other folder (a
+  second instance or a test server) gets `remote-<10 hex>.sock`, made from a hash of its path. Such an
+  instance sees the real serve entry as someone else's and never removes it
+  (`chooseTarget()` in `server/transport/remote.ts`).
+- **Test servers never call Tailscale.** With `MASTHEAD_TAILSCALE=off` or `MASTHEAD_BACKEND=fake`,
+  `tailscaleFor()` returns `OffTailscale`, which never runs the binary and refuses every change.
+- **Device pairing.** A device that asks gets a six-digit code. You approve it on this computer only
+  after the same code shows on the device. The device then gets a token, which works only from that
+  Tailscale node. Only the token's SHA-256 is stored, and the token expires after 30 days unused.
+- **Roles.** Each device is `full`, `approve` or `read`, and the device list says what each role
+  allows. Changing a role takes effect at once on the device's open connections, with no reconnect,
+  so a downgrade applies to its very next message (`setRole()`). Removing a device or letting its
+  approval expire closes its sockets with code `4001`, "Access was withdrawn." No role may manage
+  devices or remote access, or shut the server down; those are local only (`allowedMessage()`).
+- **What a remote device never receives.** The remote-access state (the device list, pending
+  requests, audit log and settings) and the local-only messages (`Hub.publishLocal()`). It also never
+  receives the local secret: a remote socket accepts only `device.<token>`, and its `/api/health`
+  answers only the name. A device reads a conversation's details only while subscribed to it.
+- **Windows caveat.** Tailscale cannot serve a Unix socket on Windows, so the remote listener there
+  is `127.0.0.1:7719`, which any local program can reach. Such a program still has no token and can
+  only ask to pair. The code shown when it asks will not match your device, and the settings say this
+  next to the switch.
 
 ## Two listeners
 

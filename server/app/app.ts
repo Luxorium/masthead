@@ -19,8 +19,8 @@ import {
 import type { Agent } from '../runtime/agent.js';
 import { HOME, SETTINGS_FILE } from '../paths.js';
 import { findClaude, type ClaudeInfo } from '../backends/claude/env.js';
-import { chatsUsing, deleteProfile, loadSettings, resetProfile, sanitizeSettings, settingsProblem, saveSettings, tierLimit, withBuiltInProfiles } from '../settings/settings.js';
-import { findTier } from '../../shared/protocol.js';
+import { chatsUsing, deleteProfile, freshProfileIds, loadSettings, resetProfile, sanitizeSettings, settingsProblem, saveSettings, tierLimit, withBuiltInProfiles } from '../settings/settings.js';
+import { CLAUDE_PROFILE, findTier } from '../../shared/protocol.js';
 import { Conversation, type ConversationHost } from '../core/conversation.js';
 import { Scheduler } from '../core/scheduler.js';
 import type { BlobRef } from '../storage/blobs.js';
@@ -395,7 +395,7 @@ export class App implements ConversationHost {
         const chats = chatsUsing(id, [...this.conversations.values()].map((c) => c.meta.profileId));
         if (chats > 0 && msg.force !== true) {
           // The page asks the person first; it sends the same request again with force.
-          client.send({ t: 'error', code: 'refused', message: `${chats} chat${chats === 1 ? '' : 's'} use this team.`, inUse: { id, chats } } as ServerMsg);
+          client.send({ t: 'error', code: 'refused', message: chats === 1 ? '1 chat uses this team.' : `${chats} chats use this team.`, inUse: { id, chats } } as ServerMsg);
           return true;
         }
         const next = deleteProfile(this.currentSettings, id);
@@ -574,8 +574,14 @@ export class App implements ConversationHost {
         return;
       case 'settings':
         // A partial update changes only the fields it names.
-        this.updateSettings(sanitizeSettings(msg.settings, this.currentSettings));
+      {
+        // A new team never takes the id of a deleted team that chats still run on (see freshProfileIds).
+        const patch = msg.settings as Record<string, unknown> | null;
+        const held = new Set([...this.conversations.values()].map((c) => c.meta.profileId ?? CLAUDE_PROFILE));
+        const raw = patch && typeof patch === 'object' && Array.isArray(patch.profiles) ? { ...patch, profiles: freshProfileIds(patch.profiles, this.currentSettings, held) } : patch;
+        this.updateSettings(sanitizeSettings(raw, this.currentSettings));
         return;
+      }
       case 'rename': {
         const conv = this.conv(msg.convId);
         const title = String(msg.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);

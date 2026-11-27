@@ -4,6 +4,7 @@ import { accessSync, constants, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { mastheadCommand } from './paths.js';
+import { VERSION } from '../shared/protocol.js';
 import type { ServiceManager } from './service/types.js';
 
 export interface Check {
@@ -161,6 +162,11 @@ async function serviceCheck(deps: DoctorDeps): Promise<Check> {
   }
 }
 
+/** The GitHub release tarball of a Masthead version (Masthead is not published to the npm registry). */
+export function releaseTarball(version: string): string {
+  return `https://github.com/Luxorium/masthead/releases/download/v${version}/luxorium-masthead-${version}.tgz`;
+}
+
 function sdkBinaryCheck(deps: DoctorDeps): Check {
   const name = 'SDK private binary';
   const dir = deps.sdkBinary();
@@ -171,7 +177,8 @@ function sdkBinaryCheck(deps: DoctorDeps): Check {
     warn: true,
     detail: `${dir} holds an unused private copy of Claude Code`,
     // npm ignores --omit=optional for a global install; os/cpu "none" skips every platform package.
-    fix: 'Reinstall without it: npm i -g --os=none --cpu=none @luxorium/masthead',
+    // Masthead is not on the npm registry: it installs from the release tarball of this version.
+    fix: `Reinstall without it: npm i -g --os=none --cpu=none ${releaseTarball(VERSION)}`,
   };
 }
 

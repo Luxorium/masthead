@@ -17,6 +17,11 @@ function checkPort(raw: string): number {
 
 /** The port asked for with `--port N`, `--port=N` or MASTHEAD_PORT, in that order, else the default. */
 export function parsePort(args: readonly string[], env: Record<string, string | undefined> = {}): number {
+  return requestedPort(args, env) ?? DEFAULT_PORT;
+}
+
+/** The port asked for with `--port N`, `--port=N` or MASTHEAD_PORT, in that order, or null when none was. */
+export function requestedPort(args: readonly string[], env: Record<string, string | undefined> = {}): number | null {
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === '--port') {
@@ -27,7 +32,33 @@ export function parsePort(args: readonly string[], env: Record<string, string | 
     if (a.startsWith('--port=')) return checkPort(a.slice('--port='.length));
   }
   const fromEnv = env.MASTHEAD_PORT;
-  return fromEnv ? checkPort(fromEnv) : DEFAULT_PORT;
+  return fromEnv ? checkPort(fromEnv) : null;
+}
+
+/** The commands that talk to a running Masthead or its service, and so follow the installed service's port. */
+const PORT_COMMANDS = new Set(['open', 'status', 'stop', 'service', 'doctor']);
+
+/**
+ * The port a command works on. An explicit --port or MASTHEAD_PORT wins; otherwise open, status, stop,
+ * service and doctor use the installed background service's port when there is one (so `masthead stop` finds a
+ * service installed with --port 7727), else the default. `installed` failing counts as no service.
+ */
+export async function commandPort(
+  cmd: string,
+  args: readonly string[],
+  env: Record<string, string | undefined>,
+  installed: () => Promise<{ installed: boolean; port: number | null } | null>,
+): Promise<number> {
+  const asked = requestedPort(args, env);
+  if (asked !== null) return asked;
+  if (!PORT_COMMANDS.has(cmd)) return DEFAULT_PORT;
+  try {
+    const st = await installed();
+    if (st?.installed && st.port) return st.port;
+  } catch {
+    // no service manager, or it could not be asked
+  }
+  return DEFAULT_PORT;
 }
 
 /** The command is the first word that is neither an option nor the value of --port; `open` when there is none. */

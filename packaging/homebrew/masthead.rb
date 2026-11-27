@@ -1,8 +1,8 @@
-# Outline for a Homebrew tap formula. Not published. Fill url/sha256 from the released npm tarball.
+# Outline for a Homebrew tap formula. Not published. Fill sha256 from the GitHub release asset (SHA256SUMS).
 class Masthead < Formula
   desc "Local web app that runs a tiered team of AI agents through your own Claude Code"
   homepage "https://github.com/Luxorium/masthead"
-  url "https://registry.npmjs.org/@luxorium/masthead/-/masthead-0.2.0.tgz"
+  url "https://github.com/Luxorium/masthead/releases/download/v0.2.0/luxorium-masthead-0.2.0.tgz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
 

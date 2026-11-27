@@ -53,10 +53,13 @@ export class Scheduler {
     return q;
   }
 
-  /** The lead is never limited: each conversation always has its one lead. */
+  /**
+   * The lead is never limited: each conversation always has its one lead. The limit function says so
+   * with Infinity for the first tier of every team (tierLimit), whatever that tier is called; `lead`
+   * (the built-in Claude team's first tier) is also unlimited for limit functions that do not.
+   */
   private cap(tier: Tier): number {
     const limit = this.limit(tier);
-    // The lead's tier is never limited; a limit function may also say so with Infinity (first tiers of other profiles).
     return tier === 'lead' || limit === Infinity ? Infinity : Math.max(0, limit);
   }
 

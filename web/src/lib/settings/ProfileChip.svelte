@@ -1,6 +1,6 @@
 <script lang="ts">
   // The new-chat team picker: "Team: Claude" opens a small menu of the teams that can start now.
-  // Mounted by the composer only when more than one usable team exists.
+  // Mounted by the composer when more than one usable team exists, or when the only one is not the default.
   import { store } from '../store.svelte.ts';
   import { usableProfiles } from './logic.ts';
   import { ST } from './text.ts';
@@ -10,6 +10,11 @@
 
   const teams = $derived(usableProfiles(store.settings?.profiles ?? [], readBackends(store.backends)));
   const current = $derived(teams.find((p) => p.id === value) ?? teams[0]);
+  // When the asked-for team cannot start now (e.g. the default team's program is not ready), the chip
+  // shows the first one that can; pick it too, so the new chat starts with the team the chip names.
+  $effect(() => {
+    if (current && current.id !== value) onchange(current.id);
+  });
   let open = $state(false);
   let button: HTMLButtonElement | undefined = $state();
   let menu: HTMLUListElement | undefined = $state();

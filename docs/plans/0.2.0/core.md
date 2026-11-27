@@ -1,5 +1,8 @@
 # Masthead 0.2.0: the server core
 
+> **History.** This plan was built in 0.2.0. It is kept as the record of the design and the evidence; where it
+> differs from the code, the code and `docs/wiki/` are right.
+
 Status: proposal, 2026-11-27, by foxtrot (server core). Written against branch `next` at 0.1.4
 (`478601f`). The agent/backend layer is echo's (`docs/plans/0.2.0/` backend plan); the page is
 charlie's. Section 0 records what was agreed with them. Nothing here has been built.

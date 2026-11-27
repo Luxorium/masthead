@@ -9,9 +9,9 @@ license=(MIT)
 depends=(nodejs)
 makedepends=(npm)
 optdepends=('claude-code: the agent backend (install it and sign in with `claude`)')
-source=("https://registry.npmjs.org/@luxorium/masthead/-/masthead-$pkgver.tgz")
+source=("masthead-$pkgver.tgz::https://github.com/Luxorium/masthead/releases/download/v$pkgver/luxorium-masthead-$pkgver.tgz")
 noextract=("masthead-$pkgver.tgz")
-sha256sums=('SKIP')  # replace with the real checksum at release
+sha256sums=('SKIP')  # replace with the checksum from the release SHA256SUMS
 
 package() {
   # --os=none --cpu=none (npm ignores --omit=optional for a global install): skip the Agent SDK's private Claude Code binary; Masthead runs the user's own.

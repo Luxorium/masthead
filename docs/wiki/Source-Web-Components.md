@@ -16,7 +16,8 @@ App
 │  ├─ Transcript ─ UserItem, TextItem, ThinkingItem, ToolItem, InboundItem,
 │  │               NoticeItem, DraftView, StatusLine; Thumbs ─ ImageViewer
 │  └─ dock: DeviceRequestCard, PermissionCard, CompactCard, CompactProgress,
-│           Composer ─ FolderPicker, ProfileChip (or the "Archived" note)
+│           Composer ─ FolderPicker, ProfileChip (or the "Archived" note;
+│           on a device that may not act, the role note instead)
 └─ TeamPanel ─ CompactProgress, TeamOutline ─ Expander, StopControl; TierControls
 ```
 
@@ -37,7 +38,7 @@ The chat list, the left column (or drawer). Props: `onhide` (the ⟨ button hide
 The open agent's chat: `store.viewItems`, `store.viewDraft` and `store.viewAgent`.
 
 - **New chat:** the heading "What are we working on?", one sentence, and three example prompts. A click puts the example into the composer and focuses the box; it does not send. The plan's variant for an empty folder ("Start a small website…") is not built.
-- **Nothing yet:** "Nothing here yet." when an idle agent has no items.
+- **Nothing yet:** "Nothing here yet." when the agent on screen has no items and no draft and is neither running nor queued.
 - **Windowing:** only the newest 80 items are rendered. "Show earlier (N more items)" adds 80 and keeps the scroll position; when all loaded items are shown and the server has older ones (`store.pages[id].more`), the same button asks for the next page ("Show earlier"). It is disabled while a page loads. See [Rendering speed](Source-Web-Front-End.md#rendering-speed).
 - **Items:** each in a wrapper with `content-visibility: auto`, except tool lines. The kinds are rendered by the components under [Transcript items](#transcript-items).
 - **Draft and status:** `DraftView` while a draft exists, else `StatusLine`. "Starting…" while a new chat is being created.
@@ -65,10 +66,10 @@ The message box, in the dock. App remounts it (inside `{#key store.composerKey}`
 - **Sending.** Enter sends (not during IME composition), Shift+Enter is a new line. Send is enabled when there is text or a picture, no picture is uploading or failed, the socket is connected, no new chat is being created, and a backend can run. The textarea (`id="message"`, the skip link's target) grows up to 260 px and takes focus on mount.
 - **Stop.** While the lead runs and the box is empty, ■ replaces ↑ and sends `{t:'interrupt'}`. Under the box, "Stop all" (`{t:'stop_all'}`) shows while any helper is live.
 - **Pictures.** + opens a file picker; paste and drop work too. Checks, shrinking and upload: [Images](Source-Web-Images.md#attaching-pictures-composersvelte).
-- **Under the box, new chat:** the folder chip ("Folder ~/projects/x"), which opens `FolderPicker`; the team chip `ProfileChip`, only when more than one team can start now; and on the very first chat, "Agents can read and change files in this folder."
+- **Under the box, new chat:** the folder chip ("Folder ~/projects/x"), which opens `FolderPicker`; the team chip `ProfileChip`, when more than one team can start now or when the only one that can is not the default (then the chip names it and the chat starts with it); and on the very first chat, "Agents can read and change files in this folder."
 - **Under the box, existing chat:** the folder as a static chip (full path in its tooltip), and Stop all.
 - **The `/compact` hint.** In an existing chat, while the text is a prefix of `/compact` with no space, a small `role="listbox"` offers "/compact: Tidy the team now". Tab, a click, or Enter before the word is complete fills in `/compact `; Enter on the full word sends it as typed, and the server treats it as a request to tidy the team ([Compact team](Compact-Team.md)). Not shown in a new chat or while messaging a helper directly.
-- **Advanced only:** the model that will answer, its thinking time, and the short "when to ask" mode. For a chat without a lead yet it reads the first level of the chat's (or default) profile.
+- **Advanced only:** the model that will answer, its thinking time, and the short "when to ask" mode. For a chat without a lead yet it reads the first level of the chat's profile, else the team picked on the new-chat screen, else the default.
 
 ## FolderPicker.svelte
 
@@ -81,14 +82,15 @@ Its words are in `T.folder`.
 One approval request, in the dock. Prop `request` (a `PermissionRequest`). It is a `role="alertdialog"` card.
 
 - **Focus.** A module-level listener records the last key press. On mount the card takes focus unless a key was pressed in the last 1.5 s, the focused field has text, or another card has focus. It focuses the card, not Allow, so a stray Enter answers nothing.
-- **Questions** (`kind === 'question'`): each question as a fieldset with its options as toggle buttons (one or many) and a "Something else…" field. Typing in that field clears the picks of a single-choice question. Answer is enabled once every question has an answer; "Don't answer" sends `deny`. Answers are keyed by question text, as Claude Code's AskUserQuestion expects; two questions with the same text share one entry, with both answers joined by " | ".
-- **Permissions:** "Bravo wants to run a command" (or the request's `title`), the command in full, or the target with Show details for other tools; the description; Deny, "Allow for this session" (only if `canAlways`), Allow.
+- **Questions** (`kind === 'question'`): each question as a fieldset with its options as toggle buttons (one or many) and a "Something else…" field. Typing in that field clears the picks of a single-choice question, and picking an option of a single-choice question clears the field. Answer is enabled once every question has an answer; "Don't answer" sends `deny`. A question's picks and its free text are joined with ", ". Answers are keyed by question text, as Claude Code's AskUserQuestion expects; two questions with the same text share one entry, with both answers joined by " | ".
+- **Permissions:** "Bravo wants to run a command" (or the request's `title`), the command in full, or for other tools the target (only when there is no `title`) and Show details; the description; Deny, "Allow for this session" (only if `canAlways`), Allow.
+- **Read-only device** (`!store.mayAnswer`): the card still shows, with the question options and field disabled and, in place of the buttons, "This device can only read, so it cannot answer. Answer on the computer."
 
-The "wants to …" phrases per tool are in `T.wants`; an unknown tool gets `T.wants.other()` with its name.
+The "wants to …" phrases per tool are in `T.wants`; an unknown tool gets `T.wants.other()` with its name (an `mcp__` prefix dropped and `__` shown as " · ").
 
 ## TeamPanel.svelte
 
-The team, as a column or drawer on the right. Shown only once the lead has started a helper and the person opened it (or Advanced opened it on a wide screen). No props. There is no map view any more: 0.2.0-beta.2 deleted `TeamMap.svelte`, `store.view` and "Show as a map"; the outline below is the only team view.
+The team, as a column or drawer on the right. Shown only once the lead has started a helper and the person opened it (or Advanced opened it on a wide screen). No props. There is no map view any more: 0.2.0 deleted `TeamMap.svelte`, `store.view` and "Show as a map"; the outline below is the only team view.
 
 - Header "Team" and × (closes the panel).
 - **Width.** On wide screens it is a column, 400 px by default. A separator on its left edge (`role="separator"`, `aria-valuemin` 300, `aria-valuemax` 560) is dragged with the pointer, or moved 20 px at a time with ← (wider) and → (narrower); the width is `ui.teamWidth`, kept per device ([ui.svelte.ts](Source-Web-Front-End.md#simple-and-advanced-uisveltets)). As a drawer the `aside` is `min(400px, 88vw)` wide.
@@ -104,12 +106,12 @@ The team, as a column or drawer on the right. Shown only once the lead has start
 - **A tree for assistive technology and the keyboard.** `role="tree"`, each agent a `role="treeitem"` with `aria-level`, `aria-expanded` (parents only) and `aria-selected` (the agent on screen), and its children in a `role="group"`. One tab stop (roving `tabindex`): ↓ and ↑ move, Home and End go to the first and last row, → opens a closed branch or moves into it, ← closes an open branch or goes to the parent, Enter or Space opens the agent's chat (or opens a folded row).
 - **Rows.** The expander (or a blank of the same width), status dot, name, a badge with the model, the title (or "Main assistant"), and on a second line `statusWords()`. Clicking a row opens that agent's chat. The level's colour appears only on the model badge. Finished and stopped helpers stay and are dimmed by colour (`--muted`, `--faint`), not opacity, so their words keep AA contrast; a failed one's status line is in `--bad`. Live helpers (queued, running, waiting; never the lead) get a `StopControl` at the right.
 - **Guide lines.** Neutral 1 px lines in `--border-strong` join each parent to its children, exact to the pixel by construction. An open parent draws its line once, as one 1 px `.vline` in its row: from the pixel under its expander down to where its last child's corner begins. The line's length comes from `guide()`, an action on the children's `role="group"` that reads the last child's `offsetTop` (again whenever a `ResizeObserver` sees the parent or the group change size) into `--vend`. Each child draws only its own `.tick`: a 1 px line from the parent's line to its expander (├), or on towards its dot for a leaf; the last child's tick is a corner with a rounded bend (└) that starts where the line stops. Every position is a whole number of CSS pixels taken from the variables on `.outline`: `--tw` (indent per level and expander column, 20 px; 16 px under 600 px), `--gx` (the line's x, the middle pixel of the 13 px expander, which sits at `--gx` − 6; 9 px, 7 px on phones), `--pad` (the row's top padding, 4 px), `--line` (the first line's fixed height, 24 px to hold the 24 px Stop; 44 px on touch screens), `--bt` (the expander's top in that line, 5 px; 15 px on touch), `--ty` (the tick's y, `--pad` + `--bt` + 6) and `--r` (the corner's radius, 4 px). Text lines have pixel line heights (20 px, and 18 px for the status line and preview), so no row is a fraction of a pixel tall. The browser test checks the joins to the pixel at pixel ratios 1 and 1.5 ([Page tests](Source-Web-Tests.md#browser-test-testuie2emjs)). On phones the job title is hidden.
-- **Preview.** Hovering or focusing a row for 300 ms shows, below the row and inside the panel, the agent's task and its last four chat lines (from the last 14 items), plus its live draft. If that transcript is not loaded, the preview fetches it and drops it again when it closes (`store.dropItems()`), so hovering across a big team does not keep every transcript in memory. The preview is `aria-hidden`; it never makes the panel scroll sideways.
+- **Preview.** Hovering or focusing a row for 300 ms shows, below the row and inside the panel, the agent's task and its last four chat lines (from the last 14 items), plus its live draft; "loading" until the transcript arrives, and a "nothing yet" line when there is nothing to show. If that transcript is not loaded, the preview fetches it and drops it again when it closes (`store.dropItems()`), so hovering across a big team does not keep every transcript in memory. The preview is `aria-hidden`; it never makes the panel scroll sideways.
 - **Hide finished.** A checkbox above the tree, `ui.hideFinished`, kept per device and off by default. When on, each parent's finished helpers (done or stopped, with nothing live or failed under them) fold into one row, "N finished: Bravo, Charlie"; clicking it, or Enter, opens that group again. Failed helpers are never folded.
 - **Branches.** Closed branches (`ui.collapsed`) and opened folded groups (`ui.openGroups`) are kept while the chat is open and forgotten when another chat is opened (`ui.teamOf()`).
 - **Archived helpers.** When a tidy-up archived helpers (`store.archivedAgents`), a row "Archived helpers (M)" under the tree opens a list, newest first: name, model badge, title and "archived <when>". Clicking one opens its chat read-only; with `mayAct`, Restore sends `restore_agent` ([Compact team](Compact-Team.md)). The row's − / + is the same `Expander` as the tree's.
 
-The preview's "Report from", "Message from" and "Thinking…" still come from `T.map`, a group kept from the map.
+The preview's "Report from", "Message from" and "Thinking…" come from `T.preview`.
 
 ## outline.ts
 
@@ -125,7 +127,7 @@ The preview's "Report from", "Message from" and "Thinking…" still come from `T
 
 ## CompactCard.svelte
 
-`web/src/lib/team/CompactCard.svelte`, in the dock. The tidy-up proposal, shown only when `store.compact` is in phase `proposed`, which happens when automatic tidying is off. A `role="alertdialog"` "Tidy the team?" with "Keep N, archive M", the lead's note if any, and every helper named with its job and a tick to keep it. The proposal's keeps start ticked; helpers that must stay ("Stays: still working, or needed by a helper that stays") are ticked and cannot be unticked; the others show the lead's reason. With `mayAnswer`, "Not now" and "Tidy up" call `store.answerCompact(keep, accept)`.
+`web/src/lib/team/CompactCard.svelte`, in the dock. The tidy-up proposal, shown only when `store.compact` is in phase `proposed`, which happens when automatic tidying is off. A `role="alertdialog"` "Tidy the team?" with "Keep N, archive M", the lead's note if any, and every helper named with its job and a tick to keep it. The proposal's keeps start ticked; helpers that must stay ("Stays: still working, or needed by a helper that stays") are ticked and cannot be unticked; the others show the lead's reason. With `mayAnswer`, "Not now" and "Tidy up" call `store.answerCompact(keep, accept)`. Without it the ticks are disabled and a note says "This device can only read, so it cannot choose. Choose on the computer."
 
 ## CompactProgress.svelte
 
@@ -135,7 +137,9 @@ The preview's "Report from", "Message from" and "Thinking…" still come from `T
 
 `web/src/lib/team/TierControls.svelte`, Advanced only. The levels of this chat's team: the profile from `store.conv.profileId`, else the default profile ([tiers.ts](Source-Web-Styles.md#tier-colours-tiersts)). For each level: its label in its colour and "The one you talk to" or "Started by <level above>". Levels after the first get "Helpers at a time" with how many are working and waiting now, and a − / + stepper from 0 ("Off") to `MAX_PER_TIER` (12). Every level gets a "Thinking time" select ("Thinking time up to" when automatic thinking is on).
 
-A change edits that level inside the profile list and saves it through `store.updateSettings()`; the server takes the whole profile list. The select lists every effort, not only those the model offers; the team editor in Settings limits them ([TeamEditor](Source-Web-Settings-and-Remote.md#teameditorsvelte)).
+If the chat's team was removed in Settings but the chat keeps its stored copy (`conv.team`), those levels are shown in their own colours with "This chat’s team was removed in Settings…", and every control is disabled.
+
+A change edits that level inside the profile list and saves it through `store.updateSettings()`; the server takes the whole profile list. The select lists every effort in `EFFORTS` (`low` to `xhigh`), not only those the model offers; the team editor in Settings limits them ([TeamEditor](Source-Web-Settings-and-Remote.md#teameditorsvelte)).
 
 ## SettingsMenu.svelte
 
@@ -147,11 +151,11 @@ The ■ that stops a live helper and everything under it. Props: `agent` and `pl
 
 ## FirstRun.svelte
 
-Shown instead of the chat when `store.canRun` is false. "Masthead needs Claude Code to work", one sentence on why, how to install and sign in (backticks shown as code), "What Masthead saw" with the server's error if any, and "Reload this page". It reads only the Claude Code info, not the other backends ([Web store](Source-Web-Store.md#state)).
+Shown instead of the chat when `store.canRun` is false (no backend reported available and no Claude Code found; [Web store](Source-Web-Store.md#state)). "Masthead needs Claude Code to work", one sentence on why, how to install and sign in (backticks shown as code), "What Masthead saw" (a closed `<details>`) with the Claude Code error if any, and "Reload this page". Its words and the error it shows are about Claude Code only.
 
 ## UsageMeter.svelte
 
-The usage line in the sidebar foot: "Usage" and the window closest to its limit ("N% used" or "limit reached"). It opens into every window with a bar, the percent and the reset time, ordered as `T.usage.names` lists them. `utilization` of 1 or less is read as a fraction, because the SDK does not say its scale. Reset times within 20 hours show only the time. Shown only once usage has been reported.
+The usage line in the sidebar foot: "Usage" and the window closest to its limit ("N% used" or "limit reached"). It opens into every window with a bar, the percent and the reset time, ordered as `T.usage.names` lists them. `utilization` of 1 or less is read as a fraction, because the SDK does not say its scale. Reset times within 20 hours show only the time. A window type not in `T.usage.names` is shown by its type with `_` as spaces. Shown only once usage has been reported.
 
 ## statusWords() and STATUS_LABEL
 

@@ -21,6 +21,18 @@ function connected(): { store: Store; sent: unknown[] } {
 describe('store', () => {
   beforeEach(() => history.replaceState(null, '', '/'));
 
+  it('finds the main assistant on any team, not only by the tier id "lead"', () => {
+    const { store } = connected();
+    const agent = (id: string, tier: string, parentId: string | null) => ({ id, tier, parentId, name: id, createdAt: id === 'a' ? 1 : 2, status: 'idle' });
+    store.agents = { a: agent('a', 'copy:0', null), b: agent('b', 'copy:1', 'a') } as never;
+    expect(store.lead?.id).toBe('a');
+    expect(store.viewAgent?.id).toBe('a');
+    store.viewOf('a');
+    expect(store.viewAgentId).toBe(null);
+    store.viewOf('b');
+    expect(store.viewAgentId).toBe('b');
+  });
+
   it('replaces pending approvals from every state message', () => {
     const { store } = connected();
     store.pending = [{ id: 'old' } as never];

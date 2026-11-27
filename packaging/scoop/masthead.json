@@ -1,11 +1,11 @@
 {
-  "##": "Outline for a Scoop bucket. Not published; untested on Windows. Fill url/hash at release.",
+  "##": "Outline for a Scoop bucket. Not published; untested on Windows. Fill hash from the GitHub release SHA256SUMS.",
   "version": "0.2.0",
   "description": "Local web app that runs a tiered team of AI agents through your own Claude Code",
   "homepage": "https://github.com/Luxorium/masthead",
   "license": "MIT",
   "depends": "nodejs-lts",
-  "url": "https://registry.npmjs.org/@luxorium/masthead/-/masthead-0.2.0.tgz#/masthead.tgz",
+  "url": "https://github.com/Luxorium/masthead/releases/download/v0.2.0/luxorium-masthead-0.2.0.tgz#/masthead.tgz",
   "hash": "0000000000000000000000000000000000000000000000000000000000000000",
   "installer": {
     "script": [

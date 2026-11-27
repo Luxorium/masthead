@@ -21,7 +21,7 @@ Every page in this wiki for Masthead 0.2.0, grouped. Start at [Home](Home.md). T
 - [State machine](State-Machine.md): one `AgentState` per agent, changed only by `step()` in `server/core/machine.ts`; events, effects and the shell around it.
 - [Agent life cycle](Agent-Life-Cycle.md): one agent from start to end from the runtime's and backend's side: processes, turns, background work, resume.
 - [Team rules](Team-Rules.md): the rules of a team and where each is enforced in `Conversation`.
-- [Compact team](Compact-Team.md): archiving finished helpers and compacting the team's memory (beta 2): flow, rules, triggers, `read_archive`.
+- [Compact team](Compact-Team.md): archiving finished helpers and compacting the team's memory (new in 0.2.0): flow, rules, triggers, `read_archive`.
 - [Slot scheduling](Slot-Scheduling.md): per-tier limits across all conversations and fair sharing of free places.
 - [Thinking effort](Thinking-Effort.md): effort levels, ceilings, requests, approvals and known limitations.
 - [Backend interface](Backend-Interface.md): the seam in `server/backends/types.ts` and the registry; what a backend does and does not do.
