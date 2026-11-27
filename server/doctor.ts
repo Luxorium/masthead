@@ -3,6 +3,7 @@
 import { accessSync, constants, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
+import { mastheadCommand } from './paths.js';
 import type { ServiceManager } from './service/types.js';
 
 export interface Check {
@@ -141,7 +142,7 @@ async function portCheck(deps: DoctorDeps): Promise<Check> {
     const p = await deps.probe(deps.port);
     if (p === 'free') return { name, ok: true, detail: 'free' };
     if (p === 'ours') return { name, ok: true, detail: 'served by this Masthead' };
-    return { name, ok: false, detail: 'in use by another program', fix: `Stop that program, or use another port: masthead --port <n>.` };
+    return { name, ok: false, detail: 'in use by another program', fix: `Stop that program, or use another port: ${mastheadCommand(deps.platform)} --port <n>.` };
   } catch (e) {
     return { name, ok: false, warn: true, detail: `could not be checked: ${(e as Error).message}` };
   }
@@ -149,11 +150,11 @@ async function portCheck(deps: DoctorDeps): Promise<Check> {
 
 async function serviceCheck(deps: DoctorDeps): Promise<Check> {
   const name = 'Service';
-  if (!deps.service) return { name, ok: true, warn: true, detail: `none on ${deps.platform}; run Masthead with: masthead` };
+  if (!deps.service) return { name, ok: true, warn: true, detail: `none on ${deps.platform}; run Masthead with: ${mastheadCommand(deps.platform)}` };
   try {
     const s = await deps.service.status();
-    if (!s.installed) return { name, ok: true, warn: true, detail: `not installed (${deps.service.kind})`, fix: 'masthead service install' };
-    if (s.running === false) return { name, ok: false, detail: s.detail, fix: 'masthead service install' };
+    if (!s.installed) return { name, ok: true, warn: true, detail: `not installed (${deps.service.kind})`, fix: `${mastheadCommand(deps.platform)} service install` };
+    if (s.running === false) return { name, ok: false, detail: s.detail, fix: `${mastheadCommand(deps.platform)} service install` };
     return { name, ok: true, warn: s.running === null, detail: s.detail };
   } catch (e) {
     return { name, ok: false, warn: true, detail: `could not be checked: ${(e as Error).message}` };
@@ -169,7 +170,8 @@ function sdkBinaryCheck(deps: DoctorDeps): Check {
     ok: true,
     warn: true,
     detail: `${dir} holds an unused private copy of Claude Code`,
-    fix: 'Reinstall without it: npm i -g --omit=optional @luxorium/masthead',
+    // npm ignores --omit=optional for a global install; os/cpu "none" skips every platform package.
+    fix: 'Reinstall without it: npm i -g --os=none --cpu=none @luxorium/masthead',
   };
 }
 

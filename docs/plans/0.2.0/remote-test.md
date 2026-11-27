@@ -5,6 +5,15 @@ These steps are the first time it touches the real one. They are for the person,
 machine, once. Each step says what should happen; stop at the first one that does not and note what
 you saw.
 
+## Done on 2026-11-27 (Tailscale 1.104.7, Linux)
+
+Steps 1 to 3 passed: switching on through `sudo tailscale serve --bg --https=7443 unix:…` (being the
+operator was not enough), a phone paired and used fully, and from a second device by script the
+`read` and `approve` roles were enforced, a role lowered in place on an open socket, and revoke closed
+it with 4001. Found on the way: a test server on the same machine removed the real entry at its start
+(fixed: one socket per data folder, test servers never run `tailscale`), and a Windows device with
+"Use Tailscale DNS" off could not resolve the address.
+
 ## Before
 
 - Tailscale is installed, signed in and connected on this computer and on a phone or second computer.
@@ -14,9 +23,13 @@ you saw.
 ## 1. Switch it on
 
 1. In Masthead's settings, turn on **Remote access** (port 7443 unless changed).
-2. **Expected:** either it turns on, or it says Tailscale did not let it and shows a command such as
-   `sudo tailscale set --operator=<you>`. In that case run that command once in a terminal, then
-   switch it on again.
+2. **Expected:** either it turns on, or it says Tailscale needs your password once and shows
+   `sudo tailscale serve --bg --https=7443 unix:/run/user/<uid>/masthead/remote.sock` (on Windows:
+   run Tailscale as an administrator). Run that command once in a terminal, then switch it on again;
+   it must now turn on. (Being the Tailscale operator is not enough for a socket target: Tailscale
+   answers "401 Unauthorized: must be root, or be an operator and able to run 'sudo tailscale' to
+   serve a path or Unix socket".) The **Allow my other devices to connect** box must be unticked
+   while the status says Off.
 3. **Check:** `tailscale serve status` shows the earlier lines unchanged plus one new entry,
    `https://<this machine>.<tailnet>.ts.net:7443`, pointing at
    `unix:/run/user/<uid>/masthead/remote.sock` (Linux) or `http://127.0.0.1:7719` (Windows).

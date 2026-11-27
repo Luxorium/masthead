@@ -273,7 +273,8 @@ button:disabled {
   font-weight: 600;
   line-height: 18px;
   color: var(--tier);
-  background: color-mix(in srgb, var(--tier) 14%, transparent);
+  /* An opaque tint on --raised, so a hovered or selected row behind it cannot lower the contrast. */
+  background: color-mix(in srgb, var(--tier) 10%, var(--raised));
   white-space: nowrap;
 }
 .tier-lead {

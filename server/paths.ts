@@ -2,6 +2,12 @@ import { homedir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
 
 export const DEFAULT_PORT = 7717;
+
+/** The command to type. Stock Windows PowerShell refuses npm's masthead.ps1 ("running scripts is
+    disabled"); masthead.cmd works in PowerShell and Command Prompt alike. */
+export function mastheadCommand(platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' ? 'masthead.cmd' : 'masthead';
+}
 export const HOME = homedir();
 
 export interface AppDirs {

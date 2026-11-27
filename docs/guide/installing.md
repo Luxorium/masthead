@@ -2,11 +2,11 @@
 
 [Back to the guide](README.md)
 
-Masthead will be installable with one command, `npm i -g --omit=optional @luxorium/masthead`, once
+Masthead will be installable with one command, `npm i -g --os=none --cpu=none @luxorium/masthead`, once
 it is published. **It is not published yet, and the name may change.** Until then, install it from
 source with the steps below. They take about five minutes.
 
-> macOS and Windows support has not yet been checked on real machines. If something goes wrong
+> Windows has been partly checked on a real machine; macOS not yet. If something goes wrong
 > there, please [report it](https://github.com/Luxorium/masthead/issues).
 
 ## What you need on every computer
@@ -30,12 +30,16 @@ source with the steps below. They take about five minutes.
    git switch next
    npm ci
    npm pack
-   npm i -g --omit=optional .\luxorium-masthead-<version>.tgz
+   npm i -g --os=none --cpu=none .\luxorium-masthead-<version>.tgz
    ```
    Replace `<version>` with the number in the file name that `npm pack` printed.
-5. Run `masthead`. Your browser opens on Masthead, already signed in.
-6. Optional: to start Masthead each time you log in, run `masthead service install`.
-   This uses the Windows Task Scheduler. Remove it again with `masthead service uninstall`.
+5. Run `masthead.cmd`. Your browser opens on Masthead, already signed in.
+   In PowerShell type `masthead.cmd`, not `masthead`: stock Windows PowerShell refuses npm's
+   `masthead.ps1` with "running scripts is disabled on this system". In Command Prompt plain
+   `masthead` works. To make plain `masthead` work in PowerShell for good, you may run
+   `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once (optional).
+6. Optional: to start Masthead each time you log in, run `masthead.cmd service install`.
+   This uses the Windows Task Scheduler. Remove it again with `masthead.cmd service uninstall`.
 
 ## macOS
 
@@ -50,7 +54,7 @@ source with the steps below. They take about five minutes.
    git switch next
    npm ci
    npm pack
-   npm i -g --omit=optional ./luxorium-masthead-*.tgz
+   npm i -g --os=none --cpu=none ./luxorium-masthead-*.tgz
    ```
 5. Run `masthead`. Your browser opens on Masthead, already signed in.
 6. Optional: to start Masthead each time you log in, run `masthead service install`.

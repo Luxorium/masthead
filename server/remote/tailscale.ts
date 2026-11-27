@@ -187,6 +187,33 @@ export class CliTailscale implements TailscaleProvider {
   }
 }
 
+/**
+ * Tailscale switched off for this instance: reports it as not installed and never runs the binary. Test
+ * and fake servers use it, so they cannot see or touch the real Masthead's serve entry.
+ */
+export class OffTailscale implements TailscaleProvider {
+  async status(): Promise<TailnetStatus | null> {
+    return null;
+  }
+  async serveState(): Promise<ServeState> {
+    throw new Error('Tailscale is switched off for this Masthead (a test or fake server).');
+  }
+  async addServe(): Promise<void> {
+    throw new Error('Tailscale is switched off for this Masthead (a test or fake server).');
+  }
+  async removeServe(): Promise<void> {
+    throw new Error('Tailscale is switched off for this Masthead (a test or fake server).');
+  }
+  async whois(): Promise<Identity | null> {
+    return null;
+  }
+}
+
+/** The real CLI, unless MASTHEAD_TAILSCALE=off or the fake backend (MASTHEAD_BACKEND=fake) is in use. */
+export function tailscaleFor(env: Record<string, string | undefined>): TailscaleProvider {
+  return env.MASTHEAD_TAILSCALE === 'off' || env.MASTHEAD_BACKEND === 'fake' ? new OffTailscale() : new CliTailscale();
+}
+
 /** A stand-in for tests: records every command it would have run. */
 export class FakeTailscale implements TailscaleProvider {
   commands: string[][] = [];

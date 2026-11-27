@@ -64,6 +64,7 @@ The file is `settings.json` in the config folder ([Configuration and settings](C
   "collapseReports": false,
   "maxRunMinutes": 0,
   "keepAwake": true,
+  "autoCompact": true,
   "defaultCwd": "/home/you"
 }
 ```
@@ -87,7 +88,7 @@ The file is `settings.json` in the config folder ([Configuration and settings](C
 | `builtIn` | never taken from input |
 | `defaultProfile` | an existing profile id; otherwise it stays as it was, or becomes `claude` if that profile is gone |
 | `permissionMode` | `inherit`, `default`, `acceptEdits`, `auto`, `bypassPermissions` |
-| `autoEffort`, `collapseReports`, `keepAwake` | boolean |
+| `autoEffort`, `collapseReports`, `keepAwake`, `autoCompact` | boolean (a `keepAwake` or `autoCompact` still missing becomes `true`) |
 | `maxRunMinutes` | integer, clamped to 0–1440 |
 | `defaultCwd` | an absolute path for this system (`absoluteFolder()`), at most 4096 characters |
 
@@ -96,7 +97,7 @@ The file is `settings.json` in the config folder ([Configuration and settings](C
 A 0.1.x `settings.json` has no `version` field. `loadSettings()`:
 
 1. If `settings.json.v1.bak` does not exist yet, copies the file there, untouched, before anything can overwrite it. This happens once; a later load never replaces the backup.
-2. Runs the old object through `sanitizeSettings()` over the defaults. Because it has no `profiles`, its `tiers`, `leanSubagents` and `leanOpus` are applied to the `claude` profile. The other fields carry over as they are, and `keepAwake` and `maxRunMinutes` take their defaults if the file lacks them.
+2. Runs the old object through `sanitizeSettings()` over the defaults. Because it has no `profiles`, its `tiers`, `leanSubagents` and `leanOpus` are applied to the `claude` profile. The other fields carry over as they are, and `keepAwake`, `autoCompact` and `maxRunMinutes` take their defaults if the file lacks them (so `autoCompact` starts on).
 3. Keeps the result in memory. The file is rewritten in format 2 at the next save, which is the next settings change (or the next time a new conversation's folder becomes the default, or a Codex profile is added).
 
 To go back to 0.1.x, restore `settings.json.v1.bak` as `settings.json`. A 0.1.x Masthead reading a version 2 file would take what it knows (`tiers` and the switches), because those fields are still written. That was not tested.
@@ -115,6 +116,7 @@ To go back to 0.1.x, restore `settings.json.v1.bak` as `settings.json`. A 0.1.x 
 | `autoEffort` | The tool list is built at launch. A change marks running processes stale, so each is relaunched (same session) before its next turn. The tools themselves read the setting on every call. |
 | `maxRunMinutes` | From the next tick of the conversation timer, including for agents already running. |
 | `keepAwake` | At once. |
+| `autoCompact` | At run time: read each time the lead's turn ends (`Conversation.autoCompactOn()`), and when a compaction starts. A compaction already under way keeps its `auto` flag (card or no card). The per-conversation switch (`meta.autoCompact: false`, message `auto_compact`) can only turn it off for one conversation; see [Configuration and settings](Configuration-and-Settings.md) and [Compact team](Compact-Team.md). |
 | `collapseReports` | Display only (the page). |
 | `defaultProfile`, `defaultCwd` | When the next conversation is started. |
 | a new profile | Can be chosen for new conversations at once. |
@@ -123,4 +125,4 @@ These rows come from reading `server/app/app.ts`, `server/core/conversation.ts` 
 
 ## Related pages
 
-[Settings code](Source-Settings.md) · [Configuration and settings](Configuration-and-Settings.md) · [Team rules](Team-Rules.md) · [Scheduler](Source-Core-Scheduler.md) · [Backend interface](Backend-Interface.md) · [shared/protocol.ts](Source-Shared-Protocol.md)
+[Settings code](Source-Settings.md) · [Configuration and settings](Configuration-and-Settings.md) · [Team rules](Team-Rules.md) · [Scheduler](Source-Core-Scheduler.md) · [Backend interface](Backend-Interface.md) · [shared/protocol.ts](Source-Shared-Protocol.md) · [Compact team](Compact-Team.md)

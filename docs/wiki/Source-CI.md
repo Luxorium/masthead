@@ -25,7 +25,7 @@ Six jobs: a matrix of `ubuntu-latest`, `macos-latest` and `windows-latest`, each
 | `npm test` | The unit tests (`test/*.test.ts`). |
 | `npm run test:web` | The page's tests in happy-dom and jsdom (Vitest). |
 | `npm run build` | Builds `dist/`. |
-| Pack and install the package | In bash (Git Bash on Windows): `npm pack --pack-destination "$RUNNER_TEMP"`, then `npm install -g --omit=optional "$RUNNER_TEMP"/*.tgz`, then `masthead --version`. |
+| Pack and install the package | In bash (Git Bash on Windows): `npm pack --pack-destination "$RUNNER_TEMP"`, then `npm install -g --os=none --cpu=none "$RUNNER_TEMP"/*.tgz`, then `masthead --version`. |
 
 ### Why a plain `npm ci`
 
@@ -35,7 +35,7 @@ The build tools need their optional platform packages: esbuild and rolldown keep
 
 This is the user's way of installing, done for real on each system:
 - `npm pack` runs `prepack` (a build) and makes the tarball from the `files` list.
-- `npm install -g --omit=optional` installs that tarball as a user would, without the SDK's binary.
+- `npm install -g --os=none --cpu=none` installs that tarball as a user would, without the SDK's binary.
 - `masthead --version` runs the installed command. On Windows that goes through npm's `masthead.cmd` shim.
 
 It proves the tarball is complete enough to start and print its version. It does not start the server.
@@ -83,7 +83,7 @@ The temporary folder is not deleted.
 
 A green run shows, on Linux, macOS and Windows:
 - the code type-checks, and the unit tests and web tests pass (Node 22 and 24);
-- the build works, the packed tarball installs with `--omit=optional`, and the installed `masthead` command starts;
+- the build works, the packed tarball installs with `--os=none --cpu=none`, and the installed `masthead` command starts;
 - the built page works in Chromium against a real server on the fake backend (Node 24), including the accessibility checks in `test/ui.e2e.mjs`.
 
 It cannot show:

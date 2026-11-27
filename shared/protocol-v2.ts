@@ -2,7 +2,7 @@
 // version 1 (shared/protocol.ts). Kept in its own file while shared/protocol.ts is being reworked by
 // another change; the two merge into one file before 0.2.0. Nothing in here may import Node or DOM APIs.
 // Agreed with the page side (charlie, web.md section 2; core.md section 7).
-import type { AgentInfo, ClientMsg, ConversationMeta, Draft, Effort, Item, PermissionRequest, ServerMsg } from './protocol.js';
+import type { AgentInfo, ClientMsg, CompactState, ConversationMeta, Draft, Effort, Item, PermissionRequest, ServerMsg } from './protocol.js';
 
 export const PROTOCOL_VERSION = 2;
 
@@ -71,6 +71,13 @@ export type ClientMsgV2 =
   | { t: 'device_role'; nodeId: string; role: 'full' | 'approve' | 'read' }
   | { t: 'remote_audit' }
   | { t: 'forget_me' }
+  /** Team compaction (core: Conversation.startCompact and friends). */
+  | { t: 'compact_answer'; convId: string; id: string; keep: string[]; accept: boolean }
+  | { t: 'compact_cancel'; convId: string }
+  | { t: 'archive_items'; convId: string; agentId: string; before?: number | null; limit?: number }
+  | { t: 'restore_agent'; convId: string; agentId: string }
+  /** This conversation's automatic tidying on or off (meta.autoCompact). Local and full devices only. */
+  | { t: 'auto_compact'; convId: string; on: boolean }
   | ClientMsg;
 
 /** A per-conversation event as sent to a subscriber: version 1's event plus its sequence number. */
@@ -100,6 +107,11 @@ export type ServerMsgV2 =
   | { t: 'item_full'; convId: string; agentId: string; item: Item }
   | { t: 'items'; convId: string; agentId: string; items: Item[]; draft: Draft | null; cursor?: number | null; more?: boolean }
   | { t: 'error'; code: ErrorCode; message: string; ref?: string }
+  /** The team-compaction state of a conversation, on every change (null: none under way). */
+  | { t: 'compact'; convId: string; compact: CompactState | null }
+  /** The conversation's archived agents, after a compaction or restore. */
+  | { t: 'archived'; convId: string; agents: AgentInfo[] }
+  | { t: 'archive_items'; convId: string; agentId: string; items: Item[]; cursor?: number | null; more?: boolean }
   /** The agent programs found on this computer (version 2 tabs; after `check_backends`). */
   | { t: 'backends'; backends: BackendStatusV2[] }
   /** Remote access state, to local tabs only (shape: server/remote/access.ts RemoteState). */

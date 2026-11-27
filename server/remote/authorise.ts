@@ -49,8 +49,8 @@ export async function authorise(facts: RequestFacts, deps: { tailscale: Tailscal
 
 /** Which browser messages each role may send. `full` may send everything except device management. */
 // Reading includes the version 2 connection messages (subscribe, resync, drafts, whole items).
-const READ = new Set(['hello', 'open', 'items', 'subscribe', 'unsubscribe', 'draft_sync', 'item_full']);
-const APPROVE = new Set([...READ, 'permission', 'interrupt', 'stop_agent', 'stop_all', 'check_backends']);
+const READ = new Set(['hello', 'open', 'items', 'subscribe', 'unsubscribe', 'draft_sync', 'item_full', 'archive_items']);
+const APPROVE = new Set([...READ, 'permission', 'interrupt', 'stop_agent', 'stop_all', 'check_backends', 'compact_answer', 'compact_cancel']);
 const LOCAL_ONLY = new Set(['device_decision', 'device_revoke', 'device_role', 'remote_settings', 'remote_audit', 'shutdown']);
 
 export function allowedMessage(role: Role | 'local', type: string): boolean {

@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.2.0-beta.2 (unreleased)
+
+What you will notice
+- The team map is gone. The Team panel shows the team as an outline instead: each helper under the
+  one that started it, branches you can fold, and **Hide finished** to fold finished helpers into one
+  row. Resting on a helper shows its task and last few lines.
+- Long chats tidy themselves: when the team has about 15 finished helpers or the main assistant's
+  memory is about 70 % full, the main assistant keeps the helpers it still needs, the others are
+  archived, and everyone's memory is compacted; the chat then says what was done. Type `/compact`
+  to tidy at once. Archived helpers stay readable under **Archived helpers** and can be restored.
+  The setting **Tidy the team automatically** (on by default, and per chat) turns it off; then
+  Masthead asks first with a card. See `docs/guide/tidying-a-long-chat.md`.
+
+- Remote access on Linux and macOS: when Tailscale refuses to share Masthead's private connection,
+  the settings now show the one command that fixes it, `sudo tailscale serve --bg --https=7443
+  unix:…` (it needs your password once), instead of the Tailscale operator step, which Tailscale
+  does not accept for a private socket. Switching remote access off always works, even when
+  Tailscale refuses to remove its entry (a note then shows the command to remove it). The switch
+  no longer stays ticked after a refusal, and other refusals now say what Tailscale said.
+- Install with `npm i -g --os=none --cpu=none …` instead of `--omit=optional`: npm ignores
+  `--omit=optional` for a global install, so the Agent SDK's unused private copy of Claude Code was
+  installed anyway (doctor: "SDK private binary"). Doctor's fix line says so too.
+- `masthead service status` says whether Masthead answers on its port and whether the service or
+  you started it; `service install` ends with the same line instead of claiming it is running. The
+  "run `masthead --no-browser`" hint keeps a non-default port.
+- Windows: the docs and doctor say `masthead.cmd`, because stock PowerShell refuses npm's
+  `masthead.ps1` ("running scripts is disabled").
+- Fixed: a test or second Masthead could remove the real Masthead's Tailscale entry at its start-up,
+  because every instance used the same socket name. Each data folder now has its own socket, a
+  leftover entry is removed only by the instance that added it, and test and fake servers
+  (`MASTHEAD_BACKEND=fake`, or `MASTHEAD_TAILSCALE=off`) never run `tailscale`.
+
+Under the hood
+- Archived is a state of a finished helper in the team's state machine; archived helpers hold no slot
+  and cannot be woken by agents. A tidy-up in progress is saved and carries on after a restart.
+- Agents get a `read_archive` tool to read archived helpers' chats (index, pages, search) when needed.
+
+Known limits
+- Tidying is covered by tests on the fake backend and by the live run on real Claude Code (Haiku),
+  which passed 26/26 twice including the tidy-up scenario; the live run is not part of CI. How much memory a compaction frees depends on the agent program and is not shown.
+
 ## 0.2.0 (unreleased; pre-releases first)
 
 Masthead for anybody: simple by default, on Linux, macOS and Windows, able to run a team on Claude
@@ -43,9 +84,12 @@ Upgrading from 0.1.x
 - Copying both folders somewhere safe before upgrading is still the simplest backup.
 
 Known limits
-- macOS and Windows have been built and tested automatically, but not yet checked by a person on real
-  machines (`docs/plans/0.2.0/release-checklist.md`).
-- Remote access has only run against a fake Tailscale in tests, not a real tailnet.
+- macOS has been built and tested automatically but not yet checked by a person on a real Mac.
+  Windows 11 has been partly checked on a real machine (install, doctor, agents, the service at
+  login); keep-awake and the permission prompt there are not checked yet
+  (`docs/plans/0.2.0/release-checklist.md`).
+- Remote access has run on a real tailnet once (Tailscale 1.104.7, Linux, a phone and a second
+  device); the page on restricted devices is not checked yet.
 - Pausing at a usage limit is tested with a fake clock; it has never been seen at a real limit.
 - Codex support drives Codex's own app-server interface, which Codex marks experimental, and Codex's
   own sub-agents could not be switched off in tests, so a Codex team cannot yet guarantee the levels.

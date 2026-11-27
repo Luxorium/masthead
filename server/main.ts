@@ -6,13 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { VERSION } from '../shared/protocol.js';
 import { App } from './app/app.js';
 import { UsageError, onPath, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, unitPortFrom, type Opener } from './cli.js';
-import { DATA_DIR, DEFAULT_PORT, SECRET_FILE } from './paths.js';
+import { DATA_DIR, DEFAULT_PORT, mastheadCommand, SECRET_FILE } from './paths.js';
 import { isPrivate, loadSecret, readSecret } from './transport/auth.js';
 import { serve } from './transport/http.js';
 import { chooseTarget, startRemote } from './transport/remote.js';
 import { RemoteAccess, targetUrl } from './remote/access.js';
-import { CliTailscale } from './remote/tailscale.js';
+import { tailscaleFor } from './remote/tailscale.js';
 import { serviceFor, ServiceError } from './service/index.js';
+import { statusSummary } from './service/common.js';
 import { Awake, awakeCommand } from './service/awake.js';
 import { doctor, doctorExitCode, formatChecks, sdkBinaryPackage, systemDoctorFs } from './doctor.js';
 import { findClaude } from './backends/claude/env.js';
@@ -74,7 +75,7 @@ function unitServes(p: number): boolean {
  * removed. Returns lines for the person; if Tailscale refuses, the exact command to run instead.
  */
 async function removeRemoteServe(): Promise<string[]> {
-  const remote = new RemoteAccess({ dir: join(DATA_DIR, 'remote'), tailscale: new CliTailscale(), target: chooseTarget(process.env, DATA_DIR) });
+  const remote = new RemoteAccess({ dir: join(DATA_DIR, 'remote'), tailscale: tailscaleFor(process.env), target: chooseTarget(process.env, DATA_DIR) });
   if (!remote.enabled) return [];
   const target = targetUrl(remote.target);
   const command = `tailscale serve --https=${remote.port} off`;
@@ -107,12 +108,24 @@ async function serviceCommand(p: number): Promise<void> {
       }
       const claude = findClaude();
       for (const line of await svc.install({ node: process.execPath, mainJs: fileURLToPath(import.meta.url), port: p, env: process.env, claudePath: claude.path })) console.log(line);
+      // Say what is true now, not what was meant: a copy started by hand keeps the port.
+      // A copy that was already up answers at once; give the service's own copy a moment to start or fail.
+      if (h) await new Promise((r) => setTimeout(r, 1500));
+      let up = !!(await health(p));
+      for (let i = 0; i < 10 && !up; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        up = !!(await health(p));
+      }
+      const st = await svc.status();
+      console.log(statusSummary(svc.kind, st, up, st.port ?? p));
+      if (up && st.running === false) console.log(`To let the service run it now: \`${mastheadCommand()} stop\`, then \`${mastheadCommand()} service install\` again.`);
     } else if (sub === 'uninstall') {
       for (const line of await removeRemoteServe()) console.log(line);
       for (const line of await svc.uninstall()) console.log(line);
     } else if (sub === 'status') {
       const st = await svc.status();
-      console.log(st.installed ? `Installed (${svc.kind}), ${st.running === null ? 'state unknown' : st.running ? 'running' : 'not running'}${st.port ? `, port ${st.port}` : ''}. ${st.detail}` : `Not installed (${svc.kind}). ${st.detail}`);
+      const port = st.port ?? p;
+      console.log(statusSummary(svc.kind, st, !!(await health(port)), port));
       process.exit(st.installed ? 0 : 3);
     } else {
       console.error('Usage: masthead service install|uninstall|status [--port N] [--force]');
@@ -184,7 +197,7 @@ function secretOrExit(): string {
 async function runServer(): Promise<void> {
   const p = port();
   // Remote access over Tailscale: off by default; Masthead adds and removes only its own serve entry.
-  const remote = new RemoteAccess({ dir: join(DATA_DIR, 'remote'), tailscale: new CliTailscale(), target: chooseTarget(process.env, DATA_DIR) });
+  const remote = new RemoteAccess({ dir: join(DATA_DIR, 'remote'), tailscale: tailscaleFor(process.env), target: chooseTarget(process.env, DATA_DIR) });
   const app = new App({ remote, awake: new Awake() });
   const dev = process.env.MASTHEAD_DEV === '1';
   let devWeb = 7718;
@@ -231,7 +244,7 @@ async function runServer(): Promise<void> {
     // terminal only; start Vite with MASTHEAD_PORT=${p} so it forwards to this server.
     console.log(`Development page (Vite, MASTHEAD_PORT=${p} MASTHEAD_DEV_WEB_PORT=${devWeb} npm run dev:web):\n  ${signInUrl(`http://localhost:${devWeb}`, secret)}`);
   } else {
-    console.log(`Open it with \`masthead${p === DEFAULT_PORT ? '' : ` --port ${p}`}\` to sign the browser in.`);
+    console.log(`Open it with \`${mastheadCommand()}${p === DEFAULT_PORT ? '' : ` --port ${p}`}\` to sign the browser in.`);
   }
 }
 
@@ -267,7 +280,7 @@ async function main(): Promise<void> {
         process.exit(1);
       }
       if (!(await start(p))) {
-        console.error('Masthead did not start. Try `masthead serve` to see why.');
+        console.error(`Masthead did not start. Try \`${mastheadCommand()} serve${p === DEFAULT_PORT ? '' : ` --port ${p}`}\` to see why.`);
         process.exit(1);
       }
       const secret = secretOrExit();

@@ -33,6 +33,7 @@ export const FAKE_CAPS: BackendCaps = {
   midTurnDelivery: true,
   contextUsage: true,
   lean: true,
+  compact: true,
 };
 
 export const FAKE_MODELS: ModelInfo[] = [
@@ -188,6 +189,18 @@ export class FakeSession implements Session {
       queueMicrotask(() => this.end());
     }
   }
+
+  /** Compacts: a moment later the session's memory is "summarized" (it keeps the remembered word). */
+  async compact(): Promise<void> {
+    if (this.dead || !this.sessionId) throw new Error('The fake session is not running.');
+    if (this.running) throw new Error('A turn is running.');
+    this.compactions += 1;
+    await sleep(this.step || 1);
+    if (this.dead) throw new Error('The fake session ended during compaction.');
+    this.ev.compacted?.();
+  }
+  /** How many times compact() ran. */
+  compactions = 0;
 
   async contextUsage(): Promise<{ used: number; max: number }> {
     const max = FAKE_MODELS.find((m) => m.id === this.model)?.contextWindow;
@@ -380,6 +393,14 @@ export class FakeSession implements Session {
         return { error: step.message, stopTurn: true };
       case 'crash':
         return { crash: true };
+      case 'compact': {
+        // Keep the first finished helper list_agents shows, so the summary has a "kept … because …".
+        const list = await this.run({ kind: 'tool', name: 'list_agents', input: {} });
+        const first = /^- ([^\s:(]+)(?: \(you\))?: [^\n]*?\bdone\b/m.exec(list.text ?? '');
+        const keep = first ? [{ name: first[1]!, why: 'its findings are still needed' }] : [];
+        const r = await this.run({ kind: 'tool', name: 'compact_team', input: { keep, note: 'Tidied by the fake lead.' } });
+        return { text: r.text };
+      }
     }
   }
 

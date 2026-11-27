@@ -14,7 +14,7 @@
 | `./paths.js` | `CONFIG_DIR`, `DATA_DIR`, `DEFAULT_PORT`, `SECRET_FILE` ([server/paths.ts](Source-Paths.md)). |
 | `./transport/auth.js` | `loadSecret`, `readSecret` ([server/transport/auth.ts](Source-Transport-Auth.md)). |
 | `./transport/http.js` | `serve` ([server/transport/http.ts](Source-Http.md)). |
-| `./transport/remote.js`, `./remote/access.js`, `./remote/tailscale.js` | `chooseTarget`, `startRemote`, `RemoteAccess`, `CliTailscale`: remote access over the person's own Tailscale ([server/transport/remote.ts](Source-Transport-Remote.md), [Remote access](Remote-Access.md)). |
+| `./transport/remote.js`, `./remote/access.js`, `./remote/tailscale.js` | `chooseTarget`, `startRemote`, `RemoteAccess`, `tailscaleFor`: remote access over the person's own Tailscale ([server/transport/remote.ts](Source-Transport-Remote.md), [Remote access](Remote-Access.md)). |
 | `./service/index.js` | `serviceFor`, `ServiceError` ([server/service](Source-Service.md)). |
 | `./service/awake.js` | `Awake`, `awakeCommand` ([Keep awake](Source-Service.md#keep-awake-awakets)). |
 | `./doctor.js` | `doctor`, `doctorExitCode`, `formatChecks`, `sdkBinaryPackage`, `systemDoctorFs` ([server/doctor.ts](Source-Doctor.md)). |
@@ -61,7 +61,7 @@ Returns `loadSecret()` ([server/transport/auth.ts](Source-Transport-Auth.md)): t
 
 `masthead serve`.
 
-1. Reads the port (`port()`). Creates `remote = new RemoteAccess({ dir: <DATA_DIR>/remote, tailscale: new CliTailscale(), target: chooseTarget(process.env, DATA_DIR) })` (off by default; see [Remote access](Remote-Access.md)) and then `new App({ remote, awake: new Awake() })`, which loads settings and saved conversations (see [server/app](Source-App.md)). The `Awake` object keeps the computer from idling to sleep while agents work ([Keep awake](Source-Service.md#keep-awake-awakets)). It checks `MASTHEAD_DEV === '1'` for development mode and reads the dev page's port with `parseDevWebPort(process.env)` (`MASTHEAD_DEV_WEB_PORT`, default 7718). An invalid value prints `Invalid MASTHEAD_DEV_WEB_PORT: …` and exits 2, even outside development mode.
+1. Reads the port (`port()`). Creates `remote = new RemoteAccess({ dir: <DATA_DIR>/remote, tailscale: tailscaleFor(process.env), target: chooseTarget(process.env, DATA_DIR) })` (off by default; see [Remote access](Remote-Access.md)) and then `new App({ remote, awake: new Awake() })`, which loads settings and saved conversations (see [server/app](Source-App.md)). The `Awake` object keeps the computer from idling to sleep while agents work ([Keep awake](Source-Service.md#keep-awake-awakets)). It checks `MASTHEAD_DEV === '1'` for development mode and reads the dev page's port with `parseDevWebPort(process.env)` (`MASTHEAD_DEV_WEB_PORT`, default 7718). An invalid value prints `Invalid MASTHEAD_DEV_WEB_PORT: …` and exits 2, even outside development mode.
 2. Defines `shutdown()`. A `closing` flag makes it run once however many signals or requests arrive. It calls `app.shutdown()` (releases the keep-awake hold, denies waiting approval requests, stops every agent, writes everything to disk) and exits with code 0 after 300 ms, so the Claude Code processes have a moment to end first.
 3. Loads the secret with `secretOrExit()`.
 4. Calls `serve(app, { port, webDir, secret, extraOrigins, onShutdown: shutdown, blobs: app.blobs, convExists })`, where `convExists(id)` is `app.hasConversation(id)` (used for pictures; see [server/transport/http.ts](Source-Http.md)). In development mode `extraOrigins` is `http://localhost:<dev port>` and `http://127.0.0.1:<dev port>`, the Vite development server; otherwise it is empty.
@@ -109,7 +109,7 @@ The `--version` case in the switch cannot be reached in practice: `parseCommand(
 2. `serviceFor(process.platform)` picks systemd (Linux), launchd (macOS) or Task Scheduler (Windows). On any other platform it prints ``Masthead has no background service for <platform>; run `masthead serve` instead.`` and exits 1.
 3. `install`: first asks `health(p)`. If the server on the port reports `busy` (the number of working conversations) above 0 and `--force` is not given, it prints `Masthead has agents working in <n> conversation(s); installing restarts it and stops them. Run again when they have finished, or with --force.` and exits 1. Then it calls `findClaude()` and `svc.install({ node: process.execPath, mainJs: <this file>, port: p, env: process.env, claudePath })` and prints each returned line.
 4. `uninstall`: `svc.uninstall()`, printing each line.
-5. `status`: `svc.status()`, printed as `Installed (<kind>), running|not running|state unknown[, port N]. <detail>` or `Not installed (<kind>). <detail>`. Exit 0 when installed, 3 when not.
+5. `status`: `svc.status()`, with a health check of its port, printed by `statusSummary()` (`server/service/common.ts`): whether Masthead answers on the port and who started it, e.g. `Installed (taskscheduler). Masthead is running on port 7727, started by hand; the service starts it at login. (<detail>)`, or `Not installed (<kind>). Masthead is not running on port N.` Exit 0 when installed, 3 when not.
 6. Any other word: `Usage: masthead service install|uninstall|status [--port N] [--force]`, exit 2.
 7. A `ServiceError` (a required command failed) prints its message and exits 1; any other error is re-thrown.
 

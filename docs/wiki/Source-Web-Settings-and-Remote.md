@@ -9,7 +9,7 @@ Settings as a view in place of the chat; it replaced the 0.1.x popup. Opened by 
 Sections, in order:
 
 1. **This device** (only on a remote device): that the browser stays signed in, what its role allows if it is not `full`, and **Forget this device** with one sentence on when to use it ([Signing in](Source-Web-Front-End.md#remote-devices)).
-2. **General:** "When to ask you" (the permission mode; "Never ask (risky)" adds a warning line), "Longest a helper may work" (no limit, 15, 30, 60, 120 or 240 minutes, plus the current value if it is something else), "Show helper reports as one line", "Keep this computer awake while helpers are working" (only if the server's settings have `keepAwake`), "Show team controls" (Advanced, kept in this browser by `ui`, not on the server), and in Advanced "Let them decide how long to think".
+2. **General:** "When to ask you" (the permission mode; "Never ask (risky)" adds a warning line), "Longest a helper may work" (no limit, 15, 30, 60, 120 or 240 minutes, plus the current value if it is something else), "Show helper reports as one line", "Tidy the team automatically" with its help line (`autoCompact`, on by default; shown only if the server's settings have it; off means the person is asked first with a card, see [Compact team](Compact-Team.md)), "Keep this computer awake while helpers are working" (only if the server's settings have `keepAwake`), "Show team controls" (Advanced, kept in this browser by `ui`, not on the server), and in Advanced "Let them decide how long to think".
 3. **Teams** (`ProfilesSection`).
 4. **Agents on this computer** (`BackendsSection`).
 5. **Remote access** (`RemoteSection`), only when `store.remote` is set, which is only on this computer's own page.

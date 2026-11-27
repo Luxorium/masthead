@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeFileAtomic } from '../storage/atomic.js';
 import { DeviceRegistry, ROLES, type AuditEntry, type Device, type Role } from './registry.js';
-import { CachedWhois, type ServeState, type TailnetStatus, type TailscaleProvider } from './tailscale.js';
+import { addCommand, CachedWhois, removeCommand, type ServeState, type TailnetStatus, type TailscaleProvider } from './tailscale.js';
 
 export const DEFAULT_REMOTE_PORT = 7443;
 
@@ -22,6 +22,11 @@ export interface RemoteConfig {
   port: number;
   allowOtherTailnets: boolean;
   allowTagged: boolean;
+  /**
+   * This instance added its serve entry and has not removed it yet. Only then may a leftover entry be
+   * removed at start-up: an instance that never had it on leaves an entry that only looks like its own.
+   */
+  hadEntry: boolean;
 }
 
 /** Shown to local sessions only. */
@@ -46,15 +51,39 @@ export interface RemoteState {
 }
 
 const NEWER_DEVICES = 'The list of allowed devices was saved by a newer version of Masthead. Remote access stays off here so that list is not changed; use the newer version.';
-const DEFAULTS: RemoteConfig = { version: 1, enabled: false, port: DEFAULT_REMOTE_PORT, allowOtherTailnets: false, allowTagged: false };
+const DEFAULTS: RemoteConfig = { version: 1, enabled: false, port: DEFAULT_REMOTE_PORT, allowOtherTailnets: false, allowTagged: false, hadEntry: false };
 
-/** The fix for "only root or the operator may change serve config". */
+/**
+ * The fix for "only root or the operator may change serve config" where the target is a loopback port
+ * (Windows). For a Unix socket being the operator is not enough: Tailscale also wants the operator to
+ * be able to run sudo, so there the fix is `sudoServeCommand` instead.
+ */
 export function operatorCommand(platform: NodeJS.Platform = process.platform, user = process.env.USER ?? process.env.USERNAME ?? '$USER'): string {
   return platform === 'win32' ? 'Run Tailscale as an administrator, or ask your tailnet admin.' : `sudo tailscale set --operator=${user}`;
 }
 
-function looksLikePermission(message: string): boolean {
-  return /access denied|permission|operator|not permitted|must be root|requires root/i.test(message);
+/** Masthead's own serve entry added once as root: the very command Masthead runs, under sudo. */
+export function sudoServeCommand(port: number, target: string): string {
+  return ['sudo', 'tailscale', ...addCommand(port, target)].join(' ');
+}
+
+/** Masthead's own serve entry removed as root (as an administrator on Windows), for when Tailscale
+    refused Masthead the removal. */
+export function serveOffCommand(port: number, platform: NodeJS.Platform = process.platform): string {
+  return [...(platform === 'win32' ? [] : ['sudo']), 'tailscale', ...removeCommand(port)].join(' ');
+}
+
+const LEFTOVER = "Remote access is off and nothing can reach Masthead, but Tailscale still has Masthead's entry. To remove it, run this once in a terminal";
+
+/** Tailscale refused a change for want of rights (not "port in use" or "not running"). */
+export function looksLikePermission(message: string): boolean {
+  return /access denied|permission denied|not permitted|must be root|requires root|be an operator|401 unauthorized/i.test(message);
+}
+
+/** What Tailscale said, on one line and not too long, so the cause is never hidden. */
+export function tailscaleSaid(message: string): string {
+  const line = message.replace(/\s+/g, ' ').trim();
+  return line.length > 240 ? `${line.slice(0, 239)}…` : line;
 }
 
 export class RemoteAccess {
@@ -115,6 +144,8 @@ export class RemoteAccess {
         port: Number.isInteger(r.port) && r.port! >= 1024 && r.port! <= 65535 ? r.port! : DEFAULT_REMOTE_PORT,
         allowOtherTailnets: r.allowOtherTailnets === true,
         allowTagged: r.allowTagged === true,
+        // Files from before beta 2 have no such field: an entry is ours if the switch was on.
+        hadEntry: typeof r.hadEntry === 'boolean' ? r.hadEntry : r.enabled === true,
       };
     } catch {
       return { ...DEFAULTS };
@@ -142,8 +173,11 @@ export class RemoteAccess {
   async reconcile(): Promise<void> {
     await this.refresh();
     if (!this.tailnet?.running) return;
-    if (this.config.enabled && this.serveKind === 'off') await this.apply(true);
-    else if (!this.config.enabled && this.serveKind === 'ours') await this.apply(false);
+    // A refusal does not throw: it stays on show as the problem (with its command).
+    let r: { ok: boolean } | null = null;
+    if (this.config.enabled && this.serveKind === 'off') r = await this.apply(true);
+    else if (!this.config.enabled && this.serveKind === 'ours' && this.config.hadEntry) r = await this.apply(false);
+    if (r?.ok) await this.refresh();
   }
 
   /** Reads Tailscale's state again (status and our serve entry). Never changes anything. */
@@ -171,6 +205,11 @@ export class RemoteAccess {
     if (kind === 'funnel') return { text: `Port ${this.config.port} is published to the internet with Tailscale Funnel. Masthead will not serve there; turn Funnel off or choose another port.` };
     if (kind === 'elsewhere') return { text: `Port ${this.config.port} on Tailscale already serves something else. Choose another port.` };
     if (this.config.enabled && kind === 'off') return { text: 'Remote access is on, but Tailscale is not serving Masthead yet.' };
+    // Left after a refused removal: it points at a closed socket, so this is a tidy-up, not a danger.
+    if (!this.config.enabled && kind === 'ours' && this.config.hadEntry) {
+      const platform = this.opts.platform ?? process.platform;
+      return { text: `${LEFTOVER}${platform === 'win32' ? ' run as administrator' : ''}.`, command: serveOffCommand(this.config.port, platform) };
+    }
     return null;
   }
 
@@ -196,6 +235,15 @@ export class RemoteAccess {
     }
     if (on && !this.tailnet.https) return { ok: false, problem: this.problemFor('off')?.text };
     const result = await this.apply(on);
+    if (!on && !result.ok && this.config.enabled) {
+      // Off must always work: the listener closes and the setting is off. A refused removal leaves an
+      // entry that points at a closed socket, so nothing is reachable; the note says how to remove it.
+      this.config.enabled = false;
+      this.save();
+      this.registry.audit({ event: 'switch', detail: `remote access switched off (Tailscale kept its entry: ${tailscaleSaid(result.problem ?? '')})` });
+      this.changed();
+      return { ok: true, problem: result.problem, command: result.command };
+    }
     if (result.ok) {
       this.config.enabled = on;
       this.save();
@@ -211,15 +259,32 @@ export class RemoteAccess {
     try {
       if (on) await this.opts.tailscale.addServe(this.config.port, target);
       else await this.opts.tailscale.removeServe(this.config.port, target);
+      if (this.config.hadEntry !== on) {
+        this.config.hadEntry = on;
+        this.save();
+      }
       this.problem = null;
       return { ok: true };
     } catch (e) {
       const message = (e as Error).message;
-      if (looksLikePermission(message)) {
-        const command = operatorCommand(this.opts.platform);
-        this.problem = { text: `Tailscale did not let Masthead change its settings. Make yourself the Tailscale operator once, then switch remote access on again.`, command };
-      } else {
+      const platform = this.opts.platform ?? process.platform;
+      if (!looksLikePermission(message)) {
         this.problem = { text: message };
+      } else if (!on) {
+        // Switching off: the entry is left pointing at a closed socket; removing it is tidy, not urgent.
+        this.problem = { text: `${LEFTOVER}${platform === 'win32' ? ' run as administrator' : ''}. Tailscale said: ${tailscaleSaid(message)}`, command: serveOffCommand(this.config.port, platform) };
+      } else if (this.opts.target.kind === 'socket' && platform !== 'win32') {
+        // A Unix-socket target needs root (an operator only if sudo works without a password), so the
+        // operator step would not help. Root adds Masthead's entry once; after that switching on finds it.
+        this.problem = {
+          text: "Tailscale needs your password once to share Masthead's private connection. Run this once in a terminal, then switch remote access on again.",
+          command: sudoServeCommand(this.config.port, target),
+        };
+      } else {
+        this.problem = {
+          text: `Tailscale did not let Masthead change its settings. Make yourself the Tailscale operator once, then switch remote access on again. Tailscale said: ${tailscaleSaid(message)}`,
+          command: operatorCommand(platform),
+        };
       }
       this.changed();
       return { ok: false, problem: this.problem.text, command: this.problem.command };

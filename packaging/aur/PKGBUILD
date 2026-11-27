@@ -14,8 +14,8 @@ noextract=("masthead-$pkgver.tgz")
 sha256sums=('SKIP')  # replace with the real checksum at release
 
 package() {
-  # --omit=optional: skip the Agent SDK's private Claude Code binary; Masthead runs the user's own.
-  npm install -g --omit=optional --no-audit --no-fund --prefix "$pkgdir/usr" "$srcdir/masthead-$pkgver.tgz"
+  # --os=none --cpu=none (npm ignores --omit=optional for a global install): skip the Agent SDK's private Claude Code binary; Masthead runs the user's own.
+  npm install -g --os=none --cpu=none --no-audit --no-fund --prefix "$pkgdir/usr" "$srcdir/masthead-$pkgver.tgz"
   find "$pkgdir/usr" -type d -exec chmod 755 {} +
   install -Dm644 "$pkgdir/usr/lib/node_modules/@luxorium/masthead/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

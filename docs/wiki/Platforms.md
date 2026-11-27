@@ -134,7 +134,7 @@ CI is described on [CI](Source-CI.md). The real-machine checks are in `docs/plan
 | Area | Linux | macOS | Windows | Real machine only (checklist §) |
 |---|---|---|---|---|
 | Type check, unit and web tests | CI | CI | CI | – |
-| Build, pack, install with `--omit=optional`, `masthead --version` | CI | CI | CI | – |
+| Build, pack, install with `--os=none --cpu=none`, `masthead --version` | CI | CI | CI | – |
 | The page in Chromium on the fake backend | CI | CI | CI | Other browsers (§1) |
 | Folder and candidate logic (pure functions) | CI | CI | CI | – |
 | Browser opens signed in, sign-in file removed | unit tests only | unit tests only | unit tests only | §1 (macOS, Windows) |

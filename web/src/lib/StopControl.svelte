@@ -4,7 +4,7 @@
   import { store } from './store.svelte.ts';
 
   /** The ■ that stops a live sub-agent and everything under it. Shared by the team map and the team panel. */
-  let { agent, placement }: { agent: AgentInfo; placement: 'map' | 'row' } = $props();
+  let { agent, placement }: { agent: AgentInfo; placement: 'row' } = $props();
 
   function press() {
     if (store.convId) store.send({ t: 'stop_agent', convId: store.convId, agentId: agent.id });
@@ -12,7 +12,7 @@
 </script>
 
 {#if store.mayStop}
-<button class="stop {placement === 'map' ? 'on-map' : 'row'}" onclick={press} title={T.team.stopTitle} aria-label={T.team.stop(displayName(agent.name))}>
+<button class="stop {placement}" onclick={press} title={T.team.stopTitle} aria-label={T.team.stop(displayName(agent.name))}>
   <span class="label" aria-hidden="true">{T.team.stopWord}</span><span class="glyph" aria-hidden="true">■</span>
 </button>
 {/if}
@@ -30,27 +30,6 @@
     border-radius: 6px;
     color: var(--text);
     opacity: 0.8;
-  }
-  .stop.on-map {
-    position: absolute;
-    right: 6px;
-    bottom: 6px;
-    width: 24px;
-    padding: 0;
-    justify-content: center;
-  }
-  /* On a map card the word floats above the button, so it never covers the card's text. */
-  .stop.on-map .label {
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 4px);
-    padding: 2px 7px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--raised);
-    color: var(--bad);
-    box-shadow: var(--shadow);
-    white-space: nowrap;
   }
   .glyph {
     font-size: 14px;

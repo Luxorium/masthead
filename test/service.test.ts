@@ -2,7 +2,7 @@
 // launchctl or schtasks or writes outside the fake.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { checkValue, cleanPath } from '../server/service/common.ts';
+import { checkValue, cleanPath, statusSummary } from '../server/service/common.ts';
 import { ServiceError, serviceFor, type Deps, type RunResult } from '../server/service/index.ts';
 import { LABEL, launchdEnvFrom, launchdPortFrom, plistContent } from '../server/service/launchd.ts';
 import { execQuote, unitContent, unitEnvFrom, unitPortFrom, unitQuote } from '../server/service/systemd.ts';
@@ -365,4 +365,17 @@ test('taskscheduler: uninstall ends and deletes; status and serves read the quer
 
 test('service: other platforms have none', () => {
   assert.equal(serviceFor('freebsd', fake().deps), null);
+});
+
+test('service status says plainly whether Masthead answers and who started it', () => {
+  const st = (running: boolean | null) => ({ installed: true, running, port: 7727, detail: 'Task "Masthead" Ready, port 7727' });
+  assert.equal(
+    statusSummary('taskscheduler', st(false), true, 7727),
+    'Installed (taskscheduler). Masthead is running on port 7727, started by hand; the service starts it at login. (Task "Masthead" Ready, port 7727)',
+  );
+  assert.match(statusSummary('systemd', st(true), true, 7727), /running on port 7727, started by the service/);
+  assert.match(statusSummary('launchd', st(null), true, 7727), /cannot be told/);
+  assert.match(statusSummary('systemd', st(true), false, 7727), /does not answer on port 7727 although the service is running/);
+  assert.match(statusSummary('systemd', st(false), false, 7727), /^Installed \(systemd\)\. Masthead is not running on port 7727; the service starts it at login\./);
+  assert.equal(statusSummary('systemd', { installed: false, running: false, port: null, detail: 'x' }, true, 7717), 'Not installed (systemd). Masthead is running on port 7717, started by hand.');
 });

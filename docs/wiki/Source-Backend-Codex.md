@@ -155,6 +155,10 @@ Tool results longer than 12 000 characters are cut, with a note of how many were
 
 A turn that fails with `usageLimitExceeded` or `rateLimitExceeded` ends with `apiError: 'rate_limit'`.
 
+## Compaction: `compact()`
+
+`thread/compact/start {threadId}` answers `{}` at once; Codex then runs the compaction as a turn of its own (`turn/started`, an item of type `contextCompaction`, `thread/tokenUsage/updated`, `turn/completed`). No `thread/compacted` notification came in a live check (codex-cli 0.172.0, gpt-6-luna, about 1.9 s), so `turn/completed` ends it. The first `turn/started` after the request, while no turn of Masthead's is running, is taken as the compaction turn: it produces no turnStarted, turnEnded, text or tool events (usage still goes through), fires `compacted()` once and resolves; failed or interrupted rejects. Busy, closed, lost or disposed sessions reject. Messages sent meanwhile start the next turn after it.
+
 ## Context, images, interrupt, close
 
 - **Context:** `thread/tokenUsage/updated` gives `last.totalTokens` (context in use) and `modelContextWindow`; `contextUsage()` returns the latest pair, or `{used: 0, max: 0}` before the first update. `usage.output` is the growth of `total.outputTokens` since the previous update. There is no cost in dollars.

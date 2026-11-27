@@ -106,7 +106,7 @@ export function systemdService(deps: Deps): ServiceManager {
         deps.run('systemctl', sc('daemon-reload'));
         throw e;
       }
-      return [`Wrote ${file}`, 'Masthead is running as a user service and will start when you log in.'];
+      return [`Wrote ${file}`, 'Installed Masthead as a user service; it starts when you log in.'];
     },
     async uninstall() {
       const files = [unitPath(deps.home), legacyUnitPath(deps)].filter((f): f is string => f !== null && deps.fs.exists(f));

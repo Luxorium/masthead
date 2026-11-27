@@ -63,6 +63,8 @@ export interface BackendCaps {
   contextUsage: boolean;
   /** Can skip the person's own MCP servers. */
   lean: boolean;
+  /** Can compact a session's memory on request (Session.compact). */
+  compact: boolean;
 }
 
 /** A JSON Schema object describing a tool's input. */
@@ -115,6 +117,11 @@ export interface Session {
   /** graceful: end the input and let the backend finish; now: end the process at once. */
   close(how: 'graceful' | 'now'): void;
   contextUsage?(): Promise<{ used: number; max: number }>;
+  /**
+   * Compacts the session's memory (only if caps.compact). Called between turns with nothing pending;
+   * resolves when it has finished, rejects on failure. It is not a turn: no turnStarted/turnEnded/text.
+   */
+  compact?(): Promise<void>;
   /** Settles once the backend process behind this session has fully stopped (after close or exit). */
   readonly ended: Promise<void>;
 }

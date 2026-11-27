@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 /**
  * The Claude Code adapter: one Agent SDK `query()` per session, driven in streaming-input mode, with
  * its messages translated into the neutral events of ../types.ts. It decides nothing about when an
@@ -72,6 +73,7 @@ export const CLAUDE_CAPS: BackendCaps = {
   midTurnDelivery: true,
   contextUsage: true,
   lean: true,
+  compact: true,
 };
 
 export function toolResultText(content: unknown): string {
@@ -159,6 +161,8 @@ export class ClaudeSession implements Session {
   private turnError: string | undefined;
   private turnApiError: string | undefined;
   private context = 0;
+  /** A compaction asked for with compact(): the id of its `/compact` message, and how to settle it. */
+  private compacting: { id: string; resolve: () => void; reject: (e: Error) => void } | null = null;
 
   constructor(
     private opts: ClaudeBackendOptions,
@@ -300,6 +304,21 @@ export class ClaudeSession implements Session {
     }
   }
 
+  /**
+   * Compacts the session's memory: Claude Code runs its `/compact` command when it arrives as a user
+   * message (seen with 2.1.331: status, init, compact_boundary, then a result naming the message, with
+   * local_command 'compact'). That result settles this instead of ending a turn.
+   */
+  compact(): Promise<void> {
+    if (!this.q) return Promise.reject(new Error('Claude Code is not running.'));
+    if (this.compacting) return Promise.reject(new Error('Already compacting.'));
+    return new Promise<void>((resolve, reject) => {
+      const id = randomUUID();
+      this.compacting = { id, resolve, reject };
+      this.send(id, '/compact');
+    });
+  }
+
   async contextUsage(): Promise<{ used: number; max: number }> {
     if (!this.q) throw new Error('no process');
     const u = await this.q.getContextUsage();
@@ -315,6 +334,8 @@ export class ClaudeSession implements Session {
     }
     this.input.close();
     this.q = null;
+    this.compacting?.reject(new Error(failure ?? 'Claude Code ended during compaction.'));
+    this.compacting = null;
     if (this.closeRequested) return; // we asked it to end
     // A resume whose session no longer exists: Claude Code reports it only as text, so the rule is
     // narrow: a resume that ended before the session started, whose output names the missing session.
@@ -329,8 +350,8 @@ export class ClaudeSession implements Session {
         const sub = (m as { subtype?: string }).subtype;
         if (sub === 'init') {
           this.sawInit = true;
-          // Every turn starts with init, also those Claude Code starts by itself.
-          this.ev.turnStarted();
+          // Every turn starts with init, also those Claude Code starts by itself; a compaction is no turn.
+          if (!this.compacting) this.ev.turnStarted();
           this.ev.sessionStarted((m as { session_id: string }).session_id);
         } else if (sub === 'status') {
           const st = (m as { status?: string | null }).status;
@@ -448,6 +469,15 @@ export class ClaudeSession implements Session {
   }
 
   private result(m: Record<string, any>): void {
+    const c = this.compacting;
+    if (c && (m.local_command === 'compact' || (Array.isArray(m.user_message_uuids) && m.user_message_uuids.includes(c.id)) || m.user_message_uuid === c.id)) {
+      this.compacting = null;
+      if (typeof m.total_cost_usd === 'number') this.ev.usage({ costUsd: m.total_cost_usd });
+      const failed = m.subtype !== 'success' || m.is_error === true;
+      if (failed) c.reject(new Error((Array.isArray(m.errors) && m.errors.join('; ')) || (typeof m.result === 'string' && m.result) || 'The compaction failed.'));
+      else c.resolve();
+      return;
+    }
     // Which of our messages this turn answered (sdk.d.ts, SDKResultSuccess/Error): `user_message_uuids`,
     // or on older versions the single `user_message_uuid`. A result that names neither is a turn Claude
     // Code started by itself, or an error turn with no single triggering send: [] when this Claude Code

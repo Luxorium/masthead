@@ -2,6 +2,7 @@ import type {
   AgentInfo,
   AppState,
   BlobRef,
+  CompactState,
   ClientMsg,
   ConversationMeta,
   Draft,
@@ -71,7 +72,6 @@ export class Store {
   items = $state<Record<string, Item[]>>({});
   drafts = $state<Record<string, Draft | null>>({});
   pending = $state<PermissionRequest[]>([]);
-  view = $state<'chat' | 'map'>('chat');
   newCwd = $state('');
   /** The team chosen on the new-chat screen (ProfileChip); null means the default team. */
   newProfile = $state<string | null>(null);
@@ -169,7 +169,12 @@ export class Store {
   private subscribedOnServer = false;
 
   conv = $derived(this.conversations.find((c) => c.id === this.convId) ?? null);
-  agentList = $derived(Object.values(this.agents).sort((a, b) => a.createdAt - b.createdAt));
+  /** The team: every agent of the open chat except archived ones (they live under "Archived helpers"). */
+  agentList = $derived(Object.values(this.agents).filter((a) => !a.archived).sort((a, b) => a.createdAt - b.createdAt));
+  /** Helpers a team tidy-up archived, newest first: readable, and the person may restore them. */
+  archivedAgents = $derived(Object.values(this.agents).filter((a) => !!a.archived).sort((a, b) => (b.archived ?? 0) - (a.archived ?? 0)));
+  /** A team tidy-up (compaction) under way or just ended in the open chat; null when none. */
+  compact = $state<CompactState | null>(null);
   lead = $derived(this.agentList.find((a) => a.tier === 'lead') ?? null);
   viewAgent = $derived((this.viewAgentId ? this.agents[this.viewAgentId] : null) ?? this.lead);
   viewItems = $derived(this.viewAgent ? (this.items[this.viewAgent.id] ?? []) : []);
@@ -498,6 +503,7 @@ export class Store {
         const agents: Record<string, AgentInfo> = {};
         for (const a of m.agents) agents[a.id] = a;
         this.agents = agents;
+        this.compact = m.conv.compact ?? null;
         this.pending = [...this.pending.filter((p) => p.convId !== m.conv.id), ...m.pending];
         const snap = m as typeof m & { seq?: number; drafts?: Record<string, Draft & { dseq: number }> };
         if (typeof snap.seq === 'number') {
@@ -605,7 +611,6 @@ export class Store {
     this.clipped = {};
     this.dseq = {};
     this.wanted.clear();
-    this.view = 'chat';
     if (location.hash !== `#/c/${convId}`) history.replaceState(null, '', `#/c/${convId}`);
     if (this.v2) {
       // Version 2: events of this conversation only, starting with a snapshot.
@@ -670,6 +675,16 @@ export class Store {
         }
         return this.v2; // a version 2 tab ignores a state without `protocol`
       }
+      case 'compact':
+        if (m.convId === this.convId) this.compact = (m.compact as CompactState | null) ?? null;
+        return true;
+      case 'archived':
+        if (m.convId === this.convId) for (const a of m.agents as AgentInfo[]) this.agents[a.id] = a;
+        return true;
+      case 'archive_items':
+        // An archived helper's chat, read-only: handled like a transcript page.
+        this.handle({ ...(m as object), t: 'items', draft: null } as unknown as ServerMsg);
+        return true;
       case 'approval': {
         if (!this.v2) return false;
         const sum = m.summary as ApprovalSummary;
@@ -725,6 +740,20 @@ export class Store {
     }
   }
 
+  /** The person's answer to the tidy-up card: which helpers to keep, and whether to go ahead. */
+  answerCompact(keep: string[], accept: boolean): void {
+    if (this.convId && this.compact) this.request({ t: 'compact_answer', convId: this.convId, id: this.compact.id, keep, accept });
+  }
+
+  cancelCompact(): void {
+    if (this.convId) this.request({ t: 'compact_cancel', convId: this.convId });
+  }
+
+  /** Brings an archived helper back into the team. */
+  restoreAgent(agentId: string): void {
+    if (this.convId) this.request({ t: 'restore_agent', convId: this.convId, agentId });
+  }
+
   /** Fetches the whole of an item that arrived clipped. */
   fetchFull(agentId: string, itemId: string): void {
     if (this.convId && this.clipped[itemId]) this.sendV2({ t: 'item_full', convId: this.convId, agentId, itemId });
@@ -746,7 +775,6 @@ export class Store {
     this.items = {};
     this.drafts = {};
     this.wanted.clear();
-    this.view = 'chat';
     if (location.hash) history.replaceState(null, '', location.pathname);
   }
 
@@ -755,7 +783,8 @@ export class Store {
     if (!this.convId) return;
     this.wanted.add(agentId);
     if (this.items[agentId]) return;
-    if (this.v2) this.sendV2({ t: 'items', convId: this.convId, agentId, limit: Store.PAGE });
+    if (this.agents[agentId]?.archived) this.request({ t: 'archive_items', convId: this.convId, agentId, limit: Store.PAGE });
+    else if (this.v2) this.sendV2({ t: 'items', convId: this.convId, agentId, limit: Store.PAGE });
     else this.send({ t: 'items', convId: this.convId, agentId });
   }
 
@@ -776,7 +805,6 @@ export class Store {
   viewOf(agentId: string): void {
     const isLead = this.agents[agentId]?.tier === 'lead';
     this.viewAgentId = isLead ? null : agentId;
-    this.view = 'chat';
     this.loadItems(agentId);
   }
 

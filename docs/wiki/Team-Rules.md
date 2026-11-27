@@ -88,13 +88,13 @@ Only a sub-agent can wait: the lead's `send_message` has no `wait` input. `messa
 
 `send_message` calls `Conversation.message(from, to, text, wait)`:
 
-- Any agent can message any agent in the conversation by name, including the lead and finished agents. It cannot message itself ("Error: that is you."), an agent the person stopped ('Error: the person stopped "X"; only they can wake it.'), or a finished agent of a tier that is off.
+- Any agent can message any agent in the conversation by name, including the lead and finished agents. It cannot message itself ("Error: that is you."), an archived helper (see below), an agent the person stopped ('Error: the person stopped "X"; only they can wake it.'), or a finished agent of a tier that is off.
 - A finished target is woken (`Woken`, then the message is delivered and its runtime resumes the session).
 - The target gets an `inbound` item and the text in `messageEnvelope()`. When the sender is not the target's parent, the line 'To answer, use send_message to "X".' follows; a message from the parent gets none, because the report answers it.
 - Messages to an agent paused at a usage limit are held and delivered in order when the pause ends.
 - The reply is 'Delivered to "X" (status).', where status is the target's status before, "the lead", or "was done, now resuming". When the sender woke an agent that reports to someone else: ' Its report goes to "Y"; it answers you only with send_message.'
 
-`list_agents` (`Conversation.list()`) gives one line per agent: its status (with the activity when running; "paused until HH:MM (usage limit)"; "waiting on a background command for 4m"), "for 3m" while live or "ended 5m ago", context and cost when non-zero, effort, who started it, and its title.
+`list_agents` (`Conversation.list()`) gives one line per agent that is not archived: its status (with the activity when running; "paused until HH:MM (usage limit)"; "waiting on a background command for 4m"), "for 3m" while live or "ended 5m ago", context and cost when non-zero, effort, who started it, and its title.
 
 The person can type to any agent directly (`userSend()` with an `agentId`); the message goes in as a plain user message, not in an envelope, and passes a usage-limit pause.
 
@@ -110,8 +110,21 @@ Only the lead talks to the person. The runtime opens each session with `canAskPe
 
 Walkthrough: [Stopping an agent](Walkthrough-Stopping-an-Agent.md).
 
+## Archived helpers and tidying the team
+
+A team compaction ("tidying the team") archives finished helpers the lead chose not to keep and compacts the memory of everyone who stays, the lead last. By default it starts by itself at the end of a lead turn once about 15 helpers have finished or the lead's memory is past 70 %, or at once when the person types `/compact`; with the setting "Tidy the team automatically" off, the person confirms on a card. Full flow: [Compact team](Compact-Team.md).
+
+An archived helper is a finished helper that has left the team:
+
+- the lead is never archived, nor a helper that is working;
+- no agent can wake it: `send_message` returns 'Error: "X" is archived and cannot be woken. Read its chat with read_archive.'; `stop_agent` answers '"X" is archived (not running).'; `set_agent_effort` treats it as unknown;
+- the person cannot message it either ('"X" is archived. Restore it from the archived helpers to message it.'), but may restore it, after which the usual rules apply;
+- `list_agents` leaves it out and ends with a count: "N archived helpers: read their chats with read_archive.";
+- every agent can read archived chats with `read_archive` (a list, or one chat a page at a time, optionally only lines with a word);
+- its name stays taken, so a new agent never gets it.
+
 ## Effort
 
 With automatic effort on, the lead starts at low and a sub-agent at the level its parent chose (low by default), capped at its tier's ceiling. The lead changes its own effort; the others ask their parent; any agent may set the effort of an agent below it. The machine resets an agent to low when a piece of work ends. Full rules: [Thinking effort](Thinking-Effort.md).
 
-Related pages: [State machine](State-Machine.md) · [Source: core/conversation.ts](Source-Core-Conversation.md) · [Source: core/tools.ts](Source-Core-Tools.md) · [Source: core/prompts.ts](Source-Core-Prompts.md) · [Team profiles and settings](Team-Profiles-and-Settings.md)
+Related pages: [State machine](State-Machine.md) · [Compact team](Compact-Team.md) · [Source: core/conversation.ts](Source-Core-Conversation.md) · [Source: core/tools.ts](Source-Core-Tools.md) · [Source: core/prompts.ts](Source-Core-Prompts.md) · [Team profiles and settings](Team-Profiles-and-Settings.md)

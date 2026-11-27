@@ -9,8 +9,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import WebSocket from 'ws';
 import { App, type Client } from '../server/app/app.ts';
-import { RemoteAccess, operatorCommand, targetUrl, type RemoteTarget } from '../server/remote/access.ts';
-import { FakeTailscale, type Identity } from '../server/remote/tailscale.ts';
+import { RemoteAccess, looksLikePermission, operatorCommand, serveOffCommand, sudoServeCommand, targetUrl, type RemoteTarget } from '../server/remote/access.ts';
+import { CliTailscale, FakeTailscale, OffTailscale, serveStateFrom, tailscaleFor, type Identity } from '../server/remote/tailscale.ts';
 import { defaultSettings } from '../server/settings/settings.ts';
 import { Store } from '../server/storage/store.ts';
 import { chooseTarget, remoteCsp, startRemote } from '../server/transport/remote.ts';
@@ -20,13 +20,13 @@ const HOST = 'host.example.ts.net';
 const phone: Identity = { nodeId: 'nPHONE', nodeName: 'phone', os: 'iOS', addresses: ['100.64.0.2'], tagged: false, user: { login: 'me@example.com', name: 'Me' }, tailnetId: 'T1' };
 const laptop: Identity = { ...phone, nodeId: 'nLAPTOP', nodeName: 'laptop', addresses: ['100.64.0.3'] };
 
-function setup(opts: { target?: RemoteTarget; tailscale?: FakeTailscale } = {}) {
+function setup(opts: { target?: RemoteTarget; tailscale?: FakeTailscale; platform?: NodeJS.Platform } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'mh-rw-'));
   const tailscale = opts.tailscale ?? new FakeTailscale({ running: true, dnsName: HOST, tailnetId: 'T1', selfNodeId: 'nSELF', https: true });
   for (const id of [phone, laptop]) tailscale.identities.set(id.addresses[0]!, id);
   // Windows has no socket target: a loopback port (a fixed one per test process; serve needs a real port).
   const target: RemoteTarget = opts.target ?? (POSIX ? { kind: 'socket', path: join(dir, 'run', 'r.sock') } : { kind: 'loopback', port: freePort() });
-  const access = new RemoteAccess({ dir: join(dir, 'remote'), tailscale, target });
+  const access = new RemoteAccess({ dir: join(dir, 'remote'), tailscale, target, platform: opts.platform });
   const webDir = join(dir, 'web');
   mkdirSync(webDir);
   writeFileSync(join(webDir, 'index.html'), '<!doctype html><title>page</title>');
@@ -88,18 +88,95 @@ test('remote: the switch adds and removes only our serve entry and is remembered
   assert.match(access.state().problem ?? '', /Funnel/);
 });
 
-test('remote: not the Tailscale operator gives the exact command; no Tailscale or no HTTPS says so', async () => {
-  class Denied extends FakeTailscale {
-    override async addServe(): Promise<void> {
-      throw new Error('sending serve config: Access denied: serve config denied');
-    }
+const SOCKET_401 = "sending serve config: 401 Unauthorized: must be root, or be an operator and able to run 'sudo tailscale' to serve a path or Unix socket";
+
+/** Tailscale as a user who may read but not change serve config; `root()` stands for the person's sudo. */
+class Refusing extends FakeTailscale {
+  constructor(public refusal: string) {
+    super({ running: true, dnsName: HOST, tailnetId: 'T1', selfNodeId: 'nSELF', https: true });
   }
-  const { access } = setup({ tailscale: new Denied({ running: true, dnsName: HOST, tailnetId: 'T1', selfNodeId: 'nSELF', https: true }) });
+  override async addServe(port: number, target: string): Promise<void> {
+    if ((await this.serveState(port, target)).kind === 'ours') return;
+    throw new Error(this.refusal);
+  }
+  override async removeServe(port: number, target: string): Promise<void> {
+    if ((await this.serveState(port, target)).kind === 'off') return;
+    throw new Error(this.refusal);
+  }
+  async root(port: number, target: string): Promise<void> {
+    await super.addServe(port, target);
+  }
+}
+
+test('remote: a socket target refused for want of root offers the sudo serve command; after it, switching on works', { skip: !POSIX }, async () => {
+  const tailscale = new Refusing(SOCKET_401);
+  const { access, target } = setup({ tailscale, platform: 'linux' });
   const r = await access.setEnabled(true);
   assert.equal(r.ok, false);
-  assert.equal(r.command, operatorCommand());
+  assert.equal(access.enabled, false);
+  // The very command Masthead runs, under sudo, built from addCommand: not the operator step, which is not enough.
+  assert.equal(r.command, `sudo tailscale serve --bg --https=${PORT} ${targetUrl(target)}`);
+  assert.equal(r.command, sudoServeCommand(PORT, targetUrl(target)));
+  assert.match(r.problem ?? '', /needs your password once/);
+  assert.equal(access.state().command, r.command);
+  // The person runs it; Masthead's entry is there as root added it, and the switch now finds it.
+  await tailscale.root(PORT, targetUrl(target));
+  tailscale.commands.length = 0;
+  const again = await access.setEnabled(true);
+  assert.equal(again.ok, true);
+  assert.equal(access.enabled, true);
+  assert.equal(access.state().serve, 'ours');
+  assert.equal(access.state().problem, undefined);
+  assert.equal(access.state().command, undefined);
+  // Masthead itself ran nothing: the entry root added is its own.
+  assert.deepEqual(tailscale.commands, []);
+});
+
+test('remote: switching off always works; a refused removal leaves a quiet note with the removal command', { skip: !POSIX }, async () => {
+  const tailscale = new Refusing(SOCKET_401);
+  const { access, target } = setup({ tailscale, platform: 'linux' });
+  await tailscale.root(PORT, targetUrl(target));
+  assert.equal((await access.setEnabled(true)).ok, true);
+  const r = await access.setEnabled(false);
+  assert.equal(r.ok, true);
+  assert.equal(access.enabled, false);
+  assert.equal(r.command, `sudo tailscale serve --https=${PORT} off`);
+  assert.equal(r.command, serveOffCommand(PORT, 'linux'));
+  assert.match(r.problem ?? '', /nothing can reach Masthead.*Tailscale said: sending serve config: 401 Unauthorized/);
+  assert.ok(access.audit().some((e) => e.event === 'switch' && /switched off \(Tailscale kept its entry/.test(e.detail ?? '')));
+  // At the next start: the setting is off and the entry still ours; the refused removal does not throw.
+  await access.reconcile();
+  assert.equal(access.enabled, false);
+  assert.equal(access.state().serve, 'ours');
+  assert.equal(access.state().command, serveOffCommand(PORT, 'linux'));
+  // Once the person removes it, the note goes.
+  delete tailscale.serve.Web?.[`${HOST}:${PORT}`];
+  delete tailscale.serve.TCP?.[String(PORT)];
+  await access.refresh();
+  assert.equal(access.state().problem, undefined);
+});
+
+test('remote: other permission refusals keep the operator advice and say what Tailscale said; the match is narrow', async () => {
+  const tailscale = new Refusing('sending serve config: Access denied: serve config denied');
+  const { access } = setup({ tailscale, target: { kind: 'loopback', port: 7801 }, platform: 'linux' });
+  const r = await access.setEnabled(true);
+  assert.equal(r.ok, false);
+  assert.equal(r.command, operatorCommand('linux'));
+  assert.match(r.problem ?? '', /operator once.*Tailscale said: sending serve config: Access denied: serve config denied$/);
   assert.match(operatorCommand('linux', 'ann'), /^sudo tailscale set --operator=ann$/);
-  assert.equal(access.state().command, operatorCommand());
+  assert.match(operatorCommand('win32'), /administrator/);
+  // Windows: the loopback target, so the operator (administrator) advice, never sudo.
+  const win = setup({ tailscale: new Refusing('Access denied'), target: { kind: 'loopback', port: 7802 }, platform: 'win32' });
+  assert.match((await win.access.setEnabled(true)).command ?? '', /administrator/);
+  assert.equal(serveOffCommand(PORT, 'win32'), `tailscale serve --https=${PORT} off`);
+  // A long multi-line answer comes back on one line, trimmed.
+  const long = setup({ tailscale: new Refusing(`permission denied\n${'x'.repeat(400)}`), target: { kind: 'loopback', port: 7803 }, platform: 'linux' });
+  const p = (await long.access.setEnabled(true)).problem ?? '';
+  assert.ok(!p.includes('\n') && p.endsWith('…') && p.length < 500);
+  for (const m of [SOCKET_401, 'Access denied: serve config denied', 'open /var/run/tailscale: permission denied', 'must be root', 'operation not permitted'])
+    assert.equal(looksLikePermission(m), true, m);
+  for (const m of ['Port 7443 on Tailscale is already in use.', 'serve config has a permission field that was ignored', 'tailscale: not running']) assert.equal(looksLikePermission(m), false, m);
+  // Not refused but missing: plain words, no command.
   const none = setup({ tailscale: new FakeTailscale(null) });
   assert.match((await none.access.setEnabled(true)).problem ?? '', /not installed or not running/);
   const noHttps = setup({ tailscale: new FakeTailscale({ running: true, dnsName: HOST, tailnetId: 'T1', selfNodeId: 'nSELF', https: false }) });
@@ -108,8 +185,18 @@ test('remote: not the Tailscale operator gives the exact command; no Tailscale o
 
 test('remote: on restart the setting wins over a stale serve entry, and others are left alone', async () => {
   const { access, tailscale, target } = setup();
-  // Our entry left behind while the setting is off: removed.
+  // An entry that only looks like ours, while this instance never had remote access on: left alone.
   await tailscale.addServe(PORT, targetUrl(target));
+  tailscale.commands.length = 0;
+  await access.reconcile();
+  assert.deepEqual(tailscale.commands, []);
+  assert.equal(access.state().command, undefined, 'and no note about it either');
+  // Our own entry left behind (switched off while Tailscale was down): removed at the next start.
+  assert.equal((await access.setEnabled(true)).ok, true);
+  const tailnet = tailscale.tailnet;
+  tailscale.tailnet = null;
+  assert.equal((await access.setEnabled(false)).ok, true);
+  tailscale.tailnet = tailnet;
   tailscale.commands.length = 0;
   await access.reconcile();
   assert.deepEqual(tailscale.commands, [['serve', `--https=${PORT}`, 'off']]);
@@ -138,11 +225,39 @@ test('remote: port and policy settings; a port cannot change while on', async ()
   assert.throws(() => access.configure({ port: 7445 }), /Switch remote access off/);
 });
 
+test('remote: test and fake servers never run the real tailscale', async () => {
+  assert.ok(tailscaleFor({ MASTHEAD_BACKEND: 'fake' }) instanceof OffTailscale);
+  assert.ok(tailscaleFor({ MASTHEAD_TAILSCALE: 'off' }) instanceof OffTailscale);
+  assert.ok(tailscaleFor({}) instanceof CliTailscale);
+  const off = new OffTailscale();
+  assert.equal(await off.status(), null);
+  assert.equal(await off.whois('100.64.0.2'), null);
+  await assert.rejects(off.removeServe());
+  // Remote access with it: "not installed", switching on refused, nothing else happens.
+  const access = new RemoteAccess({ dir: join(mkdtempSync(join(tmpdir(), 'mh-off-')), 'remote'), tailscale: off, target: { kind: 'socket', path: '/tmp/x.sock' } });
+  await access.reconcile();
+  assert.match((await access.setEnabled(true)).problem ?? '', /not installed or not running/);
+  assert.equal(access.state().available, false);
+});
+
 test('remote: targets per platform', () => {
-  assert.deepEqual(chooseTarget({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/d', 'linux'), { kind: 'socket', path: '/run/user/1000/masthead/remote.sock' });
-  assert.deepEqual(chooseTarget({}, '/d', 'darwin', 501), { kind: 'socket', path: '/tmp/masthead-501/remote.sock' }, 'no runtime folder: a private folder in /tmp');
+  const linuxData = '/home/ann/.local/share/masthead';
+  const macData = '/Users/ann/Library/Application Support/Masthead';
+  assert.deepEqual(chooseTarget({ XDG_RUNTIME_DIR: '/run/user/1000' }, linuxData, 'linux', 1000, '/home/ann'), { kind: 'socket', path: '/run/user/1000/masthead/remote.sock' });
+  assert.deepEqual(chooseTarget({}, macData, 'darwin', 501, '/Users/ann'), { kind: 'socket', path: '/tmp/masthead-501/remote.sock' }, 'no runtime folder: a private folder in /tmp');
   assert.deepEqual(chooseTarget({}, '/d', 'win32'), { kind: 'loopback', port: 7719 });
-  assert.deepEqual(chooseTarget({ XDG_RUNTIME_DIR: '/' + 'x'.repeat(120) }, '/d', 'linux', 7), { kind: 'socket', path: '/tmp/masthead-7/remote.sock' }, 'a long runtime path never falls back to a port on Unix');
+  assert.deepEqual(chooseTarget({ XDG_RUNTIME_DIR: '/' + 'x'.repeat(120) }, linuxData, 'linux', 7, '/home/ann'), { kind: 'socket', path: '/tmp/masthead-7/remote.sock' }, 'a long runtime path never falls back to a port on Unix');
+  // Any other data folder (a test server, a second instance) gets its own socket, so their serve
+  // entries never look alike: the other's entry reads as "elsewhere" and is left alone.
+  const test1 = chooseTarget({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/tmp/tmp.abc/data', 'linux', 1000, '/home/ann');
+  const test2 = chooseTarget({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/tmp/tmp.def/data', 'linux', 1000, '/home/ann');
+  assert.match(test1.kind === 'socket' ? test1.path : '', /^\/run\/user\/1000\/masthead\/remote-[0-9a-f]{10}\.sock$/);
+  assert.notDeepEqual(test1, test2);
+  assert.deepEqual(test1, chooseTarget({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/tmp/tmp.abc/data', 'linux', 1000, '/home/ann'), 'the same folder, the same socket');
+  const longest = chooseTarget({ XDG_RUNTIME_DIR: '/run/user/4294967294' }, '/x', 'linux', 1, '/home/ann');
+  assert.ok(longest.kind === 'socket' && Buffer.byteLength(longest.path) < 100);
+  const ours = targetUrl(chooseTarget({ XDG_RUNTIME_DIR: '/run/user/1000' }, linuxData, 'linux', 1000, '/home/ann'));
+  assert.equal(serveStateFrom({ Web: { [`${HOST}:${PORT}`]: { Handlers: { '/': { Proxy: ours } } } }, TCP: { [PORT]: { HTTPS: true } } }, HOST, PORT, targetUrl(test1)).kind, 'elsewhere');
   assert.equal(remoteCsp(`https://${HOST}:${PORT}`).includes(`connect-src 'self' wss://${HOST}:${PORT}`), true);
 });
 

@@ -2,6 +2,7 @@
 // platform has one; on Windows (where Tailscale cannot serve a Unix socket) a loopback port, where
 // the device token is the only protection against another local program that forges the forwarded
 // address. Everything here assumes a request came through tailscaled and checks it again anyway.
+import { createHash } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, unlinkSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { dirname, resolve } from 'node:path';
@@ -11,6 +12,7 @@ import type { RemoteAccess, RemoteTarget } from '../remote/access.js';
 import type { Client } from '../app/clients.js';
 import { BlobTokens, handleBlobGet, handleBlobPost } from './blobs.js';
 import { attach, serveStatic, type ServedApp } from './http.js';
+import { appDirs, HOME } from '../paths.js';
 import type { BlobStore } from '../storage/blobs.js';
 
 const MAX_BODY = 4096;
@@ -250,16 +252,19 @@ export async function serveRemote(
 }
 
 /** Where `tailscale serve` should point on this platform. */
-export function chooseTarget(env: Record<string, string | undefined>, dataDir: string, platform: NodeJS.Platform = process.platform, uid: number = process.getuid?.() ?? 0): RemoteTarget {
+export function chooseTarget(env: Record<string, string | undefined>, dataDir: string, platform: NodeJS.Platform = process.platform, uid: number = process.getuid?.() ?? 0, home: string = HOME): RemoteTarget {
   // Tailscale serves Unix sockets on Unix-like systems only; Windows gets a loopback port, which any
   // local program can reach: the pairing code is the only guard there, and the settings say so.
   if (platform === 'win32') return { kind: 'loopback', port: 7719 };
-  void dataDir;
+  // One socket per data folder: the usual data folder keeps remote.sock; any other (a test server, a
+  // second instance) gets a short hash of its folder in the name, so its serve entry and the real one
+  // never look alike and neither instance takes the other's entry for its own.
+  const name = dataDir === appDirs(platform, {}, home).data ? 'remote.sock' : `remote-${createHash('sha256').update(dataDir).digest('hex').slice(0, 10)}.sock`;
   // A Unix socket path may be at most about 104 bytes (macOS) or 108 (Linux): use the runtime folder
   // when its path is short, else a private folder of our own in /tmp, so Unix never needs a port.
   const runtime = env.XDG_RUNTIME_DIR;
-  if (runtime && runtime.startsWith('/') && Buffer.byteLength(`${runtime}/masthead/remote.sock`) < 100) return { kind: 'socket', path: `${runtime}/masthead/remote.sock` };
-  return { kind: 'socket', path: `/tmp/masthead-${uid}/remote.sock` };
+  if (runtime && runtime.startsWith('/') && Buffer.byteLength(`${runtime}/masthead/${name}`) < 100) return { kind: 'socket', path: `${runtime}/masthead/${name}` };
+  return { kind: 'socket', path: `/tmp/masthead-${uid}/${name}` };
 }
 
 /**

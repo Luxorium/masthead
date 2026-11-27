@@ -1,58 +1,74 @@
 <script lang="ts">
-  // The team: who is working on what, with Stop. Shown once the main assistant has started a helper.
-  // In Advanced it also holds the levels (helpers at a time, thinking time).
-  import { displayName, modelLabel, type AgentInfo } from '../../../shared/protocol.ts';
-  import StopControl from './StopControl.svelte';
-  import { tierClass } from './tiers.ts';
+  // The team: one outline of every agent (team/TeamOutline.svelte), which scrolls only up and down.
+  // Shown once the main assistant has started a helper. Below it the memory line, and in Advanced the
+  // levels (helpers at a time, thinking time).
+  import TeamOutline from './team/TeamOutline.svelte';
+  import CompactProgress from './team/CompactProgress.svelte';
   import TierControls from './team/TierControls.svelte';
-  import { fmtTokens, statusWords, store } from './store.svelte.ts';
+  import { fmtTokens, store } from './store.svelte.ts';
   import { T } from './text.ts';
   import { ui } from './ui.svelte.ts';
 
   const lead = $derived(store.lead);
   const pct = $derived(lead && lead.usage.contextMax > 0 ? Math.min(100, Math.round((lead.usage.context / lead.usage.contextMax) * 100)) : 0);
   const totalOut = $derived(store.agentList.reduce((n, a) => n + a.usage.output, 0));
-  const isLive = (a: AgentInfo) => a.status === 'queued' || a.status === 'running' || a.status === 'waiting';
+
+  /** Dragging the left edge: the column grows as the pointer moves left. */
+  function startDrag(e: PointerEvent) {
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startW = ui.teamWidth;
+    const move = (ev: PointerEvent) => ui.setTeamWidth(startW + (startX - ev.clientX));
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  }
 </script>
 
-{#snippet row(a: AgentInfo, depth: number)}
-  <div class="agent" class:viewing={store.viewAgent?.id === a.id} style:padding-left="{8 + depth * 14}px">
-    <button class="agent-main" onclick={() => store.viewOf(a.id)} title={a.task}>
-      <span class="dot {a.status}"></span>
-      <span class="agent-text">
-        <span class="agent-name">{displayName(a.name)} <span class="tier-badge {tierClass(store.settings, a.tier)}">{modelLabel(a.model)}</span>{#if a.title}<span class="agent-title"> {a.title}</span>{:else if a.tier === 'lead'}<span class="agent-title"> {T.team.mainAssistant}</span>{/if}</span>
-        <span class="agent-sub">{statusWords(a)}</span>
-      </span>
-    </button>
-    {#if isLive(a) && a.tier !== 'lead'}
-      <StopControl agent={a} placement="row" />
-    {/if}
-  </div>
-{/snippet}
-
-{#snippet branch(parentId: string, depth: number)}
-  {#each store.childrenOf(parentId) as a (a.id)}
-    {@render row(a, depth)}
-    {@render branch(a.id, depth + 1)}
-  {/each}
-{/snippet}
-
-<aside class="right" aria-label={T.team.title}>
+<aside class="right" class:column={ui.wide} aria-label={T.team.title}>
+  {#if ui.wide}
+    <!-- Drag (or arrow keys) to make the column wider or narrower; remembered on this device. A
+         focusable separator with a value is the ARIA pattern for a splitter, which Svelte's check
+         does not know. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={T.team.resize}
+      aria-valuenow={ui.teamWidth}
+      aria-valuemin={300}
+      aria-valuemax={560}
+      tabindex="0"
+      onpointerdown={startDrag}
+      onkeydown={(e) => {
+        if (e.key === 'ArrowLeft') ui.setTeamWidth(ui.teamWidth + 20);
+        else if (e.key === 'ArrowRight') ui.setTeamWidth(ui.teamWidth - 20);
+        else return;
+        e.preventDefault();
+      }}
+    ></div>
+  {/if}
   <div class="head">
     <h2>{T.team.title}</h2>
-    {#if store.view === 'map'}
-      <button class="link" onclick={() => (store.view = 'chat')}>{T.team.showChat}</button>
-    {:else if !ui.narrow}
-      <!-- The map needs width; narrow screens keep the list. -->
-      <button class="link" onclick={() => (store.view = 'map')}>{T.team.showMap}</button>
-    {/if}
-    <button class="btn ghost close" onclick={() => { ui.toggleTeam(false); store.view = 'chat'; }} aria-label={T.team.close} title={T.team.close}>×</button>
+    <button class="btn ghost close" onclick={() => ui.toggleTeam(false)} aria-label={T.team.close} title={T.team.close}>×</button>
   </div>
 
   {#if lead}
     <section class="grow">
-      {@render row(lead, 0)}
-      {@render branch(lead.id, 1)}
+      <CompactProgress />
+      <TeamOutline />
+      {#if store.conv && store.mayAct}
+        <!-- Per chat: the person may switch automatic tidying off here only (the setting covers all chats). -->
+        <label class="small chat-tidy">
+          <input type="checkbox" checked={store.conv.autoCompact !== false && store.settings?.autoCompact !== false} disabled={store.settings?.autoCompact === false} onchange={(e) => store.request({ t: 'auto_compact', convId: store.conv!.id, on: e.currentTarget.checked })} />
+          <span>{T.compact.chatSetting}</span>
+        </label>
+      {/if}
       <p class="small muted memory" title={T.team.memoryDetail(fmtTokens(lead.usage.context), fmtTokens(lead.usage.contextMax), fmtTokens(totalOut))}>
         {T.team.memory(pct)}{#if ui.advanced} · {T.team.memoryDetail(fmtTokens(lead.usage.context), fmtTokens(lead.usage.contextMax), fmtTokens(totalOut))}{/if}
       </p>
@@ -66,13 +82,32 @@
 
 <style>
   aside {
+    position: relative;
     display: flex;
     flex-direction: column;
-    width: 316px;
+    /* A drawer on narrower screens; a column (sized by the grid in App.svelte) on wide ones. */
+    width: min(400px, 88vw);
     min-height: 0;
     overflow-y: auto;
     border-left: 1px solid var(--border);
     background: var(--bg);
+  }
+  aside.column {
+    width: auto;
+  }
+  .resize {
+    position: absolute;
+    left: -3px;
+    top: 0;
+    bottom: 0;
+    z-index: 2;
+    width: 7px;
+    cursor: col-resize;
+  }
+  .resize:hover,
+  .resize:focus-visible {
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
+    outline: none;
   }
   section {
     padding: 10px 8px 14px;
@@ -85,16 +120,12 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    /* A whole-pixel height (32 + 2 × 10 + 1) that never shrinks, so the outline below starts on a whole pixel. */
+    flex: none;
+    box-sizing: border-box;
+    height: 53px;
     padding: 10px 10px 10px 16px;
     border-bottom: 1px solid var(--border);
-  }
-  .link {
-    margin-left: auto;
-    font-size: 12.5px;
-    color: var(--accent);
-  }
-  .link:hover {
-    text-decoration: underline;
   }
   .head h2 {
     flex: 1;
@@ -103,6 +134,25 @@
     min-width: 32px;
     padding: 2px 8px;
     font-size: 16px;
+  }
+  .chat-tidy {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 10px 8px 0;
+    color: var(--muted);
+  }
+  .chat-tidy input {
+    accent-color: var(--accent);
+  }
+  @media (pointer: coarse) {
+    .chat-tidy {
+      min-height: 44px;
+    }
+    /* Holds the 44 px close button. */
+    .head {
+      height: 65px;
+    }
   }
   .memory {
     margin-top: 12px;
@@ -121,50 +171,5 @@
   .small {
     margin: 6px 0 0;
     font-size: 12.5px;
-  }
-  .agent {
-    display: flex;
-    align-items: center;
-    border-radius: 6px;
-    padding-right: 4px;
-  }
-  .agent:hover,
-  .agent.viewing {
-    background: color-mix(in srgb, var(--text) 7%, transparent);
-  }
-  .agent-main {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    flex: 1;
-    min-width: 0;
-    padding: 5px 0;
-    text-align: left;
-  }
-  .agent-main .dot {
-    margin-top: 7px;
-  }
-  .agent-text {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-  .agent-name {
-    font-size: 13.5px;
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .agent-title {
-    font-weight: 400;
-    color: var(--muted);
-  }
-  .agent-sub {
-    font-size: 12px;
-    color: var(--muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 </style>

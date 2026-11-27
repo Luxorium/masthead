@@ -854,3 +854,79 @@ test('runtime on fake: a tier the settings mark unusable starts nothing and says
   assert.match(h.lost[0] ?? '', /can't be used: "bad name" is not a valid agent program name\. Edit the team in settings\./);
   assert.equal(sched.running('sonnet'), 0);
 });
+
+test('runtime on fake: compact() on a finished agent resumes quietly, compacts, closes again, and is no turn', async () => {
+  const { host, turns, wait, backend, sched, items } = onFake();
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Reply with exactly the word ZEBRA' });
+  a.start();
+  await wait(() => turns.length === 1);
+  const text = a.lastText;
+  a.end('done');
+  await wait(() => !a.hasProcess);
+  const statuses: string[] = [];
+  host.agentChanged = (ag) => void statuses.push(ag.status);
+  const r = await a.compact();
+  assert.deepEqual(r, { ok: true });
+  assert.equal(backend.sessions.length, 2);
+  assert.equal(backend.sessions[1]!.spec.resume, a.sessionId, 'the same session was resumed');
+  assert.equal(backend.sessions[1]!.compactions, 1);
+  assert.equal(backend.sessions[1]!.received.length, 0, 'nothing was sent to it');
+  assert.ok(items.some((i) => i.kind === 'notice' && /summarized/.test(i.text)));
+  await wait(() => !a.hasProcess);
+  assert.equal(a.status, 'done', 'still done');
+  assert.ok(!statuses.some((s) => s === 'running' || s === 'queued'), `statuses: ${statuses.join(' ')}`);
+  assert.equal(turns.length, 1, 'no turnEnded');
+  assert.equal(a.lastText, text);
+  assert.equal(sched.running('sonnet'), 0, 'its slot was given back');
+  // It still remembers after compaction.
+  a.deliver('What word did you reply with before?');
+  await wait(() => turns.length === 2);
+  assert.equal(turns[1]!.text, 'ZEBRA');
+});
+
+test('runtime on fake: compact() refuses mid-turn; a message sent during compaction goes out after it', async () => {
+  const { host, turns, wait, backend } = onFake({ slowMs: 60, stepMs: 5 });
+  const a = new Agent({ ...info('alpha'), parentId: null }, host);
+  a.deliver('Count slowly please');
+  await wait(() => a.hasProcess && a.busy);
+  assert.equal((await a.compact()).ok, false);
+  await wait(() => turns.length === 1);
+  const p = a.compact();
+  a.deliver('Reply with exactly the word AFTER');
+  assert.equal(backend.sessions[0]!.received.length, 1, 'held while compacting');
+  assert.deepEqual(await p, { ok: true });
+  await wait(() => turns.length === 2);
+  assert.equal(turns[1]!.text, 'AFTER');
+  assert.equal(backend.sessions[0]!.compactions, 1);
+  assert.equal(backend.sessions.length, 1, 'the lead kept its process');
+});
+
+test('runtime on fake: compact() on an agent that never started has nothing to do; a backend without compaction says so', async () => {
+  const { host } = onFake();
+  assert.deepEqual(await new Agent(info('bravo'), host, { owesReport: true, seed: 'x' }).compact(), { ok: true });
+  const n = onFake({ caps: { compact: false } });
+  const lead = new Agent({ ...info('alpha'), parentId: null }, n.host);
+  n.backend.open = ((orig) => (spec, ev) => {
+    const s = orig(spec, ev);
+    (s as { compact?: unknown }).compact = undefined;
+    return s;
+  })(n.backend.open.bind(n.backend));
+  lead.deliver('hi');
+  await n.wait(() => n.turns.length === 1);
+  const r = await lead.compact();
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? '', /cannot compact/);
+});
+
+test('runtime: compact() with no backend to start a session settles at once with the reason', async () => {
+  const sched = new Scheduler(() => 4);
+  const h = fakeHost(sched);
+  delete (h.host as { query?: unknown }).query; // no backend at all
+  const a = new Agent({ ...info('bravo'), status: 'done' }, h.host, { sessionId: 'restored-session' });
+  const started = Date.now();
+  const r = await a.compact();
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? '', /No agent backend is available/);
+  assert.ok(Date.now() - started < 1000, 'at once');
+  assert.equal(h.lost.length, 0, 'no lost-process report for a finished agent');
+});

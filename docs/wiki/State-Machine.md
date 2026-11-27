@@ -49,6 +49,7 @@ This page explains the machine for someone reading the code for the first time. 
 | `run: { ms, since? }` | Run clock for the current piece of work. It counts only time in `running` with no approval card open. `ranMs(s, now)` reads it. |
 | `liveSince?` | When it last became live (awake time); shown as "for 3m" in `list_agents`. |
 | `stoppedByPerson` | The person stopped it while it was working; other agents may not wake it. Saved with the conversation. |
+| `archived?` | A team compaction archived this finished helper: it is out of the team and nothing but `Unarchive` changes it. Saved (as `AgentInfo.archived`, the time it was archived); `st()` sets it when it builds a state for an agent whose `info.archived` is set. See [Compact team](Compact-Team.md). |
 
 `initial(lead)` makes a new state: the lead starts `idle` and owes nothing; a sub-agent starts `queued` and owes a report.
 
@@ -90,6 +91,8 @@ This page explains the machine for someone reading the code for the first time. 
 | `Woken { by, parentCanReceive }` | A message is about to wake it. | Yes: `message()` (`by: 'agent'`) and `userSend()` (`by: 'person'`). |
 | `Restored` | The app restarted. | No: `Conversation.restore()` rewrites the stored statuses itself, and `st()` builds each state from them. |
 | `Status { status }` | The runtime changed the agent's status itself. | Yes: `agentChanged()`. Added after core.md; see below. |
+| `Archive` | A team compaction archives this finished helper. | Yes: `archiveAndCompact()`. Added for Compact team. |
+| `Unarchive` | The person restores an archived helper. | Yes: `restoreAgent()`. Added for Compact team. |
 
 ## Effects
 
@@ -110,13 +113,14 @@ This page explains the machine for someone reading the code for the first time. 
 | `remind { recipient }` | Remind the agent it waits on. | Nothing here: `checkWaitsOn()` sees the effect and sends one reminder per recipient for all its waiters. |
 | `noAnswer { from }` | Tell it there will be no answer. | A notice 'No answer from "X".' and a `deliverTo()` of 'No answer from "X"; carry on with your best judgment or report what you have.' |
 | `childEndedQuietly` | It ended without a report. | `settle(parent)`, which feeds the parent `ChildEnded { reported: false }`, so a parent waiting only on it moves on. |
-| `save` | Something saved changed (`stoppedByPerson`). | `host.metaChanged()`, which schedules a save. |
+| `save` | Something saved changed (`stoppedByPerson`, `archived`). | `host.metaChanged()`, which schedules a save. |
 
 ## `step()`
 
 `step(prev, event, ctx)` returns `{ state, effects }` and never changes `prev` (it works on a deep `clone()`).
 
-1. **Ended agents ignore stale news.** An `ended` agent reacts only to `Woken`, `Restored`, `Input` (an `Input` only emits `send`), and a `Status` of `queued` or `running`. Anything else returns the state unchanged with no effects.
+1. **Archived agents ignore everything but `Unarchive`.** An agent with `archived` set returns unchanged, with no effects, for any other event, `Woken` and `Input` included. This guard comes first.
+   **Ended agents ignore stale news.** An `ended` agent reacts only to `Woken`, `Restored`, `Input` (an `Input` only emits `send`), `Archive`, `Unarchive`, and a `Status` of `queued` or `running`. Anything else returns the state unchanged with no effects.
 2. **The event's case** (see the table of rows below).
 3. **The epilogue**, run after every event:
    - `liveSince` is set to `now` when the agent becomes live (or is live without one) and cleared when it is not live;
@@ -174,6 +178,9 @@ The rows are those of `docs/plans/0.2.0/core.md` §3.3. `test/machine.test.ts` h
 | 24 | `Stop { by: 'agent' }` | `ended(stopped, by: 'agent')` | as 23 but `childEndedQuietly`, never a report, not marked | `Stop { by: 'restart' }` emits neither. The lead: pause cleared, `dropHeld`, `released()`. |
 | 25 | `ApprovalOpened` / `Closed` | `approvals ± 1`; the epilogue stops/starts the run clock | — | |
 | 26 | `Woken`, ended sub-agent | `queued`, `end` cleared, run clock reset to 0, `owesReport` if `parentCanReceive`; by the person: mark cleared | — | The guards (`stoppedByPerson`, tier off) are checked by the shell in `message()` and `userSend()`, not by the machine. |
+| A1 | `Archive`, ended helper | `archived = true`, `owesReport = false`; phase stays `ended` | `save` | Not in core.md (Compact team). Ignored for the lead and for an agent that is not `ended`. |
+| A2 | `Unarchive`, archived | `archived = false`; phase stays `ended` | `save` | Not in core.md. Waking it afterwards follows row 26. |
+| A3 | any other event, archived | unchanged | — | Not in core.md. The shell also refuses first: `message()`, `userSend()`, `stop()`, `setAgentEffort()`. |
 | 27 | `Restored` | holds, streak, run clock and debt cleared; lead `idle`; a live sub-agent `ended(stopped, by: 'restart')` with "Masthead was closed while this agent was working." | — | Not sent: `Conversation.restore()` does the same to the stored statuses. |
 
 ### Added since core.md
@@ -182,6 +189,7 @@ The rows are those of `docs/plans/0.2.0/core.md` §3.3. `test/machine.test.ts` h
   - `queued` / `running`: taken as the phase (and `end` cleared), unless a pause holds the agent;
   - `waiting` / `idle`: taken as the phase;
   - `done` / `failed` / `stopped`: the lead goes `waiting` or `idle` (it never ends); a sub-agent in `queued` keeps its state (second "runtime wins" rule); otherwise it becomes `ended` with that kind, holds and report debt cleared.
+- **`Archive` / `Unarchive` and the `archived` flag** (rows A1–A3, Compact team, 0.2.0-beta.2): `test/machine.test.ts` "archive: only a finished helper is archived; nothing but Unarchive changes it; never the lead". The flow that sends them is in [Compact team](Compact-Team.md).
 - **Review fixes** (two tests named "fix: …"): the background cap starts when a child ends and background work is left as the only hold (done by the epilogue); a pause that ends during a turn the person started leaves the agent `running` with its run clock on.
 
 ## Diagram
@@ -203,7 +211,11 @@ stateDiagram-v2
   waiting --> idle: last hold released [lead]
   idle --> running: Status running [lead]
   ended --> queued: Woken
+  ended --> archived: Archive [helper]
+  archived --> ended: Unarchive (the person restores it)
 ```
+
+`archived` is not a `Phase`: the phase stays `ended` and the flag is set. It is drawn as a state because nothing else moves it.
 
 The lead moves only between `idle`, `queued`, `running` and `waiting`; it never reaches `ended`.
 
@@ -248,4 +260,4 @@ The machine gets two times. `now` is the shell's awake-time clock (`active()`): 
 
 `npm test` passed (369 of 370, one skipped) when this page was written on 2026-11-27; the app itself was not run.
 
-Related pages: [Agent life cycle](Agent-Life-Cycle.md) · [Team rules](Team-Rules.md) · [Source: core/machine.ts](Source-Core-Machine.md) · [Source: core/conversation.ts](Source-Core-Conversation.md) · [Slot scheduling](Slot-Scheduling.md) · [Source tests](Source-Tests.md)
+Related pages: [Agent life cycle](Agent-Life-Cycle.md) · [Compact team](Compact-Team.md) · [Team rules](Team-Rules.md) · [Source: core/machine.ts](Source-Core-Machine.md) · [Source: core/conversation.ts](Source-Core-Conversation.md) · [Slot scheduling](Slot-Scheduling.md) · [Source tests](Source-Tests.md)

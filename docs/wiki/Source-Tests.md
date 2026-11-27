@@ -56,7 +56,7 @@ The per-file counts below come from running each file on its own the same day an
 | `test/platform.test.ts` | 6 | Folders per platform, finding Claude Code (Windows `.exe` and npm shims), making the secret private, renames on Windows. |
 | `test/service.test.ts` | 16 | The background service with every system call faked: systemd, launchd, Windows Task Scheduler. |
 | `test/remote.test.ts` | 24 | Remote access logic with a fake Tailscale: pairing requests and codes, caps, refusal logging, tokens, deny, expiry, the devices file, revoke and roles, the audit log, tailnet and tag rules, `authorise`, Tailscale `serve` commands and parsing, whois caching. No real `tailscale` command. |
-| `test/remote-wiring.test.ts` | 15 | Remote access wired end to end with the fake provider: the switch, refusals, restart, settings, pairing over HTTP, the device socket and its role, revoke, `forget_me`, the private socket folder, switching off while Tailscale is down. |
+| `test/remote-wiring.test.ts` | 16 | Remote access wired end to end with the fake provider: the switch, one socket per data folder, test servers never running tailscale, a leftover entry removed only by the instance that added it, refusals (a socket target refused for want of root offers `sudo tailscale serve …` and switching on then works; other refusals keep the operator advice and say what Tailscale said; switching off works even when the removal is refused, also at restart), restart, settings, pairing over HTTP, the device socket and its role, revoke, `forget_me`, the private socket folder, switching off while Tailscale is down. |
 | `test/backend-conformance.ts` | (helper) | Not a test file by itself. `runConformance(name, make, opts)` defines the cases every backend must pass through the interface in `server/backends/types.ts` (see [Backend interface](Backend-Interface.md)): detect/models, a session answers and names the consumed message, a team tool through its `ToolDef`, resume by id, a missing session, a message during a turn, interrupt, a permission request, effort/model changes and `close('now')`. Cases the backend's `caps` rule out are skipped. Used by `fake-backend.test.ts`, `codex.test.ts` and `codex.live.ts`. |
 | `test/fixtures/v0.1/` | (data) | A 0.1.x data folder: `settings.json` and two conversations (`conv-a` with a transcript, `conv-old`). Loaded by `characterisation.test.ts` and `storage.test.ts` (migration), as `AGENTS.md` requires for on-disk formats. |
 
@@ -83,11 +83,11 @@ All in `web/test/`, environment `happy-dom` unless the file says `// @vitest-env
 | `settings-components.test.ts` | 7 | `BackendsSection`, `ProfilesSection` (the Codex team as a proposal, editing with real models, copy/remove/reset), `ProfileChip` (menu of usable teams, Esc returns focus). |
 | `remote-signin.test.ts` | 5 | The remote pairing screen (`fetch` mocked): code, poll secret across reload, refusals and rate limits, a stored token. |
 | `device.test.ts` | 5 | A paired remote device's sign-in (`fetch` mocked): the token kept after a brief refusal, forgotten only when the server says it is invalid, "Forget this device"; what each device role may do (read-only: no stop buttons; approve: answer but not act). |
-| `remote-section.test.ts` | 4 | The Remote access section and device request card (`fetch` mocked): switch, operator command, devices list and activity. |
+| `remote-section.test.ts` | 5 | The Remote access section and device request card (`fetch` mocked): switch, the box after a refusal, the command, devices list and activity. |
 
 ## Browser test (`test/ui.e2e.mjs`)
 
-Drives the real page in Chromium against a running test server: sign-in cases, the simple first load (at most 10 controls, no team jargon), settings, composer restore after a refused message, the approval card, the team panel, the map, stop, folded reports, pictures, a phone layout (390 × 844, light theme, touch), and axe-core WCAG 2 A/AA checks on several screens. The file has 54 `check(…)` calls; with the fake backend the checks that need a model's own writing (a code block, a final table) are skipped.
+Drives the real page in Chromium against a running test server: sign-in cases, the simple first load (at most 10 controls, no team jargon), settings, composer restore after a refused message, the approval card, the team panel and its outline (guides checked to the pixel), stop, tidying the team, folded reports, pictures, a phone layout (390 × 844, light theme, touch), and axe-core WCAG 2 A/AA checks on several screens. The file has 54 `check(…)` calls; with the fake backend the checks that need a model's own writing (a code block, a final table) are skipped.
 
 - **Usage:** `node test/ui.e2e.mjs <url> <screenshot folder>`. Exit 1 on a failed check, 2 on bad usage.
 - **Never 7717:** it refuses that port (the installed app). The server must have its own data and settings folders, and a **fresh** data folder: it checks the empty first load.
@@ -117,6 +117,8 @@ XDG_CONFIG_HOME=$T/config XDG_DATA_HOME=$T/data node dist/server/main.js stop --
 Not run for this page.
 
 ## Live tests
+
+`test/compact.live.ts` (Claude Code, Haiku: `Agent.compact()` on a finished agent) is described on [Live tests](Live-Tests.md#claude-code-testcompactlivets).
 
 `test/live.e2e.ts` (Claude Code), `test/codex.live.ts` and `test/codex-team.live.ts` (Codex) run against the real, signed-in CLIs and spend real usage. How to run each and what it costs: [Live tests](Live-Tests.md).
 

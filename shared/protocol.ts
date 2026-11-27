@@ -1,6 +1,6 @@
 // Types shared by the server and the browser. Nothing in here may import Node or DOM APIs.
 
-export const VERSION = '0.2.0-beta.1';
+export const VERSION = '0.2.0-beta.2';
 
 /** The four levels of the team. `lead` is the agent the person talks to. */
 export type Tier = 'lead' | 'opus' | 'sonnet' | 'haiku';
@@ -190,6 +190,12 @@ export interface Settings {
   collapseReports: boolean;
   /** Keep the computer from sleeping while any agent works. Applies at once. */
   keepAwake: boolean;
+  /**
+   * Tidy the team automatically: past about 15 finished helpers (or the lead's memory past about 70 %),
+   * or when the person types /compact, the lead decides who stays, the rest are archived and everyone
+   * who stays compacts its memory; the person is told afterwards. Off: the person confirms on a card.
+   */
+  autoCompact: boolean;
   /** The longest a sub-agent may stay live on one piece of work, in minutes. 0 means no limit. */
   maxRunMinutes: number;
   /** Folder a new conversation starts in. */
@@ -242,6 +248,11 @@ export interface AgentInfo {
   waitingFor?: string;
   /** Paused at a usage limit until about this time (ms since 1970); it carries on by itself then. */
   pausedUntil?: number;
+  /**
+   * Archived by a team compaction (ms since 1970): a finished helper that left the team. It cannot be
+   * woken; its chat stays readable (read_archive, the Archived helpers row); the person may restore it.
+   */
+  archived?: number;
 }
 
 interface ItemBase {
@@ -295,8 +306,48 @@ export interface ConversationMeta {
    * exists, so the conversation keeps working if the profile is deleted or shrinks.
    */
   team?: TierSpec[];
+  /** The lead has suggested compacting the team once; it does not suggest it again (autoCompact off). */
+  compactSuggested?: boolean;
+  /** The person switched automatic tidying off for this conversation (autoCompact still applies elsewhere). */
+  autoCompact?: false;
+  /** When automatic tidying last fired: helpers finished so far (it waits for 15 more), and whether memory must drop first. */
+  compactMark?: { finished: number; memoryArmed: boolean };
+  /** A team compaction in progress or just ended (saved, so a restart carries on). */
+  compact?: CompactState;
   /** True while any agent in it is working. Filled in when the list is sent; not stored. */
   busy?: boolean;
+}
+
+/** One helper the compaction keeps: named by the lead with why, or `forced` (still working, or above a kept one). */
+export interface CompactKeep {
+  name: string;
+  why: string;
+  forced?: boolean;
+}
+
+/**
+ * A team compaction (see docs/plans/0.2.0/compact.md): `asked` (waiting for the lead's proposal) →
+ * `proposed` (the person's card) → `archiving` → `compacting` (each kept agent compacts its memory)
+ * → `done`, or `cancelled`.
+ */
+export interface CompactState {
+  id: string;
+  phase: 'asked' | 'proposed' | 'archiving' | 'compacting' | 'done' | 'cancelled';
+  /** Started by Masthead (automatic tidying) or by the person's /compact; no card when automatic tidying is on. */
+  auto: boolean;
+  /** Why it started, for the lead and the summary ("the team has 16 finished helpers"). */
+  reason?: string;
+  /** The lead has had a turn since being asked; if it ends another without choosing, nothing is archived. */
+  askedAnswered?: boolean;
+  keep: CompactKeep[];
+  /** Names of the helpers to archive (proposed) or archived (later phases). */
+  archive: string[];
+  note: string;
+  /** Names of agents still to compact their memory. */
+  pending: string[];
+  /** Agents whose compaction failed or was skipped, with why. */
+  failed: Array<{ name: string; why: string }>;
+  startedAt: number;
 }
 
 export interface QuestionOption {

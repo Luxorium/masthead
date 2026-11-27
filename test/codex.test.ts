@@ -362,8 +362,48 @@ test('codex: compaction is reported; dispose stops the process and silences sess
 test('codex caps: honest about what Codex lacks', () => {
   const { backend } = make();
   assert.equal(backend.caps.background, false);
+  assert.equal(backend.caps.compact, true);
   assert.equal(backend.caps.liveEffort, false);
   assert.equal(backend.caps.midTurnDelivery, true);
   assert.equal(backend.caps.consumedIds, true);
   void FakeAppServer;
+});
+
+test('codex compact: runs as its own turn but reports only compacted; usage still counts; messages wait for it', async () => {
+  const { r, s, fake } = await session();
+  s.send('a', 'Reply with exactly the word ONE');
+  await done(r);
+  const before = { turns: r.turns.length, started: r.count('turnStarted'), texts: r.count('text') };
+  const p = s.compact!();
+  s.send('b', 'Reply with exactly the word TWO'); // held until the compaction ends
+  await p;
+  assert.equal(r.count('compacted'), 1);
+  assert.equal(fake.server.calls('thread/compact/start')[0].threadId, r.sessionId);
+  assert.equal(r.log.filter((e) => e.ev === 'usage').at(-1) && true, true);
+  await done(r, 2);
+  assert.equal(r.count('turnStarted'), before.started + 1, 'no turnStarted for the compaction');
+  assert.deepEqual(r.turns[1]!.consumed, ['b']);
+  assert.equal(r.turns[1]!.text, 'TWO');
+  assert.equal(r.count('text'), before.texts + 1);
+});
+
+test('codex compact: a failed compaction rejects; busy or closed sessions refuse; a lost process rejects', async () => {
+  const { r, s } = await session();
+  s.send('a', 'Reply with exactly the word BADCOMPACT');
+  await done(r);
+  await assert.rejects(s.compact!(), /compaction failed/);
+  assert.equal(r.count('compacted'), 0);
+  assert.equal(r.turns.length, 1, 'no turnEnded for it');
+  s.send('b', 'Count slowly from 1 to 5');
+  await r.until('started', () => r.count('turnStarted') >= 2, 5000);
+  await assert.rejects(s.compact!(), /busy/);
+  await done(r, 2);
+  const lost = await session();
+  lost.s.send('a', 'Reply with exactly the word ONE');
+  await done(lost.r);
+  const p = lost.s.compact!();
+  lost.fake.server.exit('gone');
+  await assert.rejects(p);
+  s.close('now');
+  await assert.rejects(s.compact!(), /not open/);
 });

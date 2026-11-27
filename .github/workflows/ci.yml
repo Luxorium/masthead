@@ -41,8 +41,8 @@ jobs:
         shell: bash
         run: |
           npm pack --pack-destination "$RUNNER_TEMP"
-          # What a user runs: --omit=optional skips the SDK's private Claude Code binary.
-          npm install -g --omit=optional "$RUNNER_TEMP"/*.tgz
+          # What a user runs: --os=none --cpu=none skips the SDK's private Claude Code binary (npm ignores --omit=optional for a global install).
+          npm install -g --os=none --cpu=none "$RUNNER_TEMP"/*.tgz
           masthead --version
 
   browser:

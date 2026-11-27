@@ -11,7 +11,7 @@ How the messages are used, step by step, is on [Browser/server protocol](Browser
 
 ### Version
 
-`VERSION = '0.1.4'`. `package.json` also still says `0.1.4` on branch `next`. It is used by `server/main.ts` (the start-up line and `--version`), `AppState.version`, the `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/<VERSION>` variable (`server/backends/claude/env.ts`) and the version of the team-tool MCP server (`server/backends/claude/mcp.ts`). `server/settings/settings.ts` imports it but does not use it.
+`VERSION = '0.2.0-beta.2'`, the same as `package.json` on branch `next`. It is used by `server/main.ts` (the start-up line and `--version`), `AppState.version`, the `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/<VERSION>` variable (`server/backends/claude/env.ts`) and the version of the team-tool MCP server (`server/backends/claude/mcp.ts`). `server/settings/settings.ts` imports it but does not use it.
 
 ### Tiers (the Claude shape)
 
@@ -52,7 +52,7 @@ See [Team rules](Team-Rules.md).
 
 - `TierSettings`: `{ model, effort, max }`, the shape of one entry in the compatibility view `Settings.tiers`.
 - `PermissionChoice` / `PERMISSION_CHOICES`: `inherit`, `default`, `acceptEdits`, `auto`, `bypassPermissions`.
-- `Settings`: `version: 2`, `profiles`, `defaultProfile`, `tiers` (compatibility view of the `claude` profile), `permissionMode`, `autoEffort`, `leanSubagents` and `leanOpus` (compatibility view), `collapseReports`, `keepAwake`, `maxRunMinutes`, `defaultCwd`. Every field is explained on [Configuration and settings](Configuration-and-Settings.md).
+- `Settings`: `version: 2`, `profiles`, `defaultProfile`, `tiers` (compatibility view of the `claude` profile), `permissionMode`, `autoEffort`, `leanSubagents` and `leanOpus` (compatibility view), `collapseReports`, `keepAwake`, `autoCompact` (tidy the team automatically; see [Compact team](Compact-Team.md)), `maxRunMinutes`, `defaultCwd`. Every field is explained on [Configuration and settings](Configuration-and-Settings.md).
 - `MAX_PER_TIER = 12`.
 - `SettingsPatch`: what a page sends in `{t:'settings'}`. Any field except `version`, with `tiers` allowed to be partial at both levels. The server merges it with `sanitizeSettings()` ([settings code](Source-Settings.md)).
 
@@ -60,7 +60,7 @@ See [Team rules](Team-Rules.md).
 
 - `AgentStatus`: `queued`, `running`, `waiting`, `idle` (lead only), `done`, `failed`, `stopped`. `LIVE_STATUSES` is the first three. See [Agent life cycle](Agent-Life-Cycle.md) and [State machine](State-Machine.md).
 - `AgentUsage`: `context`, `contextMax`, `output`, `costUsd`, `turns`.
-- `AgentInfo`: `id`, `convId`, `name`, `tier` (typed as `Tier`, but for a non-claude profile it holds a `<profile>:<index>` string; `Conversation.create` casts it with `as Tier`), `parentId`, `title`, `task`, `status`, `model`, `effort`, `createdAt`, `endedAt?`, `usage`, `activity?`, `error?`, `waitingFor?` (the agent it is waiting to hear from), `pausedUntil?` (paused at a usage limit until about this time, in ms since 1970).
+- `AgentInfo`: `id`, `convId`, `name`, `tier` (typed as `Tier`, but for a non-claude profile it holds a `<profile>:<index>` string; `Conversation.create` casts it with `as Tier`), `parentId`, `title`, `task`, `status`, `model`, `effort`, `createdAt`, `endedAt?`, `usage`, `activity?`, `error?`, `waitingFor?` (the agent it is waiting to hear from), `pausedUntil?` (paused at a usage limit until about this time, in ms since 1970), `archived?` (ms since 1970: archived by a team compaction; such a helper cannot be woken, its chat stays readable through `read_archive` and the Archived helpers row, and the person may restore it).
 
 ### Transcripts
 
@@ -70,7 +70,15 @@ See [Team rules](Team-Rules.md).
 
 ### Conversations, approvals and images
 
-- `ConversationMeta`: `id`, `title`, `cwd`, `createdAt`, `updatedAt`, `leadId`, `profileId?` (0.2.0; missing in 0.1.x files, which means `claude`), and `busy?` (filled in when the list is sent, never stored).
+- `ConversationMeta`: `id`, `title`, `cwd`, `createdAt`, `updatedAt`, `leadId`, `profileId?` (0.2.0; missing in 0.1.x files, which means `claude`), `team?` (the profile's tiers copied when the conversation was created), and four fields for [team compaction](Compact-Team.md), all optional:
+  - `compactSuggested?: boolean`: with automatic tidying off, the lead has been told once that it may suggest `/compact`; it is not told again.
+  - `autoCompact?: false`: the person switched automatic tidying off for this conversation only. Absent means "follow the setting"; `true` is never stored (`Conversation.setAutoCompact(true)` removes the field).
+  - `compactMark?: { finished, memoryArmed }`: the cool-down. `finished` is how many helpers had finished when tidying last fired (it fires again only after 15 more); `memoryArmed` is false until the lead's memory has dropped back below the 70 % mark.
+  - `compact?: CompactState`: a compaction under way or just ended, saved so a restart carries on.
+
+  And `busy?` (filled in when the list is sent, never stored).
+- `CompactKeep`: `{ name, why, forced? }`, one helper the compaction keeps. `forced` marks helpers kept whatever the lead said: one still working (`why` "still working"), or one above a kept helper ("started bravo, which stays").
+- `CompactState`: `id`, `phase` (`'asked' | 'proposed' | 'archiving' | 'compacting' | 'done' | 'cancelled'`), `auto` (automatic tidying was on when it started: no card), `reason?` ("the team has 16 finished helpers"), `askedAnswered?` (the lead has had a turn since being asked; if it ends another without choosing, the flow is cancelled), `keep: CompactKeep[]`, `archive: string[]` (names to archive, or archived), `note`, `pending: string[]` (agents still to compact, the lead last), `failed: Array<{ name, why }>`, `startedAt`. The phases are explained on [Compact team](Compact-Team.md).
 - `QuestionOption`, `Question`, `PermissionRequest` (`kind: 'permission' | 'question'`, `canAlways`, `questions?`, …). See [Permissions and questions](Permissions-and-Questions.md).
 - `BlobRef`: `{ blob, mediaType, w, h, bytes }`, an image stored on the server. `server/storage/blobs.ts` declares the same shape.
 - `ImageAttachment`: `{ mediaType, data }`, the image as base64 without a `data:` prefix (images sent inline with a message).
@@ -83,7 +91,7 @@ See [Team rules](Team-Rules.md).
 
 `ServerMsg` (server → page): `state`, `conversations`, `conversation`, `created`, `deleted`, `items` (`cursor?`, `more?` when paged), `agent`, `item`, `draft` (whole text), `permission_request`, `permission_resolved`, `settings`, `rate_limit`, `dirs`, `error` (`code?` of `too_large`, `invalid`, `not_found`, `refused`, `protocol`, and `ref?`).
 
-`server/app/app.ts` also sends and accepts a few messages (`remote`, `check_backends`) that are not in these unions. Those belong to [Remote access](Remote-Access.md) and the backend pages.
+`server/app/app.ts` also sends and accepts messages that are only in the version 2 unions (`remote`, `check_backends`, and the compaction messages below). Those belong to [Remote access](Remote-Access.md) and the backend pages.
 
 ## shared/protocol-v2.ts
 
@@ -108,6 +116,13 @@ See [Team rules](Team-Rules.md).
 | `{t:'item_full', convId, agentId, itemId}` | The whole of an item that arrived clipped. |
 | `{t:'items', convId, agentId, before?, limit?}` | Paged transcript, newest page first; `before` is the previous page's `cursor`. |
 | version 1 `send` plus `profile?` | Team profile for a new conversation. |
+| `{t:'compact_answer', convId, id, keep: string[], accept}` | The person's answer to the compaction card: the helper names to keep, and go ahead or not. |
+| `{t:'compact_cancel', convId}` | Cancel the compaction under way. |
+| `{t:'archive_items', convId, agentId, before?, limit?}` | Paged transcript of an archived agent, like `items`. |
+| `{t:'restore_agent', convId, agentId}` | Bring an archived helper back into the team. |
+| `{t:'auto_compact', convId, on: boolean}` | Automatic tidying on or off for this conversation (`meta.autoCompact`). |
+
+Starting a compaction has no message of its own: the page sends `/compact` as a `send` to the lead.
 
 Every version 1 `ClientMsg` is also accepted.
 
@@ -126,6 +141,9 @@ Every version 1 `ClientMsg` is also accepted.
 | `{t:'item_full', …, item}` | Answer to `item_full`. |
 | `{t:'items', …, cursor?, more?}` | Answer to `items`. |
 | `{t:'error', code, message, ref?}` | `code` is required in version 2. |
+| `{t:'compact', convId, compact: CompactState \| null}` | The compaction state of a conversation, on every change; `null` when none. |
+| `{t:'archived', convId, agents: AgentInfo[]}` | The conversation's archived agents, sent after each `compact`. |
+| `{t:'archive_items', convId, agentId, items, cursor?, more?}` | Answer to `archive_items`. |
 
 Every version 1 `ServerMsg` is also part of the union.
 
@@ -137,4 +155,4 @@ Not verified by running: this page was written from the code.
 
 ## Related pages
 
-[Browser/server protocol](Browser-Server-Protocol.md) · [shared/toolline.ts](Source-Shared-Toolline.md) · [Team profiles and settings](Team-Profiles-and-Settings.md) · [Glossary](Glossary.md)
+[Browser/server protocol](Browser-Server-Protocol.md) · [shared/toolline.ts](Source-Shared-Toolline.md) · [Team profiles and settings](Team-Profiles-and-Settings.md) · [Glossary](Glossary.md) · [Compact team](Compact-Team.md)

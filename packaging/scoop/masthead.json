@@ -9,7 +9,7 @@
   "hash": "0000000000000000000000000000000000000000000000000000000000000000",
   "installer": {
     "script": [
-      "npm install -g --omit=optional --no-audit --no-fund --prefix \"$dir\" \"$dir\\masthead.tgz\"",
+      "npm install -g --os=none --cpu=none --no-audit --no-fund --prefix \"$dir\" \"$dir\\masthead.tgz\"",
       "Remove-Item \"$dir\\masthead.tgz\""
     ]
   },

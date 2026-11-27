@@ -42,6 +42,8 @@ export interface AgentState {
   liveSince?: number;
   /** The person stopped it while it was working; other agents may not wake it. Persisted. */
   stoppedByPerson: boolean;
+  /** Archived by a team compaction: finished, out of the team, never woken (restore first). Persisted. */
+  archived?: boolean;
 }
 
 export type UsageLimit = { resetsAt?: number; backgroundStopped?: boolean };
@@ -68,6 +70,10 @@ export type Event =
   | { type: 'ApprovalClosed' }
   | { type: 'Woken'; by: 'person' | 'agent'; parentCanReceive: boolean }
   | { type: 'Restored' }
+  /** A team compaction archives this finished helper. */
+  | { type: 'Archive' }
+  /** The person restores an archived helper to the team. */
+  | { type: 'Unarchive' }
   /** The runtime changed the agent's status itself (it started a process, a turn began, it was ended). */
   | { type: 'Status'; status: AgentStatus };
 
@@ -180,7 +186,9 @@ function clockTime(ms: number): string {
 /** Applies one event. Pure: the input state is not changed. */
 export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState; effects: Effect[] } {
   // A finished agent only reacts to being woken, restored or sent to; anything else is stale news.
-  if (prev.phase === 'ended' && ev.type !== 'Woken' && ev.type !== 'Restored' && ev.type !== 'Input' && !(ev.type === 'Status' && (ev.status === 'queued' || ev.status === 'running'))) {
+  // An archived agent changes only by being restored.
+  if (prev.archived && ev.type !== 'Unarchive') return { state: prev, effects: [] };
+  if (prev.phase === 'ended' && ev.type !== 'Woken' && ev.type !== 'Restored' && ev.type !== 'Input' && ev.type !== 'Archive' && ev.type !== 'Unarchive' && !(ev.type === 'Status' && (ev.status === 'queued' || ev.status === 'running'))) {
     return { state: prev, effects: [] };
   }
   const s = clone(prev);
@@ -433,6 +441,20 @@ export function step(prev: AgentState, ev: Event, ctx: Ctx): { state: AgentState
       }
       break;
     }
+    case 'Archive':
+      // Only a finished helper; never the lead, never one that is working.
+      if (!s.lead && s.phase === 'ended') {
+        s.archived = true;
+        s.owesReport = false;
+        fx.push({ type: 'save' });
+      }
+      break;
+    case 'Unarchive':
+      if (s.archived) {
+        s.archived = false;
+        fx.push({ type: 'save' });
+      }
+      break;
     case 'Restored': // row 27
       s.holds = { children: 0, background: 0, approvals: 0 };
       s.limitStreak = 0;

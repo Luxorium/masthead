@@ -19,6 +19,8 @@
  * - "COMPACT"                                   → thread/compacted
  * - "CRASH"                                     → the process exits mid-turn
  * - "WITHDRAW"                                  → an approval request that Codex withdraws (serverRequest/resolved)
+ * thread/compact/start runs as a turn of its own, as codex-cli 0.172.0 does (turn/started, a
+ * contextCompaction item, turn/completed); a thread whose last word is BADCOMPACT fails it.
  */
 import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
@@ -227,6 +229,24 @@ export class FakeAppServer {
         t.turn.steered.push(textOf(p.input));
         this.note('item/completed', { threadId: t.id, turnId: t.turn.id, item: { type: 'userMessage', id: this.id('u'), content: p.input } });
         return { turnId: t.turn.id };
+      }
+      case 'thread/compact/start': {
+        const t = this.threads.get(p.threadId);
+        if (!t) throw { code: -32600, message: 'unknown thread' };
+        const turnId = this.id('turn');
+        void (async () => {
+          await this.sleep(1);
+          const base = { threadId: t.id, turnId };
+          this.note('turn/started', { threadId: t.id, turn: { id: turnId, status: 'inProgress', items: [] } });
+          const id = this.id('cc');
+          this.note('item/started', { ...base, item: { type: 'contextCompaction', id } });
+          await this.sleep(1);
+          this.note('item/completed', { ...base, item: { type: 'contextCompaction', id } });
+          this.note('thread/tokenUsage/updated', { ...base, tokenUsage: { total: { totalTokens: 900, outputTokens: 10 }, last: { totalTokens: 400, outputTokens: 10 }, modelContextWindow: 272000 } });
+          const bad = t.word === 'BADCOMPACT';
+          this.note('turn/completed', { threadId: t.id, turn: { id: turnId, status: bad ? 'failed' : 'completed', items: [], error: bad ? { message: 'compaction failed', codexErrorInfo: 'other' } : null } });
+        })();
+        return {};
       }
       case 'turn/interrupt': {
         for (const t of [...this.threads.values(), ...this.children.values()]) if (t.turn && t.turn.id === p.turnId) t.turn.interrupted = true;

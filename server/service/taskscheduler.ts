@@ -142,7 +142,7 @@ export function taskSchedulerService(deps: Deps): ServiceManager {
       } finally {
         deps.fs.rm(file);
       }
-      const lines = [`Created the scheduled task "${TASK}" (runs at logon, no admin rights).`, 'Masthead is running and will start when you log in.'];
+      const lines = [`Created the scheduled task "${TASK}" (runs at logon, no admin rights).`, 'It starts Masthead when you log in.'];
       // An explicit MASTHEAD_CLAUDE, MASTHEAD_*_DIR or XDG_* in this shell would be lost; claudePath alone is not, PATH finds claude.
       const lost = ['MASTHEAD_CLAUDE', 'MASTHEAD_DATA_DIR', 'MASTHEAD_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'].filter((k) => o.env[k]);
       if (lost.length) lines.push(`Note: the task uses your logon environment, not ${lost.join(', ')} from this shell. Set them with \`setx\` if Masthead needs them.`);

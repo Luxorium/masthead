@@ -124,7 +124,8 @@
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--faint);
+    /* --muted, not --faint: small text on the chat list's --panel needs it for AA in the light theme. */
+    color: var(--muted);
   }
   nav {
     flex: 1;
@@ -202,7 +203,7 @@
   }
   .empty {
     padding: 4px 10px;
-    color: var(--faint);
+    color: var(--muted);
     font-size: 13.5px;
   }
   .foot {

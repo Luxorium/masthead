@@ -127,7 +127,7 @@ The page saves the key in that browser for this address and removes it from the 
 - The service gets the port you asked for (`--port` or `MASTHEAD_PORT`) when it is not 7717. On Linux and macOS it also gets a cleaned `PATH`, the Claude Code that was found (`MASTHEAD_CLAUDE`) and `MASTHEAD_DATA_DIR`/`MASTHEAD_CONFIG_DIR` and `XDG_CONFIG_HOME`/`XDG_DATA_HOME` if set; `status` shows the data folder the service uses. On Windows only the port is passed; `install` says so when `MASTHEAD_CLAUDE`, `MASTHEAD_*_DIR` or `XDG_*` were set, so you can set them with `setx`.
 - A value containing a line break (or NUL) is refused before anything is written. A step that fails after the file was written removes what was written (and the task or agent) before the error.
 - `uninstall` first turns off Masthead's own Tailscale entry if remote access was on (or prints `tailscale serve --https=<port> off` to run). Uninstalling when nothing is installed says `Nothing was installed.`
-- `status` prints `Installed (<kind>), running|not running|state unknown, port N. <detail>` or `Not installed (<kind>). <detail>`.
+- `status` prints `statusSummary()` (`server/service/common.ts`): whether Masthead answers on the port and who started it, e.g. `Installed (taskscheduler). Masthead is running on port 7727, started by hand; the service starts it at login. (<detail>)`, or `Not installed (<kind>). Masthead is not running on port N.` After `install` the same line is printed, once Masthead answers (or after about 5 s); when a copy started by hand holds the port, it adds how to hand over: `masthead stop`, then `masthead service install` again.
 - A step that must succeed and fails prints `<command> <args> failed: <reason>`, exit 1.
 
 ## `remote off`

@@ -29,7 +29,7 @@ Public `$state` fields:
 | `viewAgentId` | The agent whose transcript is shown; `null` means the main assistant (the `lead`). |
 | `items`, `drafts` | Per agent id: loaded transcript items, and the streaming draft (`null` when none). |
 | `pending` | Full approval requests (`PermissionRequest`) the page has. In version 2 only those of the open conversation. |
-| `view` | `'chat'` or `'map'` (the team map in place of the transcript). |
+| `compact` | The open chat's team tidy-up (`CompactState`: id, phase, keeps, counts) while one is under way or just ended; `null` when none. From `conv.compact` in a `conversation` message, then `{t:'compact'}` ([Compact team](Compact-Team.md)). |
 | `newCwd`, `newProfile` | Folder and team chosen on the new-chat screen. `newProfile = null` means the default team. |
 | `dirs` | The last folder listing. |
 | `error` | The toast text; cleared after 8 s by `fail()`. |
@@ -47,7 +47,7 @@ Public `$state` fields:
 
 `v2` is a plain field (not reactive): true once the server answered `hello` with protocol 2.
 
-Derived values: `rateLimit` (the worst usage notice unless dismissed), `conv`, `agentList` (sorted by `createdAt`), `lead` (the agent whose `tier` is `'lead'`), `viewAgent` (falls back to the lead), `viewItems`, `viewDraft`, `canRun`, `convPending` (requests of the open chat), `liveCount` (helpers queued, running or waiting) and `composerKey` (`"<convId or new>:<agentId or lead>"`).
+Derived values: `rateLimit` (the worst usage notice unless dismissed), `conv`, `agentList` (sorted by `createdAt`, archived helpers left out), `archivedAgents` (helpers a tidy-up archived, newest first; shown under "Archived helpers"), `lead` (the agent whose `tier` is `'lead'`), `viewAgent` (falls back to the lead), `viewItems`, `viewDraft`, `canRun`, `convPending` (requests of the open chat), `liveCount` (helpers queued, running or waiting) and `composerKey` (`"<convId or new>:<agentId or lead>"`).
 
 `canRun` is true when `app.claude` has a path, or a version without a path (the test-only fake backend). Its comment says this stands in until the server sends `state.backends`. The server does send `backends` now, but `canRun` still reads only the Claude Code info, so a machine with only Codex sees the first-run screen ([FirstRun](Source-Web-Components.md#firstrunsvelte)).
 
@@ -123,7 +123,7 @@ A version 2 `draft` carries `dseq` (the step number) and either `text` (the whol
 
 ### Paged transcripts
 
-`loadItems(agentId)` marks the agent as wanted and, if its items are not loaded, sends `{t:'items', convId, agentId, limit: 100}` (version 1 sends no limit). The reply carries `cursor` and `more`; they go into `pages[agentId]`. `loadEarlier(agentId)` sends `before: cursor` for the next older page and sets `loading`. A reply while `loading` is put in front of the loaded items, skipping ids already there (the copy already loaded is newer). An `items` reply for an agent no longer wanted is dropped: the team map's hover preview may have closed before its reply came ([TeamMap](Source-Web-Components.md#teammapsvelte)). `dropItems(agentId)` forgets a transcript fetched only for a preview, unless it is the one on screen.
+`loadItems(agentId)` marks the agent as wanted and, if its items are not loaded, sends `{t:'items', convId, agentId, limit: 100}` (version 1 sends no limit). The reply carries `cursor` and `more`; they go into `pages[agentId]`. `loadEarlier(agentId)` sends `before: cursor` for the next older page and sets `loading`. A reply while `loading` is put in front of the loaded items, skipping ids already there (the copy already loaded is newer). An `items` reply for an agent no longer wanted is dropped: the team outline's hover preview may have closed before its reply came ([TeamOutline](Source-Web-Components.md#teamoutlinesvelte)). For an archived helper `loadItems` asks with `{t:'archive_items', convId, agentId, limit}` instead; the reply is handled as an `items` page with no draft, and the chat is shown read-only. `dropItems(agentId)` forgets a transcript fetched only for a preview, unless it is the one on screen.
 
 The transcript component pages its own rendering as well; see [Rendering speed](Source-Web-Front-End.md#rendering-speed).
 
@@ -154,6 +154,7 @@ For messages the store itself does not use:
 - `items`, `item`, `draft`, `agent`: transcript and agent updates for the open chat. An `item` for an agent whose items are not loaded is ignored; they are fetched when the agent is opened. A `user` item accepts the sent message with the same chat and text.
 - `permission_request`, `permission_resolved`: add and remove requests.
 - `settings`, `rate_limit` (into `usage`), `dirs`.
+- `compact` (into `compact`, for the open chat), `archived` (the agents a tidy-up archived or restored, merged into `agents`) and `archive_items` (an archived helper's transcript page).
 - `error`: with a `ref`, gives that message back to its composer and ends `creating` if it was the new chat. Without one it still ends `creating`, so the composer is not stuck on "Starting…". Then shows the message with `fail()`.
 
 ## Actions
@@ -163,7 +164,8 @@ For messages the store itself does not use:
 - `sendMessage(key)`: sends what is in the composer for `key` and empties it. A new chat sends `{t:'send', convId: null, cwd, text, images, ref, profile?}` with pictures inline as base64. An existing chat sends references to uploaded pictures in `blobs`, plus `agentId` when a helper is on screen. The text and pictures go into `sent` until the server accepts them (`created`, or the `user` item comes back). A refusal (`error` with the `ref`) or a dropped socket (`dropped()`) puts them back with `giveBack()`, unless the person has typed something new there.
 - `composerFor(key)`: the `ComposerDraft` for a key, created if missing.
 - `updateSettings(change)`: changes a deep copy of the settings, shows it at once and sends only the fields that changed (`settingsPatch`). The server merges a partial update, so a tab with stale settings cannot put back an old folder or limit.
-- `answer(...)`, `viewOf(agentId)` (shows an agent's transcript, back in chat view), `open`, `newConversation`, `loadItems`, `loadEarlier`, `fetchFull`, `dropItems`, `waitingIn`.
+- `answer(...)`, `viewOf(agentId)` (shows an agent's transcript), `open`, `newConversation`, `loadItems`, `loadEarlier`, `fetchFull`, `dropItems`, `waitingIn`.
+- `answerCompact(keep, accept)`: answers the tidy-up card with `{t:'compact_answer', convId, id, keep, accept}`. `cancelCompact()` sends `compact_cancel`. `restoreAgent(agentId)` sends `restore_agent`, which brings an archived helper back into the team.
 - `dismissLimit()`: hides the usage banner until the worst notice changes.
 - `childrenOf(agentId)` and `pathTo(agentId)` (the chain from the lead down, for the breadcrumbs).
 

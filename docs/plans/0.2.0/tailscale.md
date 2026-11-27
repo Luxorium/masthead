@@ -62,6 +62,11 @@ other services. It needs an HTTPS port of its own (section 2.2).
     operator is set by `sudo tailscale set --operator=$USER`; it is not set here. **[unverified]** whether
     an unprivileged, non-operator user can set a port-proxy serve config on this version. Not tested,
     because testing would change the config.
+  - **Seen on 2026-11-27 (Tailscale 1.104.7, Linux, first real run):** being the operator is not enough
+    for a Unix-socket target. `tailscale serve --bg --https=7443 unix:…` as the operator answered
+    "401 Unauthorized: must be root, or be an operator and able to run 'sudo tailscale' to serve a path
+    or Unix socket". Masthead now offers `sudo tailscale serve --bg --https=<port> unix:<socket>` once
+    instead ([Source-Remote-Access](../../wiki/Source-Remote-Access.md)).
 - **Headers added to proxied requests:** [source: `addTailscaleIdentityHeaders`,
   `addProxyForwardedHeaders`, `addAppCapabilitiesHeader`]
   - First **deletes** any incoming `Tailscale-User-Login`, `Tailscale-User-Name`,

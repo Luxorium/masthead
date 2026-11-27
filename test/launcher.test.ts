@@ -7,7 +7,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { SIGN_IN_STALE_MS, UsageError, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, onPath, openersFor, removeLaterArgs, unitPortFrom, writeSignInFile, type Opener } from '../server/cli.ts';
+import { SIGN_IN_STALE_MS, UsageError, noBrowserCommand, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, onPath, openersFor, removeLaterArgs, unitPortFrom, writeSignInFile, type Opener } from '../server/cli.ts';
 
 /** File modes and bash exist only on POSIX systems; Windows runners skip those checks. */
 const POSIX = process.platform !== 'win32';
@@ -149,7 +149,7 @@ test('launcher: the opener gets a file path, never the key, and the file is remo
 
   const gio = fakeOpener({ has: ['gio'] });
   await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: gio.opener, tty: true });
-  assert.deepEqual(gio.lines, ['If the browser did not open signed in, run: masthead --no-browser'], 'in a terminal, one hint line and no key');
+  assert.deepEqual(gio.lines, ['If the browser did not open signed in, run: masthead --port 7790 --no-browser'], 'in a terminal, one hint line and no key');
   assert.equal(gio.calls[0]!.cmd, 'gio');
   assert.equal(gio.calls[0]!.args[0], 'open');
 });
@@ -159,7 +159,7 @@ test('launcher: with no opener, or one that fails, the address is printed and no
   const none = fakeOpener({ has: [] });
   assert.equal(await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: none.opener, tty: true }), false);
   assert.match(none.lines.join('\n'), new RegExp(`http://127.0.0.1:7790/#key=${KEY}`));
-  assert.match(none.lines.at(-1)!, /masthead --no-browser/);
+  assert.match(none.lines.at(-1)!, /masthead --port \d+ --no-browser/);
   assert.equal(existsSync(dir), false, 'no file written without an opener');
 
   for (const code of [1, null]) {
@@ -187,7 +187,7 @@ test('launcher: without a terminal the key is never printed, only how to get it'
   for (const fake of [fakeOpener({ has: [] }), fakeOpener({ code: 1 })]) {
     assert.equal(await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: fake.opener, tty: false }), false);
     assert.ok(!fake.lines.join('\n').includes(KEY), 'the key stays out of output that may be logged');
-    assert.match(fake.lines.join('\n'), /masthead --no-browser/);
+    assert.match(fake.lines.join('\n'), /masthead --port \d+ --no-browser/);
   }
 });
 
@@ -276,4 +276,9 @@ test('launcher: the delayed removal is plain Node and really removes the file', 
   execFileSync(process.execPath, removeLaterArgs(file, 10));
   assert.equal(existsSync(file), false);
   execFileSync(process.execPath, removeLaterArgs(file, 10)); // a file already gone is no error
+});
+
+test('launcher: the no-browser hint keeps a non-default port and says masthead.cmd on Windows', () => {
+  assert.equal(noBrowserCommand('http://127.0.0.1:7717', 'linux'), 'masthead --no-browser');
+  assert.equal(noBrowserCommand('http://127.0.0.1:7727', 'win32'), 'masthead.cmd --port 7727 --no-browser');
 });

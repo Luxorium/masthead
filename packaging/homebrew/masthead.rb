@@ -9,8 +9,8 @@ class Masthead < Formula
   depends_on "node"
 
   def install
-    # --omit=optional: skip the Agent SDK's private Claude Code binary; Masthead runs the user's own.
-    system "npm", "install", *std_npm_args, "--omit=optional"
+    # --os=none --cpu=none (npm ignores --omit=optional for a global install): skip the Agent SDK's private Claude Code binary; Masthead runs the user's own.
+    system "npm", "install", *std_npm_args, "--os=none", "--cpu=none"
     bin.install_symlink libexec.glob("bin/*")
   end
 

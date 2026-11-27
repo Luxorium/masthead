@@ -131,6 +131,18 @@ export class App implements ConversationHost {
     }
   }
 
+  /** Stored transcript of an agent (the read_archive tool). */
+  readItems(convId: string, agentId: string): Item[] {
+    return this.store.loadItems(convId, agentId);
+  }
+
+  /** The team-compaction flow changed: every tab hears the state, and which agents are archived. */
+  compactChanged(conv: Conversation): void {
+    if (this.conversations.get(conv.meta.id) !== conv) return;
+    this.broadcast({ t: 'compact', convId: conv.meta.id, compact: conv.meta.compact ?? null } as unknown as ServerMsg);
+    this.broadcast({ t: 'archived', convId: conv.meta.id, agents: conv.infos().filter((a) => a.archived !== undefined) } as unknown as ServerMsg);
+  }
+
   itemChanged(conv: Conversation, agent: Agent, item: Item): void {
     // A deleted conversation's processes may still be winding down; nothing of theirs is kept.
     if (this.conversations.get(conv.meta.id) !== conv) return;
@@ -398,6 +410,37 @@ export class App implements ConversationHost {
         this.updateSettings(resetProfile(this.currentSettings, id, this.registry.generatedProfiles()));
         return true;
       }
+      case 'compact_answer': {
+        const keep = Array.isArray(msg.keep) ? msg.keep.filter((k): k is string => typeof k === 'string').slice(0, 200) : [];
+        this.conv(msg.convId).answerCompact(String(msg.id ?? ''), keep, msg.accept === true);
+        return true;
+      }
+      case 'auto_compact':
+        // Tidy this conversation's team automatically, or not (the setting's default is on).
+        if (typeof msg.on !== 'boolean') throw new ClientError('invalid', 'Say on or off.');
+        this.conv(msg.convId).setAutoCompact(msg.on);
+        return true;
+      case 'compact_cancel':
+        this.conv(msg.convId).cancelCompact();
+        return true;
+      case 'restore_agent':
+        this.conv(msg.convId).restoreAgent(String(msg.agentId ?? ''));
+        return true;
+      case 'archive_items': {
+        // Like `items`, for archived agents only.
+        const conv = this.conv(msg.convId);
+        const agent = conv.agents.get(String(msg.agentId ?? ''));
+        if (!agent || agent.info.archived === undefined) throw new ClientError('not_found', 'That agent is not archived here.');
+        const limit = typeof msg.limit === 'number' ? Math.max(1, Math.min(500, Math.trunc(msg.limit))) : null;
+        if (limit !== null) {
+          const before = typeof msg.before === 'number' && msg.before >= 0 ? msg.before : null;
+          const page = this.store.readItems(conv.meta.id, agent.id, { before, limit });
+          client.send({ t: 'archive_items', convId: conv.meta.id, agentId: agent.id, items: page.items, cursor: page.cursor, more: page.more } as unknown as ServerMsg);
+        } else {
+          client.send({ t: 'archive_items', convId: conv.meta.id, agentId: agent.id, items: this.store.loadItems(conv.meta.id, agent.id) } as unknown as ServerMsg);
+        }
+        return true;
+      }
       case 'check_backends':
         // Any approved device may ask (read devices may not: it runs programs to check versions).
         void this.registry.detectAll().then(() => {
@@ -507,6 +550,13 @@ export class App implements ConversationHost {
           firstRefs = [...inlineRefs, ...uploaded];
         }
         // The stored refs go on the person's item; `images` (base64) is what the agent receives.
+        // `/compact` (optionally with words) to the main assistant is not chat: it starts tidying the team.
+        const toLead = typeof msg.agentId !== 'string' || msg.agentId === conv.lead.id;
+        const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text.trim());
+        if (toLead && compact && images.length === 0 && msg.convId) {
+          conv.startCompact((compact[1] ?? '').trim());
+          return;
+        }
         conv.userSend(text, images, typeof msg.agentId === 'string' ? msg.agentId : undefined, firstRefs?.length ? firstRefs : undefined);
         return;
       }

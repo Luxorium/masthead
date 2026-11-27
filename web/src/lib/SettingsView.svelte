@@ -75,6 +75,12 @@
           <input type="checkbox" checked={s.collapseReports} onchange={(e) => store.updateSettings((n) => (n.collapseReports = e.currentTarget.checked))} />
           <span><b>{T.settings.fold}</b><small>{T.settings.foldHelp}</small></span>
         </label>
+        {#if 'autoCompact' in s}
+          <label class="check">
+            <input type="checkbox" checked={(s as { autoCompact?: boolean }).autoCompact !== false} onchange={(e) => store.updateSettings((n) => ((n as { autoCompact?: boolean }).autoCompact = e.currentTarget.checked))} />
+            <span><b>{T.compact.setting}</b><small>{T.compact.settingHelp}</small></span>
+          </label>
+        {/if}
         {#if 'keepAwake' in s}
           <label class="check">
             <input type="checkbox" checked={s.keepAwake} onchange={(e) => store.updateSettings((n) => (n.keepAwake = e.currentTarget.checked))} />

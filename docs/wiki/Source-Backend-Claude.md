@@ -126,6 +126,10 @@ A property's `description` is kept; properties not in `required` become optional
 | `findClaude()` (line 105) | Locates it and runs `--version` (a `.js` entry with this Node; 15 s timeout). Not found → error "Claude Code was not found. Install it and sign in with `claude`, then restart Masthead."; `--version` fails → path kept, `version: null`, error "Could not run …". |
 | `agentEnv()` (line 125) | `process.env` without the variables a running Claude Code session sets about itself (`SESSION_VARS`, line 8: `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, …) and any `CLAUDE_CODE_BRIDGE_*`, compared in upper case on Windows; adds `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/<version>`. Credentials pass through untouched. |
 
+## Compaction: `compact()`
+
+Claude Code compacts when the user message `/compact` arrives (the SDK has no method for it). Seen on 2026-11-28 with Haiku: `system/status` (compacting), `init`, `compact_boundary` (`trigger: 'manual'`, 16,302 → 5,688 tokens, about 3 s), two replayed user messages (the summary and `<local-command-stdout>Compacted</local-command-stdout>`), then a result naming the message's id with `local_command: 'compact'` and empty text; the next turn still knew a word from before. `compact()` sends `/compact` under its own id; while it runs, `init` does not count as a turn start, and that result settles the promise instead of ending a turn (a failed result or the process ending rejects it). `getContextUsage` did not show the smaller context right after compaction, only after the next turn.
+
 ## Observed with a real Claude Code 2.1.331
 
 Recorded on [Agent life cycle](Agent-Life-Cycle.md) and [the agent](Source-Runtime.md), checked on 2026-11-27 (Haiku):

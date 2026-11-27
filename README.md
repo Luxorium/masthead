@@ -14,7 +14,7 @@ Code (or Codex) you have already installed and signed in to.
 - `![New chat](docs/images/new-chat.png)`: a new chat, with "What are we working on?" and the message box.
 - `![A chat with helpers](docs/images/chat-with-helpers.png)`: the main assistant working with two helpers.
 - `![The team](docs/images/team.png)`: the Team panel showing who is working.
-- `![Team map](docs/images/team-map.png)`: the team shown as a map.
+- `![Team panel](docs/images/team-panel.png)`: the Team panel, with helpers under the one that started them.
 - `![Permission request](docs/images/permission-request.png)`: a card asking "Allow" or "Deny".
 - `![Pictures](docs/images/pictures.png)`: a picture attached to a message.
 - `![Settings](docs/images/settings.png)`: the Settings page.
@@ -28,13 +28,14 @@ Code (or Codex) you have already installed and signed in to.
   (Or Codex: see [Teams and agent programs](docs/guide/teams-and-agent-programs.md).)
 - Git, while Masthead is only available from source.
 
-**macOS and Windows support has not yet been checked on real machines.** It is built and tested
-automatically on all three systems, but until the [release checklist](docs/plans/0.2.0/release-checklist.md)
-has been done by a person on a real Mac and a real Windows PC, treat it as untested there.
+**Windows has been partly checked on a real machine; macOS not yet.** It is built and tested
+automatically on all three systems. On Windows 11 a person has installed it, run agents and the
+service at login; keep-awake and some prompts are not checked yet. Until the
+[release checklist](docs/plans/0.2.0/release-checklist.md) is done on a real Mac, treat macOS as untested.
 
 ## Install
 
-Masthead will be installable with `npm i -g --omit=optional @luxorium/masthead` **once it is
+Masthead will be installable with `npm i -g --os=none --cpu=none @luxorium/masthead` **once it is
 published**. That package is not published yet and its name may change. Until then, install from
 source as below. Full steps with more detail: [docs/guide/installing.md](docs/guide/installing.md).
 
@@ -51,11 +52,13 @@ source as below. Full steps with more detail: [docs/guide/installing.md](docs/gu
    git switch next
    npm ci
    npm pack
-   npm i -g --omit=optional .\luxorium-masthead-<version>.tgz
+   npm i -g --os=none --cpu=none .\luxorium-masthead-<version>.tgz
    ```
    (`<version>` is the number in the file name `npm pack` printed.)
-5. Run `masthead`. Your browser opens on Masthead.
-6. Optional: run `masthead service install` so Masthead starts when you log in.
+5. Run `masthead.cmd`. Your browser opens on Masthead. (In PowerShell use `masthead.cmd`: stock
+   PowerShell refuses `masthead.ps1` because running scripts is disabled. Command Prompt takes plain
+   `masthead`. Optional permanent fix: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.)
+6. Optional: run `masthead.cmd service install` so Masthead starts when you log in.
 
 ### macOS
 
@@ -70,7 +73,7 @@ source as below. Full steps with more detail: [docs/guide/installing.md](docs/gu
    git switch next
    npm ci
    npm pack
-   npm i -g --omit=optional ./luxorium-masthead-*.tgz
+   npm i -g --os=none --cpu=none ./luxorium-masthead-*.tgz
    ```
 5. Run `masthead`. Your browser opens on Masthead.
 6. Optional: run `masthead service install` so Masthead starts when you log in.

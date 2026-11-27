@@ -58,6 +58,48 @@ class Ui {
     applyTheme(this.theme);
   }
 
+  /** The team panel's width as a column on wide screens: 400 px unless the person dragged it; per device. */
+  teamWidth = $state(Math.min(560, Math.max(300, Number(read('masthead.teamWidth')) || 400)));
+
+  setTeamWidth(px: number): void {
+    this.teamWidth = Math.round(Math.min(560, Math.max(300, px)));
+    write('masthead.teamWidth', String(this.teamWidth));
+  }
+
+  /** "Hide finished" in the team panel: per device, off by default. */
+  hideFinished = $state(read('masthead.hideFinished') === '1');
+  /** Team branches the person closed, and folded groups they opened; kept while the chat is open. */
+  collapsed = $state<Set<string>>(new Set());
+  openGroups = $state<Set<string>>(new Set());
+  private teamFor: string | null = null;
+
+  /** Forgets closed branches and opened groups when another chat is opened. */
+  teamOf(convId: string | null): void {
+    if (convId === this.teamFor) return;
+    this.teamFor = convId;
+    this.collapsed = new Set();
+    this.openGroups = new Set();
+  }
+
+  setHideFinished(on: boolean): void {
+    this.hideFinished = on;
+    write('masthead.hideFinished', on ? '1' : '0');
+  }
+
+  toggleBranch(id: string, open?: boolean): void {
+    const next = new Set(this.collapsed);
+    if (open ?? next.has(id)) next.delete(id);
+    else next.add(id);
+    this.collapsed = next;
+  }
+
+  toggleGroup(parentId: string): void {
+    const next = new Set(this.openGroups);
+    if (next.has(parentId)) next.delete(parentId);
+    else next.add(parentId);
+    this.openGroups = next;
+  }
+
   /** The settings view is shown in place of the chat. */
   settingsOpen = $state(false);
 

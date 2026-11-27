@@ -181,6 +181,10 @@ flowchart TD
 | `compacted()` | Info notice "Earlier context was summarized to free up space." |
 | `activity(text)` | Activity line. |
 
+## Compaction: `compact()`
+
+`compact(): Promise<{ ok, error? }>` compacts the agent's memory for the team's compact step ([Compact team](Compact-Team.md)). It refuses (`ok: false`) while the agent is in a turn, has unanswered input or is starting; returns `ok: true` with nothing to do for an agent that never had a session; and returns the same promise to a second caller. An agent without a process has its session resumed quietly: `launch()` sends nothing and sets no status (so a finished agent stays done), holds a slot meanwhile, and `closeQuietly()` closes it and gives the slot back afterwards. Messages delivered during compaction wait in the backlog and are delivered afterwards. It is not a turn: no `turnEnded`, no turn counted, `lastText` and the report debt unchanged; the context size is read again afterwards. Tested on the fake backend and live on Claude Code (`test/compact.live.ts`, Haiku, 2026-11-28: passed).
+
 ## Every rule kept from 0.1.x and where it lives now
 
 "Runtime" is `server/runtime/agent.ts`; "Claude adapter" is `server/backends/claude/session.ts`; "machine" is `server/core/machine.ts` with its shell `server/core/conversation.ts`.

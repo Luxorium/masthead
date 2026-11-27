@@ -34,9 +34,12 @@ Settings types: `Settings` in `shared/protocol.ts`. Validation and defaults: `se
 | `leanOpus` | boolean | `true` | Compatibility view: the Opus tier skips them too. |
 | `collapseReports` | boolean | `false` | Reports from agents are shown folded shut in a transcript until the person opens them. Display only. |
 | `keepAwake` | boolean | `true` | Keep the computer from sleeping while any conversation has agents working (`App.keepAwake()`). Applies at once. |
+| `autoCompact` | boolean | `true` | "Tidy the team automatically". When the lead's turn ends and the team has 15 or more finished helpers, or the lead's memory is 70 % full or more, Masthead asks the lead who to keep, archives the other finished helpers and compacts the memory of everyone who stays, then tells the person in the lead's chat. Off: nothing automatic; the lead may suggest `/compact` once, and `/compact` shows a card the person confirms. Read at run time, so a change applies at the next lead turn end. A conversation can be switched off on its own with the per-chat switch (below). See [Compact team](Compact-Team.md). |
 | `maxRunMinutes` | integer 0–1440 | `0` (no limit) | The longest a sub-agent may stay live on one piece of work. |
 | `defaultCwd` | absolute path for this system | the home folder | The folder a new conversation starts in. It is updated automatically when a conversation is started in a different folder. |
 | `version` | `2` | `2` | Settings format. Not changeable. |
+
+**Per-chat switch.** The team panel has a box "Tidy this chat’s team automatically" (`web/src/lib/TeamPanel.svelte`, shown to the local browser and `full` devices). Unticking it sends `{t:'auto_compact', convId, on: false}`, which stores `autoCompact: false` in that conversation's meta (`Conversation.setAutoCompact()`); ticking it again removes the field, so the conversation follows the setting. The box is greyed out while the setting is off: a single conversation cannot switch automatic tidying on when the setting is off. Automatic tidying runs only when both the setting and the conversation allow it (`Conversation.autoCompactOn()`).
 
 An **MCP server** (Model Context Protocol) is an add-on that gives an agent extra tools. Masthead provides its own one, `masthead`, which holds the team tools. A "lean" agent gets only that one.
 
@@ -70,7 +73,8 @@ The page sends changes as `{t:'settings', settings: <patch>}`. The server merges
 |---|---|
 | `MASTHEAD_CLAUDE`: path to the `claude` program, tried before `PATH` | [Claude backend](Source-Backend-Claude.md) |
 | `MASTHEAD_CODEX`: path to the `codex` program, tried before `PATH` | [Codex backend](Source-Backend-Codex.md) |
-| `MASTHEAD_BACKEND=fake` with `MASTHEAD_ALLOW_FAKE=1` (and `MASTHEAD_FAKE_STEP_MS`): the scripted test backend, for tests only | [Fake backend](Source-Backend-Fake.md) |
+| `MASTHEAD_BACKEND=fake` with `MASTHEAD_ALLOW_FAKE=1` (and `MASTHEAD_FAKE_STEP_MS`): the scripted test backend, for tests only; it also switches Tailscale off | [Fake backend](Source-Backend-Fake.md) |
+| `MASTHEAD_TAILSCALE=off`: this instance never runs `tailscale` and shows it as not installed; for test servers | [Tailscale](Source-Remote-Tailscale.md) |
 
 `PATH` is searched for both CLIs. The environment the agents themselves receive is described on [Claude backend](Source-Backend-Claude.md).
 
@@ -78,4 +82,4 @@ Not verified by running: this page was written from the code.
 
 ## Related pages
 
-[Team profiles and settings](Team-Profiles-and-Settings.md) · [Settings code](Source-Settings.md) · [Storage on disk](Storage-on-Disk.md) · [Command-line launcher](Command-Line-Launcher.md) · [Building, testing and installing](Building-Testing-Installing.md)
+[Team profiles and settings](Team-Profiles-and-Settings.md) · [Settings code](Source-Settings.md) · [Storage on disk](Storage-on-Disk.md) · [Command-line launcher](Command-Line-Launcher.md) · [Building, testing and installing](Building-Testing-Installing.md) · [Compact team](Compact-Team.md)

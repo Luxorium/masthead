@@ -67,6 +67,7 @@ What detection found. Never holds credentials.
 | `midTurnDelivery` | `false`: the runtime keeps messages sent during a turn and sends them when the turn ends. |
 | `contextUsage` | `Session.contextUsage()` works. |
 | `lean` | Can skip the person's own MCP servers. |
+| `compact` | `Session.compact()` is available (all three backends: yes). |
 
 ### Capabilities per backend
 
@@ -88,6 +89,7 @@ Read from `CLAUDE_CAPS` (`server/backends/claude/session.ts` line 60), `CODEX_CA
 | `midTurnDelivery` | yes | yes | yes |
 | `contextUsage` | yes | yes | yes |
 | `lean` | yes | yes | yes |
+| `compact` | yes | yes | yes |
 
 The fake's flags can be overridden per instance (`new FakeBackend({ caps })`), which is how tests exercise the `consumedIds: false` and `midTurnDelivery: false` paths.
 
@@ -122,6 +124,7 @@ One team tool, bound to the agent whose session it is given to: `run(input)` clo
 | `setModel?(model)` | Present when `caps.liveModel`. |
 | `close(how)` | `'graceful'`: end the input and let the backend finish. `'now'`: end the process at once. |
 | `contextUsage?()` | `{ used, max }`. |
+| `compact?()` | Only if `caps.compact`: compacts the session's memory between turns; resolves when done, rejects on failure. Not a turn: no `turnStarted`, `turnEnded` or text. Claude Code: the `/compact` command sent as input; Codex: `thread/compact/start`; fake: a short pause and `compacted()`. See [Compact team](Compact-Team.md). |
 | `ended` | Settles once the backend process behind the session has fully stopped (after close or exit). |
 
 ### `SessionEvents` (line 141)
@@ -140,7 +143,7 @@ One team tool, bound to the agent whose session it is given to: `run(input)` clo
 | `usage(u)` | `UsageUpdate`: `context` is the current size (absolute), `output` is tokens added since the last update (an increment), `costUsd` is this session's total so far. |
 | `exited({ failure?, sessionMissing?, apiError? })` | The process ended without being asked to, or a start failed. **Never sent after `Session.close()`.** `sessionMissing` when a resume found no session; `apiError` as in `TurnResult` when the running turn had one. |
 | `askPermission(ask)` | Returns a promise of a `PermissionAnswer`. |
-| `compacted?()` | Optional: earlier context was summarized. |
+| `compacted?()` | Optional: earlier context was summarized (also after `Session.compact()`). |
 | `activity?(text)` | Optional: a backend-specific state worth showing (for example compacting); `undefined` clears it. |
 
 `TurnResult` (line 129): `consumed` is the ids of the runtime's messages this turn consumed. **`null`** means the backend cannot tell (the runtime then counts everything sent as answered); **`[]`** means none, a turn the backend started by itself. `text` is the turn's final text, `error?` a failure, `apiError?` how the backend classed an API error (for example `'rate_limit'`; the runtime decides what a usage limit is), `interrupted` whether it was interrupted.

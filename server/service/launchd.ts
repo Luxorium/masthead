@@ -96,7 +96,7 @@ export function launchdService(deps: Deps): ServiceManager {
         deps.fs.rm(file);
         throw e;
       }
-      return [`Wrote ${file}`, 'Masthead is running as a launchd agent and will start when you log in.', `Logs: ${logPath(deps.home)}`];
+      return [`Wrote ${file}`, 'Installed Masthead as a launchd agent; it starts when you log in.', `Logs: ${logPath(deps.home)}`];
     },
     async uninstall() {
       const file = plistPath(deps.home);

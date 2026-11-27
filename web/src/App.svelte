@@ -4,11 +4,12 @@
   import FirstRun from './lib/FirstRun.svelte';
   import PermissionCard from './lib/PermissionCard.svelte';
   import SettingsView from './lib/SettingsView.svelte';
+  import CompactCard from './lib/team/CompactCard.svelte';
+  import CompactProgress from './lib/team/CompactProgress.svelte';
   import DeviceRequestCard from './lib/remote/DeviceRequestCard.svelte';
   import RemoteSignIn from './lib/remote/RemoteSignIn.svelte';
   import type { RemoteState } from './lib/remote/types.ts';
   import Sidebar from './lib/Sidebar.svelte';
-  import TeamMap from './lib/TeamMap.svelte';
   import TeamPanel from './lib/TeamPanel.svelte';
   import Transcript from './lib/Transcript.svelte';
   import { displayName } from '../../shared/protocol.ts';
@@ -68,7 +69,7 @@
   const teamDrawer = $derived(showPanel && !ui.wide);
   const drawerOpen = $derived(sidebarDrawer || teamDrawer);
   const columns = $derived(
-    [ui.sidebarOpen && !ui.narrow ? '264px' : '', 'minmax(0, 1fr)', showPanel && ui.wide ? '340px' : ''].filter(Boolean).join(' '),
+    [ui.sidebarOpen && !ui.narrow ? '264px' : '', 'minmax(0, 1fr)', showPanel && ui.wide ? `${ui.teamWidth}px` : ''].filter(Boolean).join(' '),
   );
 
   function closeDrawers() {
@@ -186,19 +187,6 @@
       <SettingsView />
     {:else if store.app && !store.canRun}
       <FirstRun />
-    {:else if store.view === 'map' && store.conv && hasTeam && !ui.narrow}
-      <TeamMap />
-      {#if store.convPending.length > 0}
-        <div class="dock">
-          <div class="column">
-            {#if store.mayAnswer}
-              {#each store.convPending as request (request.id)}
-                <PermissionCard {request} />
-              {/each}
-            {/if}
-          </div>
-        </div>
-      {/if}
     {:else}
       {#if path.length > 1}
         <nav class="crumbs" aria-label={T.shell.breadcrumb}>
@@ -220,7 +208,18 @@
               <PermissionCard {request} />
             {/each}
           {/if}
-          {#if store.mayAct}
+          <CompactCard />
+          <CompactProgress />
+          {#if store.viewAgent?.archived}
+            <!-- An archived helper: its chat reads, but it cannot be given work until restored. -->
+            <div class="archived-note" role="note">
+              <span class="archived-tag">{T.compact.archivedLabel}</span>
+              <span class="archived-words">{T.compact.archivedNote}</span>
+              {#if store.mayAct}
+                <button class="btn" title={T.compact.restoreTitle} onclick={() => store.viewAgent && store.restoreAgent(store.viewAgent.id)}>{T.compact.restore}</button>
+              {/if}
+            </div>
+          {:else if store.mayAct}
             {#key store.composerKey}
               <Composer />
             {/key}
@@ -314,6 +313,30 @@
     border-radius: 6px;
     background: var(--raised);
     font-weight: 600;
+  }
+  .archived-note {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 10px 14px;
+    border: 1px dashed var(--border-strong);
+    border-radius: 12px;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+  .archived-tag {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .archived-words {
+    flex: 1;
+    min-width: 12em;
   }
   .role-line {
     margin: 0;

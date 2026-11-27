@@ -74,6 +74,10 @@ Order of steps for one message: markers in the order written, then tool, command
 | `setEffort`, `setModel` | Only record the value (`effort`, `model`). |
 | `contextUsage()` | `{ used: 1000 + turns × 500, max }` with `max` from `FAKE_MODELS` (200,000 otherwise). |
 
+## Compaction and the tidy message
+
+`FakeSession.compact()` (caps `compact: true`) refuses while a turn runs, waits one step, calls `compacted()` and resolves; the session keeps its remembered word; `compactions` counts the calls. A message containing "Call compact_team with the finished helpers" (the core's tidy message, see [Compact team](Compact-Team.md)) makes the fake lead call `list_agents`, keep the first helper listed as done ("its findings are still needed") and call `compact_team` with the note "Tidied by the fake lead."
+
 ## Points to be aware of
 
 - Everything here was checked by reading the code; the fake's own tests were not run for this page.

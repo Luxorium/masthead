@@ -47,6 +47,27 @@ describe('RemoteSection', () => {
     expect((screen.getByLabelText('Port') as HTMLInputElement).disabled).toBe(true);
   });
 
+  it('after a refused switch-on the box follows the real state, and the command is shown', async () => {
+    vi.spyOn(store, 'request').mockReturnValue(true);
+    vi.spyOn(store, 'fail').mockImplementation(() => {});
+    store.remote = base() as never;
+    const { rerender } = render(RemoteSection);
+    const box = screen.getByLabelText('Allow my other devices to connect') as HTMLInputElement;
+    await fireEvent.click(box);
+    expect(box.checked).toBe(true);
+    // The refusal: an error, and a state that is still off but carries the problem and the command.
+    store.receive({ t: 'error', message: 'refused' } as never);
+    expect(box.checked).toBe(false);
+    await fireEvent.click(box);
+    const cmd = 'sudo tailscale serve --bg --https=7443 unix:/run/user/1000/masthead/remote.sock';
+    store.remote = base({ problem: "Tailscale needs your password once to share Masthead's private connection.", command: cmd }) as never;
+    await rerender({});
+    expect(box.checked).toBe(false);
+    expect(box.disabled).toBe(false);
+    expect(screen.getByText(cmd)).toBeTruthy();
+    expect(screen.getByText('Run this once in a terminal:')).toBeTruthy();
+  });
+
   it('shows the operator command with Copy, the Windows warning as sent, and Tailscale missing', async () => {
     store.remote = base({ problem: 'Tailscale did not let Masthead change its settings.', command: 'sudo tailscale set --operator=ann', target: 'loopback', warning: 'On this computer Tailscale reaches Masthead through a local port…' }) as never;
     render(RemoteSection);

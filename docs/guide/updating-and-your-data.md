@@ -36,7 +36,7 @@ safest way back.
 
 Updating restarts Masthead, which stops any helper that is working. Wait until they have finished.
 
-**Once Masthead is published:** run `npm i -g --omit=optional @luxorium/masthead` again (the name may
+**Once Masthead is published:** run `npm i -g --os=none --cpu=none @luxorium/masthead` again (the name may
 change before it is published), then `masthead stop` and `masthead`.
 
 **From source, today:**
@@ -45,7 +45,7 @@ change before it is published), then `masthead stop` and `masthead`.
 2. Windows and macOS (and Linux if you installed with npm):
    1. `npm ci`
    2. `npm pack`
-   3. `npm i -g --omit=optional ./luxorium-masthead-<version>.tgz`
+   3. `npm i -g --os=none --cpu=none ./luxorium-masthead-<version>.tgz`
    4. `masthead stop`, then `masthead`. If you use the service, run `masthead service install` instead
       of `masthead`; it restarts the service with the new version.
 3. Linux with `scripts/install.sh`: run `scripts/install.sh` again. If helpers are working it asks

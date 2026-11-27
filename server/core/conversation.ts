@@ -11,6 +11,8 @@ import {
   effortRank,
   type AgentInfo,
   type BlobRef,
+  type CompactKeep,
+  type CompactState,
   type ConversationMeta,
   type Draft,
   type Effort,
@@ -47,7 +49,36 @@ export interface ConversationHost {
   storeImage?(convId: string, data: string, mediaType: string): { ref: unknown } | { error: string };
   /** Tests replace the clock; the app uses the real one. */
   clock?: Clock;
+  /** An agent's transcript from storage (for read_archive). */
+  readItems?(convId: string, agentId: string): Item[];
+  /** The team compaction's state changed (meta.compact): tell the page. */
+  compactChanged?(conv: Conversation): void;
 }
+
+/** Suggest compacting the team once, past this many finished helpers… */
+const COMPACT_SUGGEST_HELPERS = 15;
+/** …or past this share of the lead's memory. */
+const COMPACT_SUGGEST_MEMORY = 0.7;
+/** What the person is told when tidying ends (no "memory freed" figure: the backend reports it only after the next turn). */
+export function compactSummary(c: CompactState, stayed: number): string {
+  const n = c.archive.length;
+  const compacted = stayed - c.failed.length;
+  const parts = [
+    n
+      ? `Archived ${n} finished helper${n === 1 ? '' : 's'} and compacted the memory of ${compacted} that stay${compacted === 1 ? 's' : ''}.`
+      : `Compacted the memory of ${compacted} agent${compacted === 1 ? '' : 's'}.`,
+  ];
+  const named = c.keep.filter((k) => !k.forced);
+  if (named.length) parts.push(`Kept: ${named.map((k) => `${k.name} because ${k.why}`).join('; ')}.`);
+  const forced = c.keep.filter((k) => k.forced);
+  if (forced.length) parts.push(`Also kept: ${forced.map((k) => `${k.name} (${k.why})`).join(', ')}.`);
+  if (c.failed.length) parts.push(`Not compacted: ${c.failed.map((f) => `${f.name} (${f.why})`).join(', ')}.`);
+  if (n) parts.push('Archived helpers can be read or restored from the team panel.');
+  return parts.join(' ');
+}
+
+/** read_archive returns at most this many characters of a chat per page. */
+const ARCHIVE_PAGE_CHARS = 12_000;
 
 /** Time and a repeating timer, so tests can run the pause and run-time rules without sleeping. */
 export interface Clock {
@@ -232,6 +263,7 @@ export class Conversation implements AgentHost, TeamActions {
     queueMicrotask(() => {
       if (lost) conv.lead.addItem({ kind: 'notice', level: 'info', text: lost });
       if (note) conv.lead.addItem({ kind: 'notice', level: 'info', text: note.text });
+      conv.resumeCompact();
     });
     return conv;
   }
@@ -261,7 +293,7 @@ export class Conversation implements AgentHost, TeamActions {
    * stored error text, so it survives being saved and further restarts until the lead is told.
    */
   private restartNote(): { text: string; agents: Agent[] } | null {
-    const agents = [...this.agents.values()].filter((a) => a.status === 'stopped' && a.info.error === CLOSED_WHILE_WORKING);
+    const agents = [...this.agents.values()].filter((a) => a.status === 'stopped' && a.info.error === CLOSED_WHILE_WORKING && a.info.archived === undefined);
     if (agents.length === 0) return null;
     const names = agents.map((a) => `${a.name}${a.info.title ? ` (${a.info.title})` : ''}`).join(', ');
     return { text: `Masthead was restarted; these agents were stopped while working: ${names}. Message one to resume it.`, agents };
@@ -369,6 +401,10 @@ export class Conversation implements AgentHost, TeamActions {
     const target = (agentId && this.agents.get(agentId)) || this.lead;
     if (this.meta.title === 'New conversation' && target === this.lead && text.trim()) this.meta.title = titleFrom(text);
     target.addItem({ kind: 'user', text, ...(refs?.length ? { images: refs } : images?.length ? { images: images.length } : {}) });
+    if (this.archivedAgent(target)) {
+      target.addItem({ kind: 'notice', level: 'error', text: `"${target.name}" is archived. Restore it from the archived helpers to message it.` });
+      return;
+    }
     if (this.tierOff(target)) {
       target.addItem({ kind: 'notice', level: 'error', text: `${this.label(target.tier)} agents are switched off in the settings. Turn them on to wake "${target.name}".` });
       return;
@@ -377,6 +413,10 @@ export class Conversation implements AgentHost, TeamActions {
     this.apply(target, { type: 'Woken', by: 'person', parentCanReceive: false });
     if (this.st(target).holds.answer) this.apply(target, { type: 'AnswerArrived' }, { busy: true });
     let content = text;
+    if (target === this.lead) {
+      const hint = this.compactHint();
+      if (hint) content = `[${hint}]\n\n${content}`;
+    }
     const note = target === this.lead ? this.restartNote() : null;
     if (note) {
       // Told with the person's next message, so the lead spends no turn of its own on it.
@@ -522,6 +562,7 @@ export class Conversation implements AgentHost, TeamActions {
     if (this.isLead(agent)) void agent.refreshContext();
     // Its turn is over: agents waiting for its answer are reminded, or told there is none.
     if (st.phase !== 'ended' && !fx.some((f) => f.type === 'end')) this.checkWaitsOn(agent, outcome.interrupted);
+    if (this.isLead(agent) && !outcome.interrupted && !outcome.error) this.leadTurnEndedForCompact();
   }
 
   processLost(agent: Agent, message: string, usageLimit?: UsageLimit): void {
@@ -555,6 +596,7 @@ export class Conversation implements AgentHost, TeamActions {
     if (!s) {
       s = initial(this.isLead(agent));
       s.owesReport = agent.owesReport;
+      if (agent.info.archived !== undefined) s.archived = true;
       const status = agent.status;
       if (status === 'done' || status === 'failed' || status === 'stopped') {
         s.phase = 'ended';
@@ -769,6 +811,340 @@ export class Conversation implements AgentHost, TeamActions {
     return [...this.agents.values()].filter((a) => this.states.get(a.id)?.holds.answer?.from === r.id);
   }
 
+  // ---- archived helpers and team compaction (docs/plans/0.2.0/compact.md) ----
+
+  private archivedAgent(agent: Agent): boolean {
+    return this.st(agent).archived === true;
+  }
+
+  /** Finished helpers that are not archived: what a compaction may archive. */
+  private archivable(): Agent[] {
+    return [...this.agents.values()].filter((a) => !this.isLead(a) && !a.live && !this.archivedAgent(a));
+  }
+
+  private setCompact(c: CompactState | undefined): void {
+    this.meta.compact = c;
+    this.host.metaChanged(this);
+    this.host.compactChanged?.(this);
+  }
+
+  private compactRunning(): boolean {
+    const c = this.meta.compact;
+    return !!c && c.phase !== 'done' && c.phase !== 'cancelled';
+  }
+
+  /**
+   * One line for the lead's next message from the person, once per conversation, when the team is big
+   * or the lead's memory is getting full. Nothing happens unless the person types /compact.
+   */
+  private compactHint(): string | undefined {
+    if (this.autoCompactOn() || this.meta.compactSuggested || this.compactRunning()) return undefined;
+    const finished = this.archivable().length;
+    const u = this.lead.info.usage;
+    const memory = u.contextMax > 0 ? u.context / u.contextMax : 0;
+    if (finished < COMPACT_SUGGEST_HELPERS && memory < COMPACT_SUGGEST_MEMORY) return undefined;
+    this.meta.compactSuggested = true;
+    this.host.metaChanged(this);
+    const why = finished >= COMPACT_SUGGEST_HELPERS ? `the team has ${finished} finished helpers` : `your memory is ${Math.round(memory * 100)}% full`;
+    return `Masthead: ${why}. You may suggest once, in your reply, that the person type /compact to tidy the team.`;
+  }
+
+  /** Automatic tidying is on for this conversation (the setting, unless the person switched it off here). */
+  private autoCompactOn(): boolean {
+    return this.host.settings().autoCompact !== false && this.meta.autoCompact !== false;
+  }
+
+  /** The person switches automatic tidying on or off for this conversation only. */
+  setAutoCompact(on: boolean): void {
+    this.meta.autoCompact = on ? undefined : false;
+    this.host.metaChanged(this);
+  }
+
+  /** Helpers finished so far, archived ones included (the cool-down counts these). */
+  private finishedTotal(): number {
+    return [...this.agents.values()].filter((a) => !this.isLead(a) && !a.live).length;
+  }
+
+  /**
+   * The lead's turn ended. A request it left unanswered is dropped (nothing archived); otherwise, with
+   * automatic tidying on, past a threshold and outside the cool-down, tidying starts. Never while the
+   * person has a question or approval open for the lead, and never twice for one crossing.
+   */
+  private leadTurnEndedForCompact(): void {
+    const c = this.meta.compact;
+    if (c?.phase === 'compacting') {
+      void this.runCompact(); // the lead's turn is over: now it can compact (it is last in line)
+      return;
+    }
+    if (c?.phase === 'asked' && c.askedAnswered) {
+      this.setCompact({ ...c, phase: 'cancelled' });
+      this.lead.addItem({ kind: 'notice', level: 'info', text: 'The lead did not choose who to keep, so the team was not tidied.' });
+      return;
+    }
+    if (c?.phase === 'asked') {
+      this.setCompact({ ...c, askedAnswered: true }); // its next turn end is the one that reads the request
+      return;
+    }
+    if (!this.autoCompactOn() || this.compactRunning() || this.st(this.lead).holds.approvals > 0) return;
+    const finishedNow = this.finishedTotal();
+    const archivable = this.archivable().length;
+    const u = this.lead.info.usage;
+    const memory = u.contextMax > 0 ? u.context / u.contextMax : 0;
+    const mark = this.meta.compactMark ?? { finished: 0, memoryArmed: true };
+    // Memory re-arms once it has dropped below the mark again (after a compaction).
+    if (!mark.memoryArmed && memory < COMPACT_SUGGEST_MEMORY) {
+      this.meta.compactMark = { ...mark, memoryArmed: true };
+      this.host.metaChanged(this);
+      return;
+    }
+    const helpers = archivable >= COMPACT_SUGGEST_HELPERS && finishedNow >= mark.finished + COMPACT_SUGGEST_HELPERS;
+    const full = mark.memoryArmed && memory >= COMPACT_SUGGEST_MEMORY;
+    if (!helpers && !full) return;
+    this.meta.compactMark = { finished: finishedNow, memoryArmed: !full && mark.memoryArmed };
+    this.startCompact('', { auto: true, reason: helpers ? `the team has ${archivable} finished helpers` : `the lead's memory is ${Math.round(memory * 100)}% full` });
+  }
+
+  /**
+   * Starts tidying the team: the person typed /compact (optionally with words for the lead), or Masthead
+   * started it (`auto`). The lead is asked to call compact_team; with nothing to archive, everyone just
+   * compacts its memory.
+   */
+  startCompact(words: string, opts: { auto?: boolean; reason?: string } = {}): void {
+    const lead = this.lead;
+    if (!opts.auto) lead.addItem({ kind: 'user', text: `/compact${words ? ` ${words}` : ''}` });
+    if (this.compactRunning()) {
+      if (!opts.auto) lead.addItem({ kind: 'notice', level: 'info', text: 'Tidying the team is already under way.' });
+      return;
+    }
+    if (!opts.auto) this.meta.compactMark = { finished: this.finishedTotal(), memoryArmed: false };
+    const base: CompactState = {
+      id: randomUUID(),
+      phase: 'asked',
+      auto: this.autoCompactOn(),
+      ...(opts.reason ? { reason: opts.reason } : {}),
+      keep: [],
+      archive: [],
+      note: words,
+      pending: [],
+      failed: [],
+      startedAt: this.now(),
+    };
+    if (this.archivable().length === 0) {
+      // Nothing to archive: everyone just compacts its memory.
+      this.setCompact({ ...base, phase: 'compacting', pending: this.compactOrder() });
+      void this.runCompact();
+      return;
+    }
+    this.setCompact(base);
+    this.apply(lead, { type: 'Woken', by: 'person', parentCanReceive: false });
+    this.apply(lead, { type: 'Input', from: opts.auto ? 'masthead' : 'person' });
+    const why = opts.reason ? ` because ${opts.reason}` : words ? `: ${words}` : '';
+    const how = base.auto
+      ? 'The rest are archived and everyone who stays compacts its memory; the person is told afterwards.'
+      : 'The person confirms on a card.';
+    lead.deliver(
+      `${opts.auto ? 'Masthead is tidying the team' : 'The person asked to tidy the team'}${why}. Call compact_team with the finished helpers to keep and why (helpers still working are kept anyway). ${how} Archived helpers' chats stay readable with read_archive.`,
+    );
+    this.touch();
+  }
+
+  /**
+   * compact_team (the lead only, once asked): who to keep and why. With automatic tidying the rest are
+   * archived at once; otherwise the person confirms on a card.
+   */
+  compactTeam(caller: Agent, keep: Array<{ name: string; why: string }>, note: string): string {
+    if (!this.isLead(caller)) return 'Error: only the lead tidies the team.';
+    const c = this.meta.compact;
+    if (!c || c.phase !== 'asked') return 'Error: nobody asked to tidy the team now.';
+    const kept = new Map<string, CompactKeep>();
+    for (const k of keep) {
+      const a = this.find(k.name, caller);
+      if (!a || this.isLead(a) || this.archivedAgent(a)) return `Error: there is no helper named "${k.name}" in the team.`;
+      kept.set(a.id, { name: a.name, why: k.why.trim().slice(0, 200) || 'kept by the lead' });
+    }
+    // Helpers still working cannot be archived; nor can anyone above a helper that stays.
+    for (const a of this.agents.values()) {
+      if (this.isLead(a) || this.archivedAgent(a) || !a.live) continue;
+      if (!kept.has(a.id)) kept.set(a.id, { name: a.name, why: 'still working', forced: true });
+    }
+    for (const id of [...kept.keys()]) {
+      for (let p = this.parent(this.agents.get(id)!); p && !this.isLead(p); p = this.parent(p)) {
+        if (!kept.has(p.id)) kept.set(p.id, { name: p.name, why: `started ${kept.get(id)!.name}, which stays`, forced: true });
+      }
+    }
+    const archive = this.archivable().filter((a) => !kept.has(a.id)).map((a) => a.name);
+    const next: CompactState = { ...c, keep: [...kept.values()], archive, note: note.trim().slice(0, 500) || c.note };
+    if (c.auto) {
+      this.setCompact({ ...next, phase: 'archiving' });
+      this.archiveAndCompact();
+      return `Archiving ${archive.length} and keeping ${kept.size}; then everyone who stays compacts its memory, you last. The person is told.`;
+    }
+    this.setCompact({ ...next, phase: 'proposed' });
+    return `The person sees a card: keep ${kept.size}, archive ${archive.length}. You will hear the outcome.`;
+  }
+
+  /** The person's answer to the card: which helpers to keep (forced ones always stay), and whether to go ahead. */
+  answerCompact(id: string, keepNames: string[], accept: boolean): void {
+    const c = this.meta.compact;
+    if (!c || c.id !== id || c.phase !== 'proposed') return;
+    if (!accept) {
+      this.setCompact({ ...c, phase: 'cancelled' });
+      this.lead.addItem({ kind: 'notice', level: 'info', text: 'The person declined the team compaction.' });
+      return;
+    }
+    const want = new Set(keepNames.map((n) => n.toLowerCase()));
+    const keep = c.keep.filter((k) => k.forced || want.has(k.name));
+    for (const name of c.archive) if (want.has(name)) keep.push({ name, why: 'kept by the person' });
+    const keepSet = new Set(keep.map((k) => k.name));
+    const archive = this.archivable().filter((a) => !keepSet.has(a.name)).map((a) => a.name);
+    this.setCompact({ ...c, phase: 'archiving', keep, archive });
+    this.archiveAndCompact();
+  }
+
+  /** Archives the chosen helpers (idempotent, so a restart may run it again), then starts compacting. */
+  private archiveAndCompact(): void {
+    const c = this.meta.compact!;
+    const now = this.now();
+    for (const name of c.archive) {
+      const a = this.find(name);
+      if (!a || a.live || this.isLead(a)) continue;
+      this.apply(a, { type: 'Archive' });
+      if (this.archivedAgent(a) && a.info.archived === undefined) {
+        a.info.archived = now;
+        this.host.agentChanged(this, a);
+      }
+    }
+    this.setCompact({ ...c, phase: 'compacting', pending: this.compactOrder() });
+    void this.runCompact();
+  }
+
+  /** Everyone who stays, helpers first and the lead last. */
+  private compactOrder(): string[] {
+    const helpers = [...this.agents.values()].filter((a) => !this.isLead(a) && !this.archivedAgent(a) && (a.sessionId !== null || a.live));
+    return [...helpers.map((a) => a.name), this.lead.name];
+  }
+
+  private compacting = false;
+
+  /** Compacts each pending agent's memory in turn; a helper that is working is skipped. */
+  private async runCompact(): Promise<void> {
+    if (this.compacting) return;
+    this.compacting = true;
+    try {
+      for (;;) {
+        const c = this.meta.compact;
+        if (!c || c.phase !== 'compacting') return;
+        const name = c.pending[0];
+        if (name === undefined) break;
+        const a = this.find(name);
+        // The lead is usually inside the turn that called compact_team: it compacts when that turn ends.
+        if (a && this.isLead(a) && (a.status === 'running' || a.status === 'queued' || a.busy)) return;
+        let failed: { name: string; why: string } | undefined;
+        if (!a || this.archivedAgent(a)) failed = undefined;
+        else if (a.status === 'running' || a.status === 'queued' || (a.busy && !this.isLead(a))) failed = { name, why: 'still working' };
+        else {
+          const compact = (a as { compact?: () => Promise<{ ok: boolean; error?: string }> }).compact;
+          const r = compact ? await compact.call(a).catch((e: unknown) => ({ ok: false, error: String((e as Error)?.message ?? e) })) : { ok: false, error: 'this agent program cannot compact its memory' };
+          if (!r.ok) failed = { name, why: r.error ?? 'compaction failed' };
+        }
+        const now = this.meta.compact;
+        if (!now || now.phase !== 'compacting') return; // cancelled meanwhile
+        this.setCompact({ ...now, pending: now.pending.slice(1), failed: failed ? [...now.failed, failed] : now.failed });
+      }
+      const c = this.meta.compact!;
+      this.setCompact({ ...c, phase: 'done' });
+      this.lead.addItem({ kind: 'notice', level: 'info', text: compactSummary(c, this.compactOrder().length) });
+    } finally {
+      this.compacting = false;
+    }
+  }
+
+  /** The person cancels the compaction (until its compacting step ends). Archived helpers stay archived. */
+  cancelCompact(): void {
+    const c = this.meta.compact;
+    if (!c || !this.compactRunning()) return;
+    this.setCompact({ ...c, phase: 'cancelled' });
+    this.lead.addItem({ kind: 'notice', level: 'info', text: 'Team compaction cancelled.' });
+  }
+
+  /** The person restores an archived helper to the team. */
+  restoreAgent(agentId: string): void {
+    const a = this.agents.get(agentId);
+    if (!a || !this.archivedAgent(a)) return;
+    this.apply(a, { type: 'Unarchive' });
+    a.info.archived = undefined;
+    this.host.agentChanged(this, a);
+    this.host.metaChanged(this);
+  }
+
+  /** After a restart: carry on with a compaction that was under way. */
+  private resumeCompact(): void {
+    const c = this.meta.compact;
+    if (!c) return;
+    if (c.phase === 'asked') {
+      // The lead's request was cut off with its process; the person can type /compact again.
+      this.setCompact({ ...c, phase: 'cancelled' });
+      this.lead.addItem({ kind: 'notice', level: 'info', text: 'Masthead restarted before the lead proposed a compaction. Type /compact again to start over.' });
+    } else if (c.phase === 'archiving') this.archiveAndCompact();
+    else if (c.phase === 'compacting') void this.runCompact();
+  }
+
+  /**
+   * read_archive: without a name, an index of the archived helpers; with a name, that helper's chat as
+   * plain text, a page at a time, optionally only the lines matching `search` (with one line of context).
+   */
+  readArchive(_viewer: Agent, name?: string, page = 1, search?: string): string {
+    const archived = [...this.agents.values()].filter((a) => this.archivedAgent(a));
+    if (!name) {
+      if (!archived.length) return 'No archived helpers.';
+      return archived
+        .map((a) => {
+          const job = a.info.title || a.info.task.replace(/\s+/g, ' ').slice(0, 120);
+          const when = a.info.archived ? new Date(a.info.archived).toISOString().slice(0, 16).replace('T', ' ') : '?';
+          const report = this.lastWords(a);
+          return `- ${a.name}: ${this.label(a.tier)}${job ? `, ${job}` : ''}, archived ${when}${report ? `\n  Report: ${report}` : ''}`;
+        })
+        .join('\n');
+    }
+    const a = this.find(name);
+    if (!a || !this.archivedAgent(a)) return `Error: there is no archived helper named "${name}". Call read_archive without a name for the list.`;
+    let lines = this.chatLines(a);
+    if (search?.trim()) {
+      const w = search.trim().toLowerCase();
+      const keep = new Set<number>();
+      lines.forEach((l, i) => {
+        if (l.toLowerCase().includes(w)) for (const j of [i - 1, i, i + 1]) if (j >= 0 && j < lines.length) keep.add(j);
+      });
+      lines = [...keep].sort((x, y) => x - y).map((i) => lines[i]!);
+      if (!lines.length) return `No lines in ${a.name}'s chat mention "${search.trim()}".`;
+    }
+    const text = lines.join('\n');
+    const pages = Math.max(1, Math.ceil(text.length / ARCHIVE_PAGE_CHARS));
+    const n = Math.min(Math.max(1, Math.trunc(page)), pages);
+    const body = text.slice((n - 1) * ARCHIVE_PAGE_CHARS, n * ARCHIVE_PAGE_CHARS);
+    return `${a.name}'s chat, page ${n} of ${pages}${search?.trim() ? ` (lines with "${search.trim()}")` : ''}:\n${body}${n < pages ? `\n[More: read_archive with page ${n + 1}.]` : ''}`;
+  }
+
+  /** The first lines of an agent's final message, for the archive index. */
+  private lastWords(a: Agent): string {
+    const items = this.host.readItems?.(this.meta.id, a.id) ?? [];
+    const last = [...items].reverse().find((i) => i.kind === 'text') as { text?: string } | undefined;
+    const text = (last?.text ?? a.lastText ?? '').trim();
+    return text.split('\n').filter((l) => l.trim()).slice(0, 2).join(' ').slice(0, 300);
+  }
+
+  private chatLines(a: Agent): string[] {
+    const out: string[] = [];
+    for (const i of this.host.readItems?.(this.meta.id, a.id) ?? []) {
+      if (i.kind === 'user') out.push(`Person: ${i.text}`);
+      else if (i.kind === 'text') out.push(`${a.name}: ${i.text}`);
+      else if (i.kind === 'inbound') out.push(`[${i.via} from ${i.from}] ${i.text}`);
+      else if (i.kind === 'tool') out.push(`[tool ${i.name}] ${JSON.stringify(i.input).slice(0, 200)}${i.result ? ` -> ${i.result.slice(0, 300)}` : ''}`);
+      else if (i.kind === 'notice') out.push(`(${i.text})`);
+    }
+    return out.flatMap((l) => l.split('\n'));
+  }
+
   // ---- TeamActions: what the agents' tools do ----
 
   autoEffort(): boolean {
@@ -816,6 +1192,7 @@ export class Conversation implements AgentHost, TeamActions {
     const target = this.find(to, from);
     if (!target) return `Error: there is no agent named "${to}". Use list_agents to see the names.`;
     if (target === from) return 'Error: that is you.';
+    if (this.archivedAgent(target)) return `Error: "${target.name}" is archived and cannot be woken. Read its chat with read_archive.`;
     if (!target.live && this.st(target).stoppedByPerson) return `Error: the person stopped "${target.name}"; only they can wake it.`;
     if (this.tierOff(target)) return `Error: ${this.label(target.tier)} agents are switched off in the settings, so "${target.name}" cannot be woken.`;
     if (this.agentMessages >= MAX_AGENT_MESSAGES) return 'Error: this conversation has reached its limit of messages between agents.';
@@ -852,7 +1229,8 @@ export class Conversation implements AgentHost, TeamActions {
   list(viewer: Agent): string {
     const now = this.now();
     const awake = this.active();
-    const lines = [...this.agents.values()].map((a) => {
+    const archived = [...this.agents.values()].filter((a) => this.archivedAgent(a)).length;
+    const lines = [...this.agents.values()].filter((a) => !this.archivedAgent(a)).map((a) => {
       const by = this.parent(a)?.name;
       const you = a === viewer ? ' (you)' : '';
       const job = a.info.title || a.info.task.replace(/\s+/g, ' ').slice(0, 120);
@@ -875,12 +1253,14 @@ export class Conversation implements AgentHost, TeamActions {
       if (by) facts.push(`started by ${by}`);
       return `- ${a.name}${you}: ${this.label(a.tier)}, ${facts.join(', ')}${task}`;
     });
+    if (archived) lines.push(`${archived} archived helper${archived > 1 ? 's' : ''}: read ${archived > 1 ? 'their chats' : 'its chat'} with read_archive.`);
     return lines.join('\n');
   }
 
   stop(caller: Agent, name: string): string {
     const target = this.find(name, caller);
     if (!target) return `Error: there is no agent named "${name}".`;
+    if (this.archivedAgent(target)) return `"${target.name}" is archived (not running).`;
     if (!this.isAncestor(caller, target)) return `Error: you can only stop agents started by you or below you.`;
     if (!target.live) return `"${target.name}" is not running (${target.status}).`;
     // The caller asked for this, so it does not need a report about it (row 24); its parent may move on.
@@ -921,7 +1301,7 @@ export class Conversation implements AgentHost, TeamActions {
     const s = this.host.settings();
     if (!s.autoEffort) return 'Error: automatic effort is switched off in the settings.';
     const target = this.find(name, caller);
-    if (!target) return `Error: there is no agent named "${name}".`;
+    if (!target || this.archivedAgent(target)) return `Error: there is no agent named "${name}" in the team.`;
     if (!this.isAncestor(caller, target)) return 'Error: you can only set the effort of agents started by you or below you.';
     const ceiling = this.spec(target.tier).effort;
     if (effortRank(level) > effortRank(ceiling)) return `Error: ${this.label(target.tier)} agents may go up to ${ceiling} effort. The person sets that limit.`;

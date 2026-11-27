@@ -13,11 +13,11 @@ App
 ├─ main
 │  ├─ SettingsView                   (settings open)
 │  ├─ FirstRun                       (no backend can run)
-│  ├─ TeamMap ─ StopControl          (map view)
 │  ├─ Transcript ─ UserItem, TextItem, ThinkingItem, ToolItem, InboundItem,
 │  │               NoticeItem, DraftView, StatusLine; Thumbs ─ ImageViewer
-│  └─ dock: DeviceRequestCard, PermissionCard, Composer ─ FolderPicker, ProfileChip
-└─ TeamPanel ─ StopControl, TierControls
+│  └─ dock: DeviceRequestCard, PermissionCard, CompactCard, CompactProgress,
+│           Composer ─ FolderPicker, ProfileChip (or the "Archived" note)
+└─ TeamPanel ─ CompactProgress, TeamOutline ─ Expander, StopControl; TierControls
 ```
 
 ## Sidebar.svelte
@@ -67,13 +67,14 @@ The message box, in the dock. App remounts it (inside `{#key store.composerKey}`
 - **Pictures.** + opens a file picker; paste and drop work too. Checks, shrinking and upload: [Images](Source-Web-Images.md#attaching-pictures-composersvelte).
 - **Under the box, new chat:** the folder chip ("Folder ~/projects/x"), which opens `FolderPicker`; the team chip `ProfileChip`, only when more than one team can start now; and on the very first chat, "Agents can read and change files in this folder."
 - **Under the box, existing chat:** the folder as a static chip (full path in its tooltip), and Stop all.
+- **The `/compact` hint.** In an existing chat, while the text is a prefix of `/compact` with no space, a small `role="listbox"` offers "/compact: Tidy the team now". Tab, a click, or Enter before the word is complete fills in `/compact `; Enter on the full word sends it as typed, and the server treats it as a request to tidy the team ([Compact team](Compact-Team.md)). Not shown in a new chat or while messaging a helper directly.
 - **Advanced only:** the model that will answer, its thinking time, and the short "when to ask" mode. For a chat without a lead yet it reads the first level of the chat's (or default) profile.
 
 ## FolderPicker.svelte
 
 The folder chooser for a new chat, a small `role="dialog"` over the composer. Prop `onclose`. On mount it clears `store.dirs` (an old listing must not be shown or chosen) and sends `{t:'dirs', path: store.newCwd}`. A path field (Enter lists it), "‹ Up to …", the subfolders (each lists itself on click), and Cancel / "Use this folder", which sets `store.newCwd`. On Windows the server uses the sentinel `drives:` for the list of drives; the picker shows it as "Drives" and cannot choose it. Child paths use the parent's own separator (`childPath()` in `words.ts`).
 
-Its words ("Choose a folder", "Up to", "No folders inside.", "Cancel", "Use this folder") are written in the component, not in `text.ts`.
+Its words are in `T.folder`.
 
 ## PermissionCard.svelte
 
@@ -83,16 +84,52 @@ One approval request, in the dock. Prop `request` (a `PermissionRequest`). It is
 - **Questions** (`kind === 'question'`): each question as a fieldset with its options as toggle buttons (one or many) and a "Something else…" field. Typing in that field clears the picks of a single-choice question. Answer is enabled once every question has an answer; "Don't answer" sends `deny`. Answers are keyed by question text, as Claude Code's AskUserQuestion expects; two questions with the same text share one entry, with both answers joined by " | ".
 - **Permissions:** "Bravo wants to run a command" (or the request's `title`), the command in full, or the target with Show details for other tools; the description; Deny, "Allow for this session" (only if `canAlways`), Allow.
 
-The "wants to …" phrases per tool (`WANTS`) are written in the component, not in `text.ts`.
+The "wants to …" phrases per tool are in `T.wants`; an unknown tool gets `T.wants.other()` with its name.
 
 ## TeamPanel.svelte
 
-The team, as a column or drawer on the right. Shown only once the lead has started a helper and the person opened it (or Advanced opened it on a wide screen). No props.
+The team, as a column or drawer on the right. Shown only once the lead has started a helper and the person opened it (or Advanced opened it on a wide screen). No props. There is no map view any more: 0.2.0-beta.2 deleted `TeamMap.svelte`, `store.view` and "Show as a map"; the outline below is the only team view.
 
-- Header "Team", "Show as a map" (not on narrow screens) or "Back to the chat", and × (closes and returns to the chat view).
-- The tree: the lead, then each agent's children indented 14 px per level. A row shows the status dot, name, a badge with the model in the agent's tier colour, its title (or "Main assistant"), and `statusWords()`. Clicking opens that agent's chat. Live helpers get a `StopControl`.
+- Header "Team" and × (closes the panel).
+- **Width.** On wide screens it is a column, 400 px by default. A separator on its left edge (`role="separator"`, `aria-valuemin` 300, `aria-valuemax` 560) is dragged with the pointer, or moved 20 px at a time with ← (wider) and → (narrower); the width is `ui.teamWidth`, kept per device ([ui.svelte.ts](Source-Web-Front-End.md#simple-and-advanced-uisveltets)). As a drawer the `aside` is `min(400px, 88vw)` wide.
+- `CompactProgress` (while the team is being tidied), then the `TeamOutline`.
+- With `mayAct`, a per-chat switch "Tidy this chat's team automatically", which sends `{t:'auto_compact', convId, on}`. It is disabled (and shown off) when the setting "Tidy the team automatically" is off, because the person may only switch tidying off per chat ([Compact team](Compact-Team.md)).
 - "Memory used: N%": the lead's context against its window. The tokens and all agents' output are in the tooltip, and shown inline in Advanced.
 - `TierControls`, in Advanced and with `mayAct`.
+
+## TeamOutline.svelte
+
+`web/src/lib/team/TeamOutline.svelte`: the team as an outline that scrolls only up and down. No props. The rows come from [`outline.ts`](#outlinets).
+
+- **A tree for assistive technology and the keyboard.** `role="tree"`, each agent a `role="treeitem"` with `aria-level`, `aria-expanded` (parents only) and `aria-selected` (the agent on screen), and its children in a `role="group"`. One tab stop (roving `tabindex`): ↓ and ↑ move, Home and End go to the first and last row, → opens a closed branch or moves into it, ← closes an open branch or goes to the parent, Enter or Space opens the agent's chat (or opens a folded row).
+- **Rows.** The expander (or a blank of the same width), status dot, name, a badge with the model, the title (or "Main assistant"), and on a second line `statusWords()`. Clicking a row opens that agent's chat. The level's colour appears only on the model badge. Finished and stopped helpers stay and are dimmed by colour (`--muted`, `--faint`), not opacity, so their words keep AA contrast; a failed one's status line is in `--bad`. Live helpers (queued, running, waiting; never the lead) get a `StopControl` at the right.
+- **Guide lines.** Neutral 1 px lines in `--border-strong` join each parent to its children, exact to the pixel by construction. An open parent draws its line once, as one 1 px `.vline` in its row: from the pixel under its expander down to where its last child's corner begins. The line's length comes from `guide()`, an action on the children's `role="group"` that reads the last child's `offsetTop` (again whenever a `ResizeObserver` sees the parent or the group change size) into `--vend`. Each child draws only its own `.tick`: a 1 px line from the parent's line to its expander (├), or on towards its dot for a leaf; the last child's tick is a corner with a rounded bend (└) that starts where the line stops. Every position is a whole number of CSS pixels taken from the variables on `.outline`: `--tw` (indent per level and expander column, 20 px; 16 px under 600 px), `--gx` (the line's x, the middle pixel of the 13 px expander, which sits at `--gx` − 6; 9 px, 7 px on phones), `--pad` (the row's top padding, 4 px), `--line` (the first line's fixed height, 24 px to hold the 24 px Stop; 44 px on touch screens), `--bt` (the expander's top in that line, 5 px; 15 px on touch), `--ty` (the tick's y, `--pad` + `--bt` + 6) and `--r` (the corner's radius, 4 px). Text lines have pixel line heights (20 px, and 18 px for the status line and preview), so no row is a fraction of a pixel tall. The browser test checks the joins to the pixel at pixel ratios 1 and 1.5 ([Page tests](Source-Web-Tests.md#browser-test-testuie2emjs)). On phones the job title is hidden.
+- **Preview.** Hovering or focusing a row for 300 ms shows, below the row and inside the panel, the agent's task and its last four chat lines (from the last 14 items), plus its live draft. If that transcript is not loaded, the preview fetches it and drops it again when it closes (`store.dropItems()`), so hovering across a big team does not keep every transcript in memory. The preview is `aria-hidden`; it never makes the panel scroll sideways.
+- **Hide finished.** A checkbox above the tree, `ui.hideFinished`, kept per device and off by default. When on, each parent's finished helpers (done or stopped, with nothing live or failed under them) fold into one row, "N finished: Bravo, Charlie"; clicking it, or Enter, opens that group again. Failed helpers are never folded.
+- **Branches.** Closed branches (`ui.collapsed`) and opened folded groups (`ui.openGroups`) are kept while the chat is open and forgotten when another chat is opened (`ui.teamOf()`).
+- **Archived helpers.** When a tidy-up archived helpers (`store.archivedAgents`), a row "Archived helpers (M)" under the tree opens a list, newest first: name, model badge, title and "archived <when>". Clicking one opens its chat read-only; with `mayAct`, Restore sends `restore_agent` ([Compact team](Compact-Team.md)). The row's − / + is the same `Expander` as the tree's.
+
+The preview's "Report from", "Message from" and "Thinking…" still come from `T.map`, a group kept from the map.
+
+## outline.ts
+
+`web/src/lib/team/outline.ts`, pure and tested without a page (`web/test/team-outline.test.ts`).
+
+- `outlineRows(agents, { collapsed, hideFinished, openGroups })`: the rows top to bottom from the lead (depth 1), children in start order (`createdAt`). A collapsed branch's children are left out. With `hideFinished`, each parent's finished helpers (not failed, and with nothing live or failed under them) become one `folded` row after the others, unless the parent's group was opened. A row is `{kind:'agent', agent, depth, hasChildren, expanded, parentId}` or `{kind:'folded', parentId, depth, agents, key}`.
+- `outlineTree(agents, opts)`: the same rows as nested nodes, so each parent's children sit in one group for drawing the guides.
+- `indent(depth)`: 16 px a level for the first three, then 6 px. It is tested but no longer used by `TeamOutline`, which indents by `--tw`.
+
+## Expander.svelte
+
+`web/src/lib/team/Expander.svelte`: the small − / + box of the outline's branches and of the "Archived helpers" row, so the two cannot differ. Prop: `open`. A 13 px square (border included, so its middle is a whole pixel) with a 1 px `--guide` border and 3 px corners; the − and + are 1 px bars, not text, crossing on the middle pixel, so font metrics cannot move them. `aria-hidden`: the button around it carries the label.
+
+## CompactCard.svelte
+
+`web/src/lib/team/CompactCard.svelte`, in the dock. The tidy-up proposal, shown only when `store.compact` is in phase `proposed`, which happens when automatic tidying is off. A `role="alertdialog"` "Tidy the team?" with "Keep N, archive M", the lead's note if any, and every helper named with its job and a tick to keep it. The proposal's keeps start ticked; helpers that must stay ("Stays: still working, or needed by a helper that stays") are ticked and cannot be unticked; the others show the lead's reason. With `mayAnswer`, "Not now" and "Tidy up" call `store.answerCompact(keep, accept)`.
+
+## CompactProgress.svelte
+
+`web/src/lib/team/CompactProgress.svelte`, in the dock and at the top of the team panel. While a tidy-up is asked, archiving or compacting, a `role="status"` line: "Tidying the team: deciding who to keep…", "…archiving finished helpers…" or "Tidying the team… N of M", with Cancel (`store.cancelCompact()`) when `mayAnswer`.
 
 ## TierControls.svelte
 
@@ -106,17 +143,7 @@ The ⚙ button at the foot of the chat list (`id="settings-gear"`). It opens the
 
 ## StopControl.svelte
 
-The ■ that stops a live helper and everything under it. Props: `agent` and `placement` (`'map'` or `'row'`). It sends `{t:'stop_agent', convId, agentId}` and renders nothing without `store.mayAct`. The word "Stop" appears on hover and keyboard focus; on touch screens it is always shown in a row, with a 44 px target (not checked in a browser). Used by `TeamPanel` and `TeamMap`.
-
-## TeamMap.svelte
-
-The team as a tree of cards, in place of the transcript (`store.view === 'map'`, wide enough screens only). No props.
-
-- Each card: status dot, name, model badge in the tier colour, title (or "Main assistant"), what it is doing (`statusWords`), and "<thinking time> thinking · <tokens> memory · <elapsed>". Elapsed time ticks every second for helpers. Clicking opens the agent's chat; live helpers have a Stop.
-- **Preview.** Hovering or focusing a card for 220 ms shows a tooltip with the task and the last six lines of the agent's chat, plus its live draft. If that transcript is not loaded, the preview fetches it and drops it again when it closes (`store.dropItems()`), so hovering across a big team does not keep every transcript in memory.
-- With only the lead: a hint that helpers will appear under it.
-
-Some words here are written in the component, not in `text.ts`: "thinking", "memory", "Report from", "Message from", "Thinking…", and the only-the-lead hint.
+The ■ that stops a live helper and everything under it. Props: `agent` and `placement` (only `'row'` now). It sends `{t:'stop_agent', convId, agentId}` and renders nothing without `store.mayStop` (any device role but `read`). The word "Stop" appears on hover and keyboard focus; on touch screens it is always shown, with a 44 px target. Used by `TeamOutline`.
 
 ## FirstRun.svelte
 

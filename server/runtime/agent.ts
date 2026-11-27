@@ -247,6 +247,11 @@ export class Agent {
 
   /** Sends a message into the session, starting or resuming it if needed. */
   deliver(content: Content): void {
+    if (this.compactRun) {
+      // Compacting: the message waits until it has finished (compact() sends it then).
+      this.backlog.push(this.userMessage(content));
+      return;
+    }
     this.limited = false;
     const between = this.unanswered.size === 0 && !this.inTurn && !this.hasBackgroundWork;
     // Held messages go first. They exist only when the process that got them is gone (see `held`).
@@ -303,7 +308,7 @@ export class Agent {
     });
     // Only show "queued" when the slot is not free right away.
     queueMicrotask(() => {
-      if (!granted && this.starting && generation === this.generation) this.setStatus('queued');
+      if (!granted && this.starting && generation === this.generation && !this.compactRun) this.setStatus('queued');
     });
     slot
       .then(() => this.exited ?? undefined)
@@ -367,8 +372,9 @@ export class Agent {
     const ceiling = tier.effort;
     this.info.effort = settings.autoEffort ? capEffort(this.info.effort, ceiling) : ceiling;
     const first = !this.sessionId && this.seed !== null ? [this.userMessage(this.seed)] : [];
-    this.sent = [...first, ...this.backlog];
-    this.backlog = [];
+    // A session opened only to compact sends nothing yet: what waits goes out after the compaction.
+    this.sent = this.compactRun ? [] : [...first, ...this.backlog];
+    if (!this.compactRun) this.backlog = [];
 
     // Lean agents load only Masthead's own tools, not the person's connectors. Never the lead.
     const lean = !this.isLead && tier.lean;
@@ -411,7 +417,7 @@ export class Agent {
     this.afterTurn = [];
     for (const m of this.sent) session.send(m.id, m.content);
     this.starting = false;
-    this.setStatus('running');
+    if (!this.compactRun) this.setStatus('running');
     const exited = session.ended.then(() => {
       // A session we closed ends here; one that died has already been cleaned up in `exited`.
       if (this.session === session) this.sessionGone();
@@ -829,6 +835,79 @@ export class Agent {
       }
     }
     if (this.launchedAutoEffort !== null && settings.autoEffort !== this.launchedAutoEffort) this.stale = true;
+  }
+
+  /** Set while compact() runs; messages delivered meanwhile wait in the backlog. */
+  private compactRun: Promise<{ ok: boolean; error?: string }> | null = null;
+
+  /**
+   * Compacts the agent's memory between pieces of work (the team's "compact" step). It is not a turn:
+   * no turnEnded, no turn counted, the run text and the report debt untouched, and the status the
+   * conversation shows is not changed. An agent without a process has its session resumed quietly
+   * (holding a slot meanwhile) and closed again afterwards. Messages delivered meanwhile go out after.
+   */
+  compact(): Promise<{ ok: boolean; error?: string }> {
+    if (this.compactRun) return this.compactRun;
+    if (this.inTurn || this.unanswered.size > 0 || this.starting) return Promise.resolve({ ok: false, error: 'It is working; it can be compacted once it is idle.' });
+    if (!this.sessionId) return Promise.resolve({ ok: true }); // nothing in its memory yet
+    const run = this.runCompaction().finally(() => {
+      this.compactRun = null;
+      this.afterCompaction();
+    });
+    this.compactRun = run;
+    return run;
+  }
+
+  private async runCompaction(): Promise<{ ok: boolean; error?: string }> {
+    const hadProcess = !!this.session && !this.closing;
+    if (!hadProcess) {
+      // Fail at once when no session can be started, instead of reporting a lost process later.
+      const marked = findTier(this.host.settings(), this.tier);
+      if (marked?.unusable) return { ok: false, error: `This team's ${marked.label || 'helper'} level can't be used: ${marked.unusable}` };
+      if (!this.backendFor()) return { ok: false, error: 'No agent backend is available: the program this tier runs on was not found on this machine.' };
+      this.ensureProcess();
+      const end = Date.now() + 60_000;
+      while (this.starting && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
+      if (this.starting) {
+        // No slot came free: give up the request, so it cannot launch later outside the compaction.
+        this.host.scheduler.cancel(this.tier, this.id);
+        this.generation++;
+        this.starting = false;
+        return { ok: false, error: 'No free place to run it came up within a minute; try again later.' };
+      }
+    }
+    const session = this.session;
+    if (!session || this.closing) return { ok: false, error: 'Its session could not be opened.' };
+    if (!session.compact) {
+      if (!hadProcess) this.closeQuietly();
+      return { ok: false, error: 'This agent program cannot compact its memory.' };
+    }
+    try {
+      await session.compact();
+      await this.refreshContext();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: (e as Error)?.message || String(e) };
+    } finally {
+      // Opened only for this, and nobody sent it anything meanwhile: close it again.
+      if (!hadProcess && this.backlog.length === 0 && this.session === session) this.closeQuietly();
+    }
+  }
+
+  /** Sends what waited during a compaction. */
+  private afterCompaction(): void {
+    if (this.backlog.length === 0) return;
+    const waiting = this.backlog.splice(0);
+    for (const m of waiting) this.unanswered.delete(m.id);
+    for (const m of waiting) this.deliver(m.content);
+  }
+
+  /** Ends a process opened only to compact, without touching the agent's status or what it holds. */
+  private closeQuietly(): void {
+    if (!this.session) return;
+    this.closing = true;
+    this.session.close('graceful');
+    this.host.scheduler.release(this.tier, this.id);
   }
 
   /** Reads the real size of the context window from Claude Code, when a process is up. */

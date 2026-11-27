@@ -74,6 +74,7 @@ export const CODEX_CAPS: BackendCaps = {
   midTurnDelivery: true,
   contextUsage: true,
   lean: true,
+  compact: true,
 };
 
 /** Codex levels Masthead never sends: `max` (no max in Masthead) and `ultra` ("automatic task delegation"). */
@@ -398,7 +399,35 @@ export class CodexSession implements Session {
     }
   }
 
+  /**
+   * A compaction asked for with compact(). Codex 0.172 runs it as a turn of its own (turn/started, a
+   * contextCompaction item, turn/completed; seen live, without a thread/compacted notification), so that
+   * turn is recognised by being the first to start after the request and reported only as `compacted`.
+   */
+  private compacting: { turnId: string | null; resolve: () => void; reject: (e: Error) => void } | null = null;
+
+  private endCompaction(error?: string): void {
+    const c = this.compacting;
+    if (!c) return;
+    this.compacting = null;
+    if (error) c.reject(new Error(error));
+    else {
+      this.ev.compacted?.();
+      c.resolve();
+    }
+  }
+
+  compact(): Promise<void> {
+    if (this.closed || !this.threadId) return Promise.reject(new Error('The session is not open.'));
+    if (this.turnId || this.starting || this.compacting) return Promise.reject(new Error('The session is busy.'));
+    return new Promise<void>((resolve, reject) => {
+      this.compacting = { turnId: null, resolve, reject };
+      this.request('thread/compact/start', { threadId: this.threadId }).catch((e: Error) => this.endCompaction(e.message || 'Compaction could not start.'));
+    });
+  }
+
   private fail(failure: string, sessionMissing = false): void {
+    this.endCompaction(failure);
     if (this.closed || this.quiet) return;
     this.closed = true;
     this.backend.unbind(this);
@@ -412,6 +441,7 @@ export class CodexSession implements Session {
     if (this.closed) return;
     const m: Pending = { id, input: this.toInput(content) };
     if (!this.ready) this.early.push(m);
+    else if (this.compacting) this.queue.push(m); // sent when the compaction ends
     else if (this.starting) this.forCurrent.push(m);
     else if (this.turnId) void this.steer(m);
     else this.startTurn([m]);
@@ -434,6 +464,7 @@ export class CodexSession implements Session {
   close(how: 'graceful' | 'now'): void {
     if (this.closed) return;
     const turn = this.turnId;
+    this.endCompaction('The session was closed.');
     this.closed = true;
     this.quiet = true;
     for (const a of this.asks.values()) a.abort();
@@ -455,6 +486,7 @@ export class CodexSession implements Session {
 
   /** The backend is shutting down: no more events. */
   silence(): void {
+    this.endCompaction('Codex was shut down.');
     this.quiet = true;
     this.closed = true;
     this.cleanTemp();
@@ -462,6 +494,7 @@ export class CodexSession implements Session {
   }
 
   lost(detail: string): void {
+    this.endCompaction(detail || 'Codex app-server ended.');
     if (this.closed || this.quiet) return;
     this.closed = true;
     this.cleanTemp();
@@ -491,6 +524,20 @@ export class CodexSession implements Session {
 
   notification(method: string, p: any): void {
     if (this.quiet) return;
+    if (this.compacting) {
+      // Everything of the compaction's own turn stays inside the adapter, except usage.
+      if (method === 'turn/started' && !this.compacting.turnId && !this.turnId && !this.starting) return void (this.compacting.turnId = p.turn?.id ?? null);
+      const turnOf = p.turnId ?? (method.startsWith('turn/') ? p.turn?.id : undefined);
+      if (this.compacting.turnId && turnOf === this.compacting.turnId) {
+        if (method === 'turn/completed') {
+          const t = p.turn as Turn;
+          this.endCompaction(t.status === 'completed' ? undefined : t.error?.message || `Compaction ${t.status}.`);
+          return this.next();
+        }
+        if (method !== 'thread/tokenUsage/updated') return;
+      }
+      if (method === 'thread/compacted') return; // reported once, by endCompaction
+    }
     switch (method) {
       case 'turn/started':
         if (this.starting || p.turn?.id === this.turnId || !this.turnId) {

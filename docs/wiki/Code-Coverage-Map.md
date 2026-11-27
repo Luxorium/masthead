@@ -39,7 +39,7 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 
 | File | Explained on | Also see |
 |---|---|---|
-| `server/app/app.ts` | [Source-App](Source-App.md): [handle](Source-App.md#handleclient-raw-the-gate), [remoteMessage](Source-App.md#remotemessage-remote-access-and-profile-messages), [dispatch](Source-App.md#dispatch-the-version-1-messages), [Validation helpers](Source-App.md#validation-helpers) | [Security model](Security-Model.md) |
+| `server/app/app.ts` | [Source-App](Source-App.md): [handle](Source-App.md#handleclient-raw-the-gate), [remoteMessage](Source-App.md#remotemessage-remote-access-and-profile-messages), [dispatch](Source-App.md#dispatch-the-version-1-messages), [Validation helpers](Source-App.md#validation-helpers), [compaction](Source-App.md#compact-and-the-compaction-hooks) | [Security model](Security-Model.md) |
 | `server/app/clients.ts` | [Source-Clients](Source-Clients.md): [admit](Source-Clients.md#admitclient-msg-the-gate), [Sessions](Source-Clients.md#sessions-version-0-1-and-2), [Rings](Source-Clients.md#rings-seq-byte-cap-and-epoch), [Drafts](Source-Clients.md#drafts-deltas-and-draft_end) | [Browser/server protocol](Browser-Server-Protocol.md) |
 | `server/remote/access.ts` | [Source-Remote-Access](Source-Remote-Access.md): [setEnabled](Source-Remote-Access.md#setenabledon), [reconcile](Source-Remote-Access.md#reconcile), [state](Source-Remote-Access.md#state) | [Remote access](Remote-Access.md) |
 | `server/remote/authorise.ts` | [Source-Remote-Access](Source-Remote-Access.md): [authorise](Source-Remote-Access.md#authorisefacts-deps), [allowedMessage](Source-Remote-Access.md#allowedmessagerole-type-and-the-role-table) | [Security model](Security-Model.md) |
@@ -48,7 +48,7 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `server/transport/auth.ts` | [Source-Transport-Auth](Source-Transport-Auth.md): [loadSecret](Source-Transport-Auth.md#loadsecretfile--secret_file), [proofOf](Source-Transport-Auth.md#proofofsecret-port-nonce), [makePrivate](Source-Transport-Auth.md#makeprivatefile-platform-run-env) | [Security model](Security-Model.md) |
 | `server/transport/blobs.ts` | [Source-Blobs](Source-Blobs.md): [BlobTokens](Source-Blobs.md#class-blobtokens), [handleBlobGet](Source-Blobs.md#handleblobgetreq-res-url-blobs-tokens-get-blobconvidsha256ttoken), [handleBlobPost](Source-Blobs.md#handleblobpostreq-res-url-blobs-authorised-convexists-post-blobconvconvid) | [Security model](Security-Model.md) |
 | `server/transport/http.ts` | [Source-Http](Source-Http.md): [serve](Source-Http.md#serveapp-opts-promiseserver), [attach](Source-Http.md#attachapp-ws-tokens-remote), [serveStatic](Source-Http.md#servestaticroot-pathname-req-res-csp--csp) | [Security model](Security-Model.md) |
-| `server/transport/remote.ts` | [Source-Transport-Remote](Source-Transport-Remote.md): [serveRemote](Source-Transport-Remote.md#serveremoteapp-access-opts), [chooseTarget](Source-Transport-Remote.md#choosetargetenv-datadir-platform-uid), [startRemote](Source-Transport-Remote.md#startremoteapp-access-opts) | [Remote access](Remote-Access.md) |
+| `server/transport/remote.ts` | [Source-Transport-Remote](Source-Transport-Remote.md): [serveRemote](Source-Transport-Remote.md#serveremoteapp-access-opts), [chooseTarget](Source-Transport-Remote.md#choosetargetenv-datadir-platform-uid-home), [startRemote](Source-Transport-Remote.md#startremoteapp-access-opts) | [Remote access](Remote-Access.md) |
 
 ## Server: settings and storage
 
@@ -102,7 +102,6 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `web/src/lib/SettingsView.svelte` | [Web Settings and Remote](Source-Web-Settings-and-Remote.md#settingsviewsvelte) |  |
 | `web/src/lib/Sidebar.svelte` | [Web Components](Source-Web-Components.md#sidebarsvelte) |  |
 | `web/src/lib/StopControl.svelte` | [Web Components](Source-Web-Components.md#stopcontrolsvelte) |  |
-| `web/src/lib/TeamMap.svelte` | [Web Components](Source-Web-Components.md#teammapsvelte) |  |
 | `web/src/lib/TeamPanel.svelte` | [Web Components](Source-Web-Components.md#teampanelsvelte) |  |
 | `web/src/lib/Transcript.svelte` | [Web Components](Source-Web-Components.md#transcriptsvelte) |  |
 | `web/src/lib/UsageMeter.svelte` | [Web Components](Source-Web-Components.md#usagemetersvelte) |  |
@@ -125,7 +124,12 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `web/src/lib/signin.ts` | [Web Front End](Source-Web-Front-End.md#signing-in) |  |
 | `web/src/lib/state/pure.ts` | [Web Store](Source-Web-Store.md#pure-helpers-websrclibstatepurets) |  |
 | `web/src/lib/store.svelte.ts` | [Web Store](Source-Web-Store.md#web-store-websrclibstoresveltets) |  |
+| `web/src/lib/team/CompactCard.svelte` | [Web Components](Source-Web-Components.md#compactcardsvelte) |  |
+| `web/src/lib/team/CompactProgress.svelte` | [Web Components](Source-Web-Components.md#compactprogresssvelte) |  |
+| `web/src/lib/team/Expander.svelte` | [Web Components](Source-Web-Components.md#expandersvelte) |  |
+| `web/src/lib/team/TeamOutline.svelte` | [Web Components](Source-Web-Components.md#teamoutlinesvelte) |  |
 | `web/src/lib/team/TierControls.svelte` | [Web Components](Source-Web-Components.md#tiercontrolssvelte) |  |
+| `web/src/lib/team/outline.ts` | [Web Components](Source-Web-Components.md#outlinets) |  |
 | `web/src/lib/text.ts` | [Web Text](Source-Web-Text.md#textts) |  |
 | `web/src/lib/tiers.ts` | [Web Styles](Source-Web-Styles.md#tier-colours-tiersts) |  |
 | `web/src/lib/tools.ts` | [Web Front End](Source-Web-Front-End.md#toolsts) |  |
@@ -140,6 +144,7 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `web/src/lib/ui.svelte.ts` | [Web Front End](Source-Web-Front-End.md#simple-and-advanced-uisveltets) |  |
 | `web/src/lib/words.ts` | [Web Text](Source-Web-Text.md#wordsts) |  |
 | `web/src/main.ts` | [Web Front End](Source-Web-Front-End.md#the-entry-script-maints) |  |
+| `web/test/compact.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/device.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/no-inline-text.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/draft.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
@@ -155,6 +160,8 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 | `web/test/signin.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/store-v2.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/store.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/team-outline.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
+| `web/test/team-shots.mjs` | [Web Tests](Source-Web-Tests.md#team-screenshots-team-shotsmjs) |  |
 | `web/test/text.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/tiers.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
 | `web/test/transcript.test.ts` | [Web Tests](Source-Web-Tests.md#test-files) |  |
@@ -188,6 +195,8 @@ Every source file of Masthead 0.2.0 and the wiki page and section that explains 
 
 | File | Explained on | Also see |
 |---|---|---|
+| `test/compact-app.test.ts` | [Tests](Source-Tests.md), [Source-App](Source-App.md): [compaction](Source-App.md#compact-and-the-compaction-hooks) | [Remote access](Remote-Access.md) |
+| `test/compact.live.ts` | [Claude Code: test/compact.live.ts](Live-Tests.md#claude-code-testcompactlivets) | [Source-Runtime](Source-Runtime.md#compaction-compact) |
 | `test/ui.e2e.mjs` | [Web tests](Source-Web-Tests.md) | [Tests](Source-Tests.md) |
 | `test/agent.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |
 | `test/app.test.ts` | [Server tests (`npm test`)](Source-Tests.md#server-tests-npm-test) | [Source-Tests](Source-Tests.md) |

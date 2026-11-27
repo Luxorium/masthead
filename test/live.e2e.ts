@@ -1,6 +1,7 @@
 // A live end-to-end run against the real Claude Code on this machine. It spends real usage, so it is
 // not part of `npm test`; run it with `npm run test:live`. Every tier uses Haiku to keep it cheap.
-// It works in a fresh folder under the system temp directory and leaves that folder behind.
+// It works in a fresh folder under the system temp directory and leaves that folder behind. It builds an
+// App with no remote access at all, so it never runs tailscale.
 import { existsSync, mkdtempSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -199,6 +200,32 @@ try {
   await until('seventh round settles', settled);
   check('the restarted process kept the session', /SAME-\s*FRESH-OK/.test(leadText()));
   check('no second fresh start', freshNotices() === 1);
+
+  log('--- 8. /compact: the lead keeps some finished helpers, the rest are archived, everyone kept compacts');
+  const leadNotice = (re: RegExp) => (items.get(lead()!.id) ?? []).find((i) => i.kind === 'notice' && re.test(i.text));
+  app.handle(client, { t: 'send', convId, text: '/compact' });
+  await until('compaction finished', () => !!leadNotice(/^Archived \d+ finished helper/) || !!leadNotice(/compacted the memory/i), 300_000);
+  await until('eighth round settles', settled);
+  log('notice:', (leadNotice(/^Archived \d+ finished helper/) as { text: string } | undefined)?.text);
+  const archivedNow = all().filter((a) => (a as { archived?: number }).archived);
+  check('finished helpers were archived', archivedNow.length >= 1);
+  check('the lead was never archived', !(lead() as { archived?: number }).archived);
+  check('the summary notice appeared', !!leadNotice(/^Archived \d+ finished helper/));
+  const summary = (leadNotice(/^Archived \d+ finished helper/) as { text: string } | undefined)?.text ?? '';
+  check('the lead\'s memory was compacted too', /compacted the memory of [1-9]\d* that stay/.test(summary) && !/Not compacted: alpha/.test(summary));
+  const gone = archivedNow[0]?.name ?? 'bravo';
+  app.handle(client, {
+    t: 'send',
+    convId,
+    text: `Ninth wiring test; follow it literally. First use send_message to tell "${gone}": hello. Then use read_archive with no name. Then tell me in one line whether send_message worked and the first name read_archive listed.`,
+  });
+  await until('lead starts', () => lead()?.status !== 'idle', 30_000);
+  await until('ninth round settles', settled);
+  const leadTools = (items.get(lead()!.id) ?? []).filter((i) => i.kind === 'tool') as Array<{ name: string; result?: string }>;
+  const sendTry = leadTools.filter((t) => t.name.endsWith('send_message')).at(-1);
+  const readTry = leadTools.filter((t) => t.name.endsWith('read_archive')).at(-1);
+  check('send_message to an archived helper is refused', !!sendTry && /^Error/.test(sendTry.result ?? ''));
+  check('read_archive lists the archived helper', !!readTry && (readTry.result ?? '').includes(gone));
 
   log('usage\n  ' + all().map((a) => `${a.name}: ctx ${a.usage.context} out ${a.usage.output} $${a.usage.costUsd.toFixed(4)} turns ${a.usage.turns}`).join('\n  '));
   check('usage was recorded', all().filter((a) => a.usage.turns > 0).every((a) => a.usage.context > 0 && a.usage.output > 0));

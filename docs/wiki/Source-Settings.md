@@ -54,7 +54,7 @@ Every tier has `backend: 'claude-code'` and a label from `modelLabel(model)` ("O
 
 ### `defaultSettings()`
 
-The settings used when no file exists or it cannot be read: `version: 2`, `profiles: [claudeProfile()]`, `defaultProfile: 'claude'`, `permissionMode: 'inherit'`, `autoEffort: true`, `leanSubagents: true`, `leanOpus: true`, `collapseReports: false`, `maxRunMinutes: 0`, `keepAwake: true`, `defaultCwd: HOME`. The function passes the result through `withCompat()`, which fills in `tiers`.
+The settings used when no file exists or it cannot be read: `version: 2`, `profiles: [claudeProfile()]`, `defaultProfile: 'claude'`, `permissionMode: 'inherit'`, `autoEffort: true`, `leanSubagents: true`, `leanOpus: true`, `collapseReports: false`, `maxRunMinutes: 0`, `keepAwake: true`, `autoCompact: true`, `defaultCwd: HOME`. The function passes the result through `withCompat()`, which fills in `tiers`.
 
 ### `clampInt(v, lo, hi, fallback)` (internal)
 
@@ -116,7 +116,7 @@ Applies the 0.1.x shape (`tiers.<lead|opus|sonnet|haiku>` plus `leanSubagents` a
 3. If `raw` is not an object, return `withCompat(d)`.
 4. If `raw.profiles` is an array, run `parseProfiles`, then `applyCompat(d, raw, true)`. A view field that differs from the new profile counts as a change. Otherwise run `applyCompat(d, raw, false)`. This branch is how a **0.1.x file** and a page that still sends `tiers` reach the claude profile.
 5. `defaultProfile` is taken if it names an existing profile. If the current default no longer exists, it falls back to `claude`.
-6. `permissionMode` must be one of `PERMISSION_CHOICES`. `autoEffort`, `collapseReports` and `keepAwake` must be booleans. A `keepAwake` that is still missing becomes `true`. `maxRunMinutes` is clamped to 0–1440. `defaultCwd` must pass `absoluteFolder`.
+6. `permissionMode` must be one of `PERMISSION_CHOICES`. `autoEffort`, `collapseReports`, `keepAwake` and `autoCompact` must be booleans. A `keepAwake` or `autoCompact` that is still missing (a file or `base` made before the field existed) becomes `true`, so automatic tidying starts on for existing installs. See [Compact team](Compact-Team.md). `maxRunMinutes` is clamped to 0–1440. `defaultCwd` must pass `absoluteFolder`.
 7. Return `withCompat(d)`.
 
 ### `loadSettings(file = SETTINGS_FILE)`
@@ -148,4 +148,4 @@ Not verified by running: this page was written from the code. The tests were not
 
 ## Related pages
 
-[Team profiles and settings](Team-Profiles-and-Settings.md) · [Configuration and settings](Configuration-and-Settings.md) · [Storage](Source-Storage.md) · [Storage on disk](Storage-on-Disk.md) · [shared/protocol.ts](Source-Shared-Protocol.md)
+[Team profiles and settings](Team-Profiles-and-Settings.md) · [Configuration and settings](Configuration-and-Settings.md) · [Storage](Source-Storage.md) · [Storage on disk](Storage-on-Disk.md) · [shared/protocol.ts](Source-Shared-Protocol.md) · [Compact team](Compact-Team.md)

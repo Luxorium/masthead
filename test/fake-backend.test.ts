@@ -186,3 +186,51 @@ test('fake: close("graceful") lets the running turn finish; close("now") withdra
   assert.equal(aborted, true);
   assert.equal(r2.turns.length, 0);
 });
+
+test('app on the fake backend: /compact archives finished helpers, keeps one with a reason, and compacts', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { App } = await import('../server/app/app.ts');
+  const { Store } = await import('../server/storage/store.ts');
+  const { defaultSettings } = await import('../server/settings/settings.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'masthead-fakecompact-'));
+  const saved = { b: process.env.MASTHEAD_BACKEND, a: process.env.MASTHEAD_ALLOW_FAKE, s: process.env.MASTHEAD_FAKE_STEP_MS };
+  process.env.MASTHEAD_BACKEND = 'fake';
+  process.env.MASTHEAD_ALLOW_FAKE = '1';
+  process.env.MASTHEAD_FAKE_STEP_MS = '1';
+  const app = new App({ store: new Store(join(dir, 'c')), settings: { ...defaultSettings(), defaultCwd: dir }, settingsFile: join(dir, 's.json') });
+  try {
+    const msgs: Array<Record<string, any>> = [];
+    let convId = '';
+    const client = { send: (m: unknown) => { const x = structuredClone(m) as Record<string, any>; msgs.push(x); if (x.t === 'created') convId = x.convId; } };
+    app.connect(client);
+    const until = async (what: string, cond: () => boolean) => {
+      const end = Date.now() + 8000;
+      while (!cond()) {
+        if (Date.now() > end) throw new Error(`timed out: ${what}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    const agents = () => { const m = new Map<string, any>(); for (const x of msgs) if (x.t === 'agent') m.set(x.agent.id, x.agent); return [...m.values()]; };
+    const reports = () => msgs.filter((m) => m.t === 'item' && m.item.kind === 'inbound' && m.item.via === 'report');
+    app.handle(client, { t: 'send', convId: null, cwd: dir, text: 'Call the tool spawn_agent with input {"title":"one","task":"Reply with exactly the word\\u0020A"} then wait.' });
+    await until('first report', () => reports().length === 1);
+    app.handle(client, { t: 'send', convId, text: 'Call the tool spawn_agent with input {"title":"two","task":"Reply with exactly the word\\u0020B"} then wait.' });
+    await until('second report', () => reports().length === 2);
+    await until('lead idle', () => agents().find((a) => a.parentId === null)?.status === 'idle');
+    app.handle(client, { t: 'send', convId, text: '/compact' });
+    const notice = () => msgs.find((m) => m.t === 'item' && m.item.kind === 'notice' && /^Archived \d+ finished helper/.test(m.item.text));
+    await until('compaction notice', () => !!notice());
+    assert.match(notice()!.item.text, /Archived 1 finished helper/);
+    const helpers = agents().filter((a) => a.parentId !== null);
+    assert.equal(helpers.filter((a) => a.archived).length, 1, 'one archived');
+    assert.equal(helpers.filter((a) => !a.archived).length, 1, 'one kept');
+  } finally {
+    app.shutdown();
+    for (const [k, v] of [['MASTHEAD_BACKEND', saved.b], ['MASTHEAD_ALLOW_FAKE', saved.a], ['MASTHEAD_FAKE_STEP_MS', saved.s]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});

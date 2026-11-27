@@ -42,6 +42,8 @@ const env = {
   ...process.env,
   MASTHEAD_BACKEND: 'fake',
   MASTHEAD_ALLOW_FAKE: '1',
+  // Never the real tailscale (the fake backend implies it; said here too so it cannot be lost).
+  MASTHEAD_TAILSCALE: 'off',
   MASTHEAD_DATA_DIR: data,
   MASTHEAD_CONFIG_DIR: config,
 };

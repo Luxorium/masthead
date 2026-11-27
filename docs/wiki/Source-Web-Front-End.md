@@ -4,7 +4,7 @@ The page you use in the browser. It is a **Svelte 5** app in `web/`, built by Vi
 
 The page holds no authority. Everything it shows comes from the server over one WebSocket, and everything it does is a protocol message ([Browser/server protocol](Browser-Server-Protocol.md)), apart from image uploads and the remote-device sign-in, which use HTTP. This page describes version 0.2.0.
 
-The 0.2.0 aim for the page (`docs/plans/0.2.0/web.md` section 0) is "simple by default": a first-time person sees a chat app with one message box, and nothing about tiers, effort or permissions until they want it. The code follows this with a Simple/Advanced switch, a team view that appears only once helpers exist, plain words in one file, and errors rewritten with a next step.
+The 0.2.0 aim for the page (`docs/plans/0.2.0/web.md` section 0) is "simple by default": a first-time person sees a chat app with one message box, and nothing about tiers, effort or permissions until they want it. The code follows this with a Simple/Advanced switch, a team panel that appears only once helpers exist, plain words in one file, and errors rewritten with a next step.
 
 ## Files
 
@@ -65,7 +65,7 @@ The pairing screen is `remote/RemoteSignIn.svelte` ([Settings and remote access]
 
 ## `tools.ts`
 
-One line: it re-exports `toolLine` and the `ToolLine` type from `shared/toolline.ts` ([Tool lines](Source-Shared-Toolline.md)). `toolLine(name, input, running?)` turns a tool call into a verb and a target, such as "Reading" and a file path. `ToolItem`, `TeamMap` and `PermissionCard` use it.
+One line: it re-exports `toolLine` and the `ToolLine` type from `shared/toolline.ts` ([Tool lines](Source-Shared-Toolline.md)). `toolLine(name, input, running?)` turns a tool call into a verb and a target, such as "Reading" and a file path. `ToolItem`, `TeamOutline` (its preview) and `PermissionCard` use it.
 
 ## Layout (`App.svelte`)
 
@@ -85,13 +85,11 @@ From top to bottom, inside `div.shell`:
 - `main`, made `inert` while a drawer is open:
   - **Header:** ☰ (shown when the chat list is hidden or the screen is narrow), the chat title (a button; clicking it renames in place, Enter saves, Escape cancels, blur saves), or "New chat". Then, only when the chat has helpers, the **Team** button: "Team · 2 working" ("Team · 2" on a phone), which toggles the team panel.
   - **Banners:** "Lost the connection to Masthead. Reconnecting…" while disconnected after a first state; the usage banner (`store.rateLimit`): "You've reached your Claude usage limit." or "You are close to…", the reset time, and Dismiss.
-  - **The view**, first match wins: `SettingsView` when `ui.settingsOpen`; `FirstRun` when the state says no backend can run (`!store.canRun`); `TeamMap` when `store.view === 'map'`, the chat has helpers and the screen is not narrow (with approval cards under it); otherwise the breadcrumbs (when a helper is on screen: the chain of agents and "Back to Alpha"), `Transcript`, and the dock.
-  - **Dock:** remote device requests (`DeviceRequestCard`, local page only), approval cards (`PermissionCard`, if `mayAnswer`), and the `Composer` (if `mayAct`) inside `{#key store.composerKey}`, so each chat and helper gets its own composer with its own unsent text. Without `mayAct`, a note says what the device's role allows.
+  - **The view**, first match wins: `SettingsView` when `ui.settingsOpen`; `FirstRun` when the state says no backend can run (`!store.canRun`); otherwise the breadcrumbs (when a helper is on screen: the chain of agents and "Back to Alpha"), `Transcript`, and the dock.
+  - **Dock:** remote device requests (`DeviceRequestCard`, local page only), approval cards (`PermissionCard`, if `mayAnswer`), the tidy-up card and progress line (`CompactCard`, `CompactProgress`), and the `Composer` (if `mayAct`) inside `{#key store.composerKey}`, so each chat and helper gets its own composer with its own unsent text. When the agent on screen is archived, a read-only note takes the composer's place: an "Archived" tag, a sentence that its chat can be read and it must be restored to get work, and Restore (with `mayAct`) ([Compact team](Compact-Team.md)). Without `mayAct`, a note says what the device's role allows.
 - `TeamPanel`, when the chat has helpers and `ui.teamOpen`.
 - A backdrop button while a drawer is open; tapping it closes the drawers.
 - The toast (`role="alert"`), showing `friendlyError(store.error)` ([Text](Source-Web-Text.md#friendlyerror)).
-
-The map view's dock has approval cards but no device-request cards.
 
 **When the team panel opens.** `hasTeam` is true when any agent other than the lead exists. In Simple, the panel stays closed until the person presses Team. In Advanced on a wide screen, an effect opens it when the first helper starts, unless the person has already opened or closed it (`ui.teamTouched`).
 
@@ -108,11 +106,14 @@ The map view's dock has approval cards but no device-request cards.
 | `wide` | Width 1280 px or more. |
 | `phone` | Width under 600 px. |
 | `sidebarOpen` | The chat list is shown; starts closed on narrow screens. |
+| `teamWidth` | The team column's width on wide screens: 400 px by default, clamped to 300–560, stored as `masthead.teamWidth` by `setTeamWidth()`. |
+| `hideFinished` | "Hide finished" in the team panel, stored as `masthead.hideFinished`; off by default. |
+| `collapsed`, `openGroups` | Team branches the person closed and folded groups they opened; not stored, and reset by `teamOf(convId)` when another chat is opened. |
 | `settingsOpen` | The settings view replaces the chat. |
 
 The three widths are live `matchMedia` queries, re-evaluated on change, not read once. Where `matchMedia` is missing (tests) they read false.
 
-Methods: `openSettings()` (closes the chat-list drawer on narrow screens), `closeSettings()` (focus returns to the ⚙ button, `#settings-gear`), `setAdvanced()`, `setTheme()`, `toggleTeam(open?)`.
+Methods: `openSettings()` (closes the chat-list drawer on narrow screens), `closeSettings()` (focus returns to the ⚙ button, `#settings-gear`), `setAdvanced()`, `setTheme()`, `toggleTeam(open?)`, `setTeamWidth()`, `setHideFinished()`, `toggleBranch(id, open?)`, `toggleGroup(parentId)`, `teamOf(convId)`.
 
 What Advanced changes, and nothing else (the plan says it is only what is on screen):
 
@@ -125,7 +126,7 @@ Approval cards show in both modes.
 
 ## Layout per width
 
-The grid columns come from the script, not from CSS: chat list `264px` when it is open and the screen is not narrow, the chat `minmax(0, 1fr)`, and the team panel `340px` when it is open and the screen is wide. The team panel's own `aside` is 316 px wide, so it does not fill that column (not checked in a browser).
+The grid columns come from the script, not from CSS: chat list `264px` when it is open and the screen is not narrow, the chat `minmax(0, 1fr)`, and the team panel `${ui.teamWidth}px` (400 px by default, 300–560, dragged on its left edge) when it is open and the screen is wide. As a column the team `aside` fills that width; as a drawer it is `min(400px, 88vw)`.
 
 | Width | Chat list | Team panel |
 |---|---|---|
@@ -134,7 +135,7 @@ The grid columns come from the script, not from CSS: chat list `264px` when it i
 | Under 900 px | Drawer from the left, starts closed; choosing a chat closes it | Drawer from the right |
 | Under 600 px (phone) | As above | As above; header 56 px, shorter Team label |
 
-A drawer is the `aside` made `position: fixed` with a shadow, at most 88% of the width. While one is open, `main` is `inert`, a backdrop covers the chat, and Escape closes it (unless a `role="dialog"` element is open). The team map is not offered on narrow screens. The phone layout is exercised by the browser test at 390 × 844; the other widths were only read from the code.
+A drawer is the `aside` made `position: fixed` with a shadow, at most 88% of the width. While one is open, `main` is `inert`, a backdrop covers the chat, and Escape closes it (unless a `role="dialog"` element is open). The browser test checks that neither the page nor the team panel scrolls sideways at 1440, 900 and 390 px wide (the last as a 390 × 844 touch phone); other widths were only read from the code.
 
 ## Accessibility
 
@@ -166,7 +167,7 @@ The hooks are added once, when the module loads, to DOMPurify's shared instance;
 
 The server's Content-Security-Policy (`img-src 'self' data: blob:`) stops a Markdown image from loading anything from another site, so it cannot be a tracking pixel ([Security model](Security-Model.md)). Pictures the person sends and tool images are not Markdown; they are `<img>` elements pointing at `/blob/…` ([Images](Source-Web-Images.md)).
 
-The result is inserted with `{@html}`. Everything else from agents or tools (the person's own messages, tool input and results, notices, card text, map previews) is inserted as text, which Svelte escapes.
+The result is inserted with `{@html}`. Everything else from agents or tools (the person's own messages, tool input and results, notices, card text, team previews) is inserted as text, which Svelte escapes.
 
 **Drafts.** `renderDraft(text)` renders a reply that grows every 70 ms. `splitDraft(text)` cuts it into finished blocks (each ending at a blank line outside a code fence, or where a fence closes) and the unfinished tail, and says whether the tail is inside an open fence. Finished blocks go through `renderMarkdown`, so each is rendered once and then comes from the cache. The tail is rendered with the same steps each time; a tail inside an unclosed fence is shown as escaped plain code with no highlighting until the fence closes. Because blocks are rendered apart, a list broken by a blank line can look split until the reply ends; the finished item is then rendered whole.
 

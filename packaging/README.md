@@ -2,7 +2,7 @@
 
 Drafts for package-manager listings. Nothing here is published, and none of it may be until the
 person has decided the package name and the gates in `docs/plans/0.2.0/PLAN.md` are cleared.
-Every outline installs the npm tarball with `--omit=optional`, which skips the Agent SDK's private
+Every outline installs the npm tarball with `--os=none --cpu=none` (npm ignores `--omit=optional` for a global install (seen with npm 11.19.1 on Windows and 12.2.3 on Linux)), which skips the Agent SDK's private
 Claude Code binary: Masthead always runs the person's own `claude`.
 
 | File | For | Status |

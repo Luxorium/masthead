@@ -23,13 +23,13 @@ Files: `package.json`, `package-lock.json`, `tsconfig.server.json`, `tsconfig.we
 
 ### Optional packages
 
-`package.json` has a `//` field (npm ignores it) with three notes: the name is a placeholder, `private` stays until then, and **users install with `--omit=optional`**.
+`package.json` has a `//` field (npm ignores it) with three notes: the name is a placeholder, `private` stays until then, and **users install globally with `--os=none --cpu=none`**.
 
 The reason: `@anthropic-ai/claude-agent-sdk` has one optional dependency per platform, for example `@anthropic-ai/claude-agent-sdk-linux-x64`. Each holds a private Claude Code binary. Masthead never runs it, because it always runs the person's own `claude` (see [Platforms](Platforms.md#finding-claude-code)). `--omit=optional` skips it. `masthead doctor` says when that package is present (`sdkBinaryPackage()` in `server/doctor.ts`).
 
 **A development install must not use `--omit=optional`.** The build tools also use optional packages for their native parts. `package-lock.json` lists, for example, `@esbuild/linux-x64` (esbuild) and `@rolldown/binding-linux-x64-gnu` (rolldown, which Vite 8 uses). Without them `vite build` and `vitest` cannot run. So a checkout uses a plain `npm ci`, and the SDK's binary comes along. It is never run. CI does the same (see [CI](Source-CI.md#why-a-plain-npm-ci)).
 
-The two places that use `--omit=optional` are installs that need no build: the installed copy in `scripts/install.sh` (`npm ci --omit=dev --omit=optional`) and `npm install -g --omit=optional <tarball>`.
+The two places that use `--omit=optional` are installs that need no build: the installed copy in `scripts/install.sh` (`npm ci --omit=dev --omit=optional`) and the global install, which uses `npm install -g --os=none --cpu=none <tarball>` because npm ignores `--omit=optional` for a global install (seen with npm 11.19.1 on Windows and 12.2.3 on Linux); with os and cpu "none" no platform package matches, so none is installed. (Whether `npm ci --omit=optional` in `scripts/install.sh`, a local install, skips it was not checked.)
 
 ### Scripts
 

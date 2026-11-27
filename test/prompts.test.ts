@@ -90,3 +90,11 @@ test('tools: one neutral definition per agent; spawn only with a child tier; eff
   }
   assert.match(teamToolDefs(leadAgent, team()).find((t) => t.name === 'spawn_agent')!.description, /^Start an Opus 5\.5 agent/);
 });
+
+test('tools: compact_team accepts plain names as well as {name, why}', async () => {
+  const seen: unknown[] = [];
+  const t = { ...team(), compactTeam: (_c: unknown, keep: unknown) => (seen.push(keep), 'ok') } as TeamActions;
+  const tool = teamToolDefs(leadAgent, t).find((d) => d.name === 'compact_team')!;
+  assert.equal(await tool.run({ keep: ['bravo', { name: 'echo', why: 'knows it' }, { name: 'golf' }] }), 'ok');
+  assert.deepEqual(seen[0], [{ name: 'bravo', why: '' }, { name: 'echo', why: 'knows it' }, { name: 'golf', why: '' }]);
+});

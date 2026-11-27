@@ -45,10 +45,29 @@ There are two version markers:
 A `StoredConversation`, written as compact JSON:
 
 - `format`: 2.
-- `meta`: `id`, `title`, `cwd` (the folder the agents work in), `createdAt`, `updatedAt`, `leadId`, and `profileId` (the team profile, new in 0.2.0; missing means `claude`). `busy` is never stored.
+- `meta`: `id`, `title`, `cwd` (the folder the agents work in), `createdAt`, `updatedAt`, `leadId`, `profileId` (the team profile, new in 0.2.0; missing means `claude`), `team` (the profile's tiers copied at creation), and the optional [team-compaction](Compact-Team.md) fields described below (`compact`, `compactMark`, `compactSuggested`, `autoCompact`). `busy` is never stored.
 - `agents`: one `StoredAgent` each: `info` (the full `AgentInfo`), `sessionId` (or null), `owesReport` (saved, but ignored on load: after a restart nobody is waiting for a report), and `seed` (only for an agent that never started, so a later wake-up still has its task).
+  An archived helper is an ordinary entry here whose `info.archived` holds when it was archived (ms since 1970). On load, `Conversation`'s state for it is rebuilt with `archived` set, so it stays out of the team, cannot be woken and is left out of the "closed while working" note.
 - `stoppedByPerson` (since 0.1.4): ids of agents the person stopped, which other agents may not wake.
 - `agentMessages` (since 0.1.4): how many messages the agents have sent each other, counted against the limit of 1000.
+
+### Team compaction (0.2.0-beta.2)
+
+What [Compact team](Compact-Team.md) saves, all in `conversation.json` and all optional:
+
+| Field | Holds | Written when |
+|---|---|---|
+| `agents[].info.archived` | When the helper was archived. Removed (`undefined`) when the person restores it. | Archiving (`Conversation.archiveAndCompact()`), restoring (`restoreAgent()`). |
+| `meta.compact` | The `CompactState` of the flow under way or last ended: `phase`, `auto`, `reason`, `keep`, `archive`, `note`, `pending`, `failed`, `startedAt`, `askedAnswered`. A finished flow stays as `done` or `cancelled` until the next one replaces it. | Every phase change (`setCompact()`). |
+| `meta.compactMark` | `{finished, memoryArmed}`: the cool-down for automatic tidying. | When automatic tidying fires, when the person types `/compact`, and when memory drops back under 70 %. |
+| `meta.compactSuggested` | `true` once the lead has been told it may suggest `/compact` (automatic tidying off). | That one time. |
+| `meta.autoCompact` | `false` when the person switched automatic tidying off for this conversation; absent otherwise. | The `auto_compact` message. |
+
+These go through the same delayed save as any other meta or agent change (`App.metaChanged()` / `agentChanged()` → `scheduleSave`). **Transcripts are untouched**: archiving writes nothing to `items/`, and an archived helper's `.jsonl` stays where it was, read by `read_archive` and `{t:'archive_items'}`. Compacting an agent's memory happens in the backend's own session (Claude Code or Codex), not in Masthead's files.
+
+On start-up `Conversation.resumeCompact()` carries on from the saved phase: `asked` becomes `cancelled` with a note to type `/compact` again; `archiving` runs the archiving again (it is idempotent); `compacting` continues with `pending`; `proposed` keeps its card.
+
+**Older builds.** 0.2.0-beta.1 does not know these fields. Read from its code (`Conversation.restore()` at tag `v0.2.0-beta.1` copies `meta` and each `info` whole): it keeps them and writes them back, but ignores them, so archived helpers show up again as ordinary finished helpers and a flow under way is not resumed. Going forward again to beta.2 finds the fields still there. Not tried with a beta.1 build.
 
 ### `items/<agent>.jsonl`
 
@@ -70,16 +89,16 @@ Images are **not** written into the jsonl. A `user` or `tool` item carries `imag
 
 The page no longer needs a whole transcript at once. `{t:'items', limit, before}` returns the newest `limit` distinct items before byte offset `before` (`readPage()` in `server/storage/transcript.ts`), oldest first, with a `cursor` for the next older page and `more`. The file is read **backwards** in 64 KiB chunks, so a long transcript is never read in full. `App` clamps `limit` to 1–500. Without `limit`, the whole transcript is sent (the version 1 behaviour).
 
-## Compaction (not implemented)
+## Transcript compaction (not implemented)
 
-The 0.2.0 design (`docs/plans/0.2.0/core.md`, section 6) planned rewriting a transcript that holds more than twice as many lines as distinct ids, and optional `items/<agent>.idx` offset files. Neither exists in the code on `next`. Transcripts only grow, and the old lines of a changed item stay in the file.
+Not to be confused with team compaction above. The 0.2.0 design (`docs/plans/0.2.0/core.md`, section 6) planned rewriting a transcript that holds more than twice as many lines as distinct ids, and optional `items/<agent>.idx` offset files. Neither exists in the code on `next`. Transcripts only grow, and the old lines of a changed item stay in the file.
 
 ## When things are written
 
 | Event | Write |
 |---|---|
 | Transcript item added or changed | Appended at once (`App.itemChanged` → `Store.appendItem`). |
-| Agent info or conversation meta changed | `conversation.json` rewritten after 400 ms (`SAVE_DELAY_MS`), with the state at that moment (`App.scheduleSave`). |
+| Agent info or conversation meta changed (including archiving, restoring and each compaction phase) | `conversation.json` rewritten after 400 ms (`SAVE_DELAY_MS`), with the state at that moment (`App.scheduleSave`). |
 | App shutdown | All pending saves are written at once (`App.flush`). |
 | Settings changed | `settings.json` rewritten at once (`saveSettings`). |
 | Image uploaded or sent | `blobs/<hash>.<ext>` written at once (`BlobStore.put`). |
@@ -107,4 +126,4 @@ Transcripts are not loaded at start-up. They are read when a page asks for them,
 
 ## Related pages
 
-[Storage code](Source-Storage.md) · [Settings code](Source-Settings.md) · [Team profiles and settings](Team-Profiles-and-Settings.md) · [Configuration and settings](Configuration-and-Settings.md) · [Remote access](Remote-Access.md)
+[Storage code](Source-Storage.md) · [Settings code](Source-Settings.md) · [Team profiles and settings](Team-Profiles-and-Settings.md) · [Configuration and settings](Configuration-and-Settings.md) · [Remote access](Remote-Access.md) · [Compact team](Compact-Team.md)

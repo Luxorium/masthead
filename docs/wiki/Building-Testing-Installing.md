@@ -14,13 +14,13 @@ How Masthead is installed, built, checked and tested on Linux, macOS and Windows
 **The package is not published yet.** `package.json` has `"private": true` and the name `@luxorium/masthead` is a placeholder until the person decides. The commands below are the planned way (`docs/plans/0.2.0/distribution.md` §2), with that placeholder. They are the same on all three systems:
 
 ```sh
-npm install -g --omit=optional @luxorium/masthead
+npm install -g --os=none --cpu=none @luxorium/masthead
 masthead service install      # start at login (optional)
 masthead doctor               # one line per check, exit 1 if something is wrong
 masthead                      # open the page, signed in
 ```
 
-`--omit=optional` skips the Agent SDK's private Claude Code binary, which Masthead never runs ([Build configuration](Source-Build-Config.md#optional-packages)).
+`--os=none --cpu=none` skips the Agent SDK's private Claude Code binary, which Masthead never runs: no platform package matches the operating system and processor "none". npm ignores `--omit=optional` for a global install (seen with npm 11.19.1 on Windows and 12.2.3 on Linux) ([Build configuration](Source-Build-Config.md#optional-packages)).
 
 | System | Service written by `masthead service install` | Opens the browser with |
 |---|---|---|
@@ -34,7 +34,7 @@ To try the packed package from a checkout, as CI and the release checklist do:
 
 ```sh
 npm pack                                                    # runs prepack (a build)
-npm install -g --omit=optional ./luxorium-masthead-0.1.4.tgz
+npm install -g --os=none --cpu=none ./luxorium-masthead-0.1.4.tgz
 masthead --version
 ```
 

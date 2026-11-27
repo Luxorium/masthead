@@ -111,13 +111,13 @@ For a socket target it first calls `privateFolder()` on the socket's folder and 
 
 Terminates every device socket, calls `server.closeAllConnections()` (where Node has it), closes the server, removes the socket file for a socket target, and then resolves.
 
-## chooseTarget(env, dataDir, platform?, uid?)
+## chooseTarget(env, dataDir, platform?, uid?, home?)
 
 Where `tailscale serve` should point on this platform. `server/main.ts` calls it once when building `RemoteAccess`.
 
 - **Windows:** `{kind: 'loopback', port: 7719}`. The comment says any local program can reach it, and the pairing code is the only guard there; the settings say so to the person.
-- **Elsewhere:** a Unix socket. A socket path may be at most about 104 bytes (macOS) or 108 (Linux). So if `XDG_RUNTIME_DIR` is set, absolute, and `<runtime>/masthead/remote.sock` is under 100 bytes, that path is used. Otherwise it is `/tmp/masthead-<uid>/remote.sock`, so Unix never needs a port.
-- `dataDir` is accepted but unused (`void dataDir`).
+- **Elsewhere:** a Unix socket. A socket path may be at most about 104 bytes (macOS) or 108 (Linux). So if `XDG_RUNTIME_DIR` is set, absolute, and `<runtime>/masthead/<name>` is under 100 bytes, that path is used. Otherwise it is `/tmp/masthead-<uid>/<name>`, so Unix never needs a port.
+- **One socket per data folder.** `<name>` is `remote.sock` for the platform's usual data folder (`appDirs(platform, {}, home).data`) and `remote-<10 hex>.sock`, from a SHA-256 of `dataDir`, for any other (a test server, a second instance). Their serve entries then never look alike, so one instance reads another's entry as `elsewhere` and leaves it alone. (Before beta 2 every instance used `remote.sock`, and a test server's start-up removed the real Masthead's entry as its own leftover.) Windows has one fixed loopback port; there `hadEntry` and `MASTHEAD_TAILSCALE` keep instances apart ([Remote access](Source-Remote-Access.md)).
 
 Covered by "remote: targets per platform".
 

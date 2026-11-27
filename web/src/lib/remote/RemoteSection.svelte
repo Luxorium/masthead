@@ -12,20 +12,27 @@
   let copied = $state(false);
   let audit = $state<AuditEntry[] | null>(null);
   let portDraft = $state('');
+  let box = $state<HTMLInputElement | null>(null);
   const ROLES: RemoteRole[] = ['full', 'approve', 'read'];
 
   const offAudit = store.listen('remote_audit', (m) => (audit = ((m.entries as AuditEntry[]) ?? []).slice().reverse()));
   // A refused switch comes back as an error; the state carries the problem and command anyway.
-  const offError = store.listen('error', () => (switching = false));
+  const offError = store.listen('error', () => settle());
   onDestroy(() => {
     offAudit();
     offError();
   });
+  /** The box follows the real state: after a refusal `remote.enabled` has not changed, so Svelte would
+      leave the box as the click left it (ticked while the status says "Off"). */
+  function settle() {
+    switching = false;
+    if (box && remote) box.checked = remote.enabled;
+  }
   $effect(() => {
     // The switch settles when the state says so.
     void remote?.enabled;
     void remote?.problem;
-    switching = false;
+    settle();
   });
   $effect(() => {
     if (remote && !portDraft) portDraft = String(remote.port);
@@ -56,7 +63,7 @@
     <p class="muted">{RT.section.intro}</p>
 
     <label class="switch">
-      <input type="checkbox" checked={remote.enabled} disabled={switching || (!remote.available && !remote.enabled)} onchange={(e) => toggle(e.currentTarget.checked)} />
+      <input type="checkbox" bind:this={box} checked={remote.enabled} disabled={switching || (!remote.available && !remote.enabled)} onchange={(e) => toggle(e.currentTarget.checked)} />
       <span>{RT.section.switch}</span>
     </label>
 

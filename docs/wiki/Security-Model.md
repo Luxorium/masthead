@@ -76,7 +76,7 @@ Details and the pairing flow are on [Remote access](Remote-Access.md). In short:
 - **No shutdown, little health.** `/api/shutdown` is `404`; `/api/health` answers only `{name}`.
 - **Roles.** Every message a device sends passes one gate (`Hub.admit()` in `server/app/clients.ts`,
   using `allowedMessage()`): `full` may do everything the local page can except manage remote access
-  and devices; `approve` may read, answer approvals and stop work; `read` may only read. A device must
+  and devices; `approve` may read, answer approvals, stop work, and answer or cancel tidying the team; `read` may only read, including archived helpers' chats. Restoring an archived helper and switching automatic tidying need `full`; see the table on [Remote access](Remote-Access.md#what-a-remote-device-can-and-cannot-do). A device must
   say hello with protocol 2 before anything, and reads a conversation's details only while subscribed.
 
 ## Page headers
@@ -133,7 +133,7 @@ Details and the pairing flow are on [Remote access](Remote-Access.md). In short:
 | Secret | `~/.local/share/masthead/secret` | `0600` (Windows: `icacls`, current user only) |
 | Conversations, transcripts, pictures | `~/.local/share/masthead/conversations/` | files `0600`, folders `0700` |
 | Remote access (devices, audit, config) | `~/.local/share/masthead/remote/` | files `0600`, folder `0700` |
-| Remote socket | `$XDG_RUNTIME_DIR/masthead/remote.sock`, else `/tmp/masthead-<uid>/remote.sock` | socket `0600` in a `0700` folder that must be yours and not a link |
+| Remote socket | `$XDG_RUNTIME_DIR/masthead/remote.sock`, else `/tmp/masthead-<uid>/remote.sock` (`remote-<hash>.sock` for a data folder other than the usual one) | socket `0600` in a `0700` folder that must be yours and not a link |
 
 On Windows the data folder and the sign-in folder are set with `icacls` (private to your account,
 inherited by every file inside, so conversations, pictures and remote-access files too); the settings

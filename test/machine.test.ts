@@ -372,3 +372,20 @@ test('invariants, wider: lead and sub-agents, every event, busy varied — waiti
     }
   }
 });
+
+// ---- archived helpers (team compaction) ----
+
+test('archive: only a finished helper is archived; nothing but Unarchive changes it; never the lead', () => {
+  const done = ended();
+  const a = run(done, [{ type: 'Archive' }]);
+  assert.equal(a.s.archived, true);
+  assert.ok(has(a.fx, 'save'));
+  const woken = run(a.s, [{ type: 'Woken', by: 'person', parentCanReceive: true }, { type: 'Input', from: 'person' }, { type: 'Status', status: 'running' }]);
+  assert.equal(woken.s.phase, 'ended', 'an archived agent is never woken');
+  assert.equal(woken.fx.length, 0);
+  assert.equal(run(running(), [{ type: 'Archive' }]).s.archived, undefined, 'a working helper cannot be archived');
+  assert.equal(run(lead(), [{ type: 'Archive' }]).s.archived, undefined, 'never the lead');
+  const back = run(a.s, [{ type: 'Unarchive' }, { type: 'Woken', by: 'agent', parentCanReceive: true }]).s;
+  assert.equal(back.archived, false);
+  assert.equal(back.phase, 'queued', 'restored, it can be woken again');
+});

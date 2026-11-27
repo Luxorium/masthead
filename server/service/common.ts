@@ -1,5 +1,5 @@
 import { DEFAULT_PORT, appDirs } from '../paths.js';
-import type { InstallOptions, RunResult } from './types.js';
+import type { InstallOptions, RunResult, ServiceStatus } from './types.js';
 import { ServiceError } from './types.js';
 
 /** The warning the installed command and unit both silence (see scripts/install.sh). */
@@ -82,4 +82,21 @@ export function must(run: (cmd: string, args: readonly string[]) => RunResult, c
 
 export function xmlEscape(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+/**
+ * `masthead service status` (and the end of `service install`) in plain words: whether Masthead
+ * answers on its port, and whether the service started it or the person did. A copy started by hand
+ * before the service was installed keeps the port, and the service's own copy then cannot start.
+ */
+export function statusSummary(kind: string, st: ServiceStatus, answers: boolean, port: number): string {
+  const where = `port ${port}`;
+  if (!st.installed) return `Not installed (${kind}). ${answers ? `Masthead is running on ${where}, started by hand.` : `Masthead is not running on ${where}.`}`;
+  let what: string;
+  if (answers && st.running === true) what = `Masthead is running on ${where}, started by the service.`;
+  else if (answers && st.running === false) what = `Masthead is running on ${where}, started by hand; the service starts it at login.`;
+  else if (answers) what = `Masthead is running on ${where}; whether the service started it cannot be told.`;
+  else if (st.running === true) what = `Masthead does not answer on ${where} although the service is running; it may still be starting, or failing (see its log).`;
+  else what = `Masthead is not running on ${where}; the service starts it at login.`;
+  return `Installed (${kind}). ${what} (${st.detail})`;
 }

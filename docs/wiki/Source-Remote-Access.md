@@ -15,10 +15,10 @@ Remote access has only ever run against a fake Tailscale (`FakeTailscale`) in te
 `<DATA_DIR>/remote/config.json`, written by `writeFileAtomic` (mode `0600`):
 
 ```json
-{ "version": 1, "enabled": false, "port": 7443, "allowOtherTailnets": false, "allowTagged": false }
+{ "version": 1, "enabled": false, "port": 7443, "allowOtherTailnets": false, "allowTagged": false, "hadEntry": false }
 ```
 
-These are the defaults (`DEFAULT_REMOTE_PORT` is 7443). `load()` falls back to them for a missing or unreadable file or a version other than 1. Each field is checked: only `true` turns a flag on, and a port outside 1024–65535 becomes 7443. `load()` does not refuse 7717, 8443 or 10000; a hand-edited file with one of the last two would make `addServe` throw later (read from the code, not run).
+These are the defaults (`DEFAULT_REMOTE_PORT` is 7443). `hadEntry` says this instance added its serve entry and has not removed it yet; `apply()` sets it after an add and clears it after a removal. A file without it (before beta 2) reads it as `enabled`. `load()` falls back to them for a missing or unreadable file or a version other than 1. Each field is checked: only `true` turns a flag on, and a port outside 1024–65535 becomes 7443. `load()` does not refuse 7717, 8443 or 10000; a hand-edited file with one of the last two would make `addServe` throw later (read from the code, not run).
 
 ### Constructor
 
@@ -26,11 +26,11 @@ These are the defaults (`DEFAULT_REMOTE_PORT` is 7443). `load()` falls back to t
 
 ### `reconcile()`
 
-Run once at start-up by `startRemote` in `server/transport/remote.ts`. It refreshes, then makes Tailscale match the setting: setting on and entry `off` → add it; setting off and entry `ours` → remove it. Someone else's entry, Funnel, or Tailscale not running → nothing changes. (Read from the code, not run.)
+Run once at start-up by `startRemote` in `server/transport/remote.ts`. It refreshes, then makes Tailscale match the setting: setting on and entry `off` → add it; setting off, entry `ours` and `hadEntry` → remove it. An entry that only looks like ours while this instance never had remote access on (`hadEntry` false) is left alone, with no note. Someone else's entry, Funnel, or Tailscale not running → nothing changes. A refusal does not throw: it stays on show as the problem with its command (a refused removal at start is tested in `test/remote-wiring.test.ts`); after a change that worked it refreshes.
 
 ### `refresh()`
 
-Reads Tailscale's status and the state of Masthead's port again. It never changes anything. If Tailscale is not running, `serve` becomes `unknown` and the problem says whether Tailscale is missing or just not connected. Otherwise `problemFor()` sets the problem: HTTPS certificates off; Funnel on the port; something else on the port; or "on, but Tailscale is not serving Masthead yet". An error from `serveState` becomes the problem text. Every refresh calls `changed()`.
+Reads Tailscale's status and the state of Masthead's port again. It never changes anything. If Tailscale is not running, `serve` becomes `unknown` and the problem says whether Tailscale is missing or just not connected. Otherwise `problemFor()` sets the problem: HTTPS certificates off; Funnel on the port; something else on the port; or "on, but Tailscale is not serving Masthead yet"; or, with the setting off, `hadEntry` and our entry still there (a refused removal), the leftover note with `serveOffCommand()`. An error from `serveState` becomes the problem text. Every refresh calls `changed()`.
 
 ### `setEnabled(on)`
 
@@ -38,9 +38,16 @@ The switch. It refreshes first, then:
 
 - Tailscale not running: switching **on** gives `{ok:false, problem}`. Switching **off** still works: the setting is saved off (the listener closes) and the leftover entry is removed by `reconcile()` at the next start once Tailscale is back (tested in `test/remote-wiring.test.ts`).
 - Switching on without HTTPS → refused with the HTTPS problem.
-- Otherwise `apply(on)` calls `addServe` or `removeServe`. Only on success is `enabled` saved, a `switch` line written to the audit log and the state refreshed.
+- Otherwise `apply(on)` calls `addServe` or `removeServe`. On success `enabled` is saved, a `switch` line written to the audit log and the state refreshed.
+- Switching **off** always works: if Tailscale refuses the removal, `enabled` is still saved off (the listener closes), the audit line says Tailscale kept its entry, and the result is `{ok:true, problem, command}` with the removal note below (tested in `test/remote-wiring.test.ts`).
 
-**Refusals:** an error from Tailscale becomes the problem. If its text looks like a permission error (`access denied`, `permission`, `operator`, `not permitted`, `must be root`, `requires root`), the problem says to become the Tailscale operator once and carries the **operator command** from `operatorCommand()`: `sudo tailscale set --operator=<user>` (user from `USER`, `USERNAME` or the literal `$USER`), or on Windows the sentence "Run Tailscale as an administrator, or ask your tailnet admin." Masthead shows this command; it never runs it. A refusal keeps its message on show until the next refresh.
+**Refusals:** an error from Tailscale becomes the problem. `looksLikePermission()` decides whether it is a refusal for want of rights: `access denied`, `permission denied`, `not permitted`, `must be root`, `requires root`, `be an operator` or `401 unauthorized`. Then:
+
+- **Switching on, socket target, not Windows:** Tailscale lets only root (or an operator who can run `sudo` without a password) serve a Unix socket ("must be root, or be an operator and able to run 'sudo tailscale' to serve a path or Unix socket"), so the operator step would not help. The problem is "Tailscale needs your password once to share Masthead's private connection. Run this once in a terminal, then switch remote access on again." with `sudoServeCommand(port, target)`: `sudo tailscale` plus the very arguments of `addCommand()`. Once root has added the entry, `addServe` finds it `ours` and switching on succeeds without running anything. Nothing else Masthead runs needs the operator: `status`, `serve status` and `whois` only read.
+- **Switching on otherwise** (the loopback target, Windows): "Make yourself the Tailscale operator once…" with the **operator command** from `operatorCommand()`: `sudo tailscale set --operator=<user>` (user from `USER`, `USERNAME` or the literal `$USER`), or on Windows "Run Tailscale as an administrator, or ask your tailnet admin." The text ends with "Tailscale said: " and Tailscale's own message on one line, at most 240 characters (`tailscaleSaid()`).
+- **Switching off:** "Remote access is off and nothing can reach Masthead, but Tailscale still has Masthead's entry…" with `serveOffCommand(port)`: `sudo tailscale serve --https=<port> off` (without `sudo` on Windows), plus what Tailscale said.
+
+Masthead shows these commands; it never runs them. Other errors are shown as Tailscale gave them. A refusal keeps its message on show until the next refresh; a leftover entry of ours while the setting is off is itself a problem (`problemFor()`) with the removal command, so the note stays until the entry is gone.
 
 `App` calls `setEnabled` for a `remote_settings` message with a boolean `enabled` and sends a refusal back to that browser as an error, with `Run: <command>` added when there is one.
 

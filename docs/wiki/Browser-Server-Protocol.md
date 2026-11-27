@@ -10,7 +10,7 @@ Where it lives:
 - Socket plumbing: `attach()` in `server/transport/http.ts` (local) and `server/transport/remote.ts` (remote devices).
 - Image routes: `server/transport/blobs.ts`.
 
-Everything here was read from the code. It was not checked by running the app; the behaviour is covered by `test/protocol-v2.test.ts`, `test/protocol-v1.test.ts`, `test/backpressure.test.ts` and `test/send-images.test.ts`.
+Everything here was read from the code. It was not checked by running the app; the behaviour is covered by `test/protocol-v2.test.ts`, `test/protocol-v1.test.ts`, `test/backpressure.test.ts` and `test/send-images.test.ts`; the compaction messages by `test/compact-app.test.ts`.
 
 ## The socket
 
@@ -62,7 +62,7 @@ sequenceDiagram
 
 Per conversation, the `Hub` keeps a ring of recent version 2 events (`record()`): each gets the next `seq` for that conversation. The ring holds at most 500 events (`RING_SIZE`) and stops growing past 8 MiB (`RING_BYTES`); older events drop off the front.
 
-Which events are per-conversation (`convOf()`): `agent`, `item`, `draft` (and the `Hub`'s own `draft_end`) and `permission_request`. These get a `seq` and go only to version 2 tabs subscribed to that conversation. Everything else (`conversations`, `deleted`, `settings`, `rate_limit`, `permission_resolved`, `backends`) is list-level and goes to every version 1 and 2 tab. `remote` goes only to local tabs (`Hub.publishLocal()`).
+Which events are per-conversation (`convOf()`): `agent`, `item`, `draft` (and the `Hub`'s own `draft_end`) and `permission_request`. These get a `seq` and go only to version 2 tabs subscribed to that conversation. Everything else (`conversations`, `deleted`, `settings`, `rate_limit`, `permission_resolved`, `backends`, and the team-compaction events `compact` and `archived`) is list-level and goes to every version 1 and 2 tab. `remote` goes only to local tabs (`Hub.publishLocal()`).
 
 `{t:'subscribe', convId, since?, epoch?}` (`Hub.intercept()`):
 
@@ -72,7 +72,7 @@ Which events are per-conversation (`convOf()`): `agent`, `item`, `draft` (and th
 4. `since` given and still in the ring (`oldest − 1 ≤ since ≤ current seq`): every event after `since` is replayed, and nothing else is sent.
 5. Otherwise a snapshot; if `since` was given (and is not the current `seq`) a `{t:'resync', convId}` comes first.
 
-The **snapshot** is `{t:'conversation', conv, agents, pending, drafts, lastItemIds, seq}`: the conversation meta, every agent's `AgentInfo`, its open approval requests in full, each open draft with its `dseq` (keyed by agent id), each agent's newest stored item id (`lastItemIds`, so a reconnecting page fetches only newer items), and the current `seq`.
+The **snapshot** is `{t:'conversation', conv, agents, pending, drafts, lastItemIds, seq}`: the conversation meta, every agent's `AgentInfo`, its open approval requests in full, each open draft with its `dseq` (keyed by agent id), each agent's newest stored item id (`lastItemIds`, so a reconnecting page fetches only newer items), and the current `seq`. A conversation's compaction state travels in `conv.compact`, and archived agents are in `agents` with their `archived` time; there is no separate compaction snapshot.
 
 `{t:'unsubscribe', convId}` stops the detailed events. A `deleted` event also removes the subscription and the conversation's ring and draft state.
 
@@ -126,7 +126,7 @@ Messages handled by `App.dispatch()`:
 |---|---|---|---|
 | `open` | `convId` | Looks up the conversation. | Version 1 `conversation` (`conv`, `agents`, `pending`) to this tab. Version 2 pages use `subscribe` instead. |
 | `items` | `convId`, `agentId`, `before?`, `limit?` | See Paging. | `items` to this tab. |
-| `send` | `convId` (null = new conversation), `cwd?`, `text`, `images?`, `blobs?`, `agentId?`, `ref?`, `profile?` | Refuses an empty message ("The message is empty."), text over 400,000 characters, more than 8 images, an image over 5 MB, or images over 30 MB together (uploaded and inline counted together). Inline `images` must be PNG, JPEG, GIF or WebP in base64. `blobs` must name pictures already stored in **this** conversation (`checkRefs()`). With `convId: null`: `profile` must name an existing team profile (default: `settings.defaultProfile`), the lead tier's backend must be usable, `cwd` must be a folder (default `settings.defaultCwd`; `~` expands; a different folder becomes the new default), and inline images become stored files. Then `Conversation.userSend()` to the lead, or to `agentId`. | `created {convId, ref}` to this tab for a new conversation; then events. |
+| `send` | `convId` (null = new conversation), `cwd?`, `text`, `images?`, `blobs?`, `agentId?`, `ref?`, `profile?` | Refuses an empty message ("The message is empty."), text over 400,000 characters, more than 8 images, an image over 5 MB, or images over 30 MB together (uploaded and inline counted together). Inline `images` must be PNG, JPEG, GIF or WebP in base64. `blobs` must name pictures already stored in **this** conversation (`checkRefs()`). With `convId: null`: `profile` must name an existing team profile (default: `settings.defaultProfile`), the lead tier's backend must be usable, `cwd` must be a folder (default `settings.defaultCwd`; `~` expands; a different folder becomes the new default), and inline images become stored files. Then `Conversation.userSend()` to the lead, or to `agentId`. **`/compact`**: text that is exactly `/compact`, optionally followed by words, sent to the lead (no `agentId`, or the lead's id) of an existing conversation with no images, is not delivered as chat: it calls `Conversation.startCompact(words)` (see [Compact team](Compact-Team.md)). Sent to a helper, or with images, it is an ordinary message. | `created {convId, ref}` to this tab for a new conversation; then events. |
 | `interrupt` | `convId` | `interruptLead()`: ends the lead's current turn, keeps its session; agents it started keep working. | Events. |
 | `stop_agent` | `convId`, `agentId` | `stopAgent(agentId, 'Stopped by the person.')`: that agent and everything under it; on the lead, its agents are stopped and the lead interrupted. | Events. |
 | `stop_all` | `convId` | `stopAll()`. | Events. |
@@ -134,6 +134,11 @@ Messages handled by `App.dispatch()`:
 | `settings` | `settings` (a `SettingsPatch`) | `sanitizeSettings(patch, current)`: only valid named fields change. Saved, limits re-checked, running agents updated (`Conversation.settingsChanged()`), keep-awake re-evaluated. | `settings` to every tab. |
 | `rename` | `convId`, `title` | Whitespace collapsed, trimmed, at most 120 characters; ignored if empty. | `conversations`. |
 | `delete` | `convId` | Stops everything, ends all processes, removes the conversation and its folder. | `deleted`, then `conversations`. |
+| `compact_answer` | `convId`, `id`, `keep` (helper names), `accept` | The person's answer to the compaction card: `Conversation.answerCompact(id, keep, accept)`. `keep` is filtered to strings and cut to 200 names. Ignored unless `id` is the flow's id and its phase is `proposed`. See [Compact team](Compact-Team.md). | `compact` and `archived` to every tab. |
+| `compact_cancel` | `convId` | `Conversation.cancelCompact()`: the flow becomes `cancelled` (allowed until the compacting step ends; helpers already archived stay archived). | `compact` to every tab. |
+| `restore_agent` | `convId`, `agentId` | `Conversation.restoreAgent(agentId)`: the archived helper rejoins the team (an id that is not archived is ignored). | `agent`, `conversations`. |
+| `archive_items` | `convId`, `agentId`, `before?`, `limit?` | Like `items`, for an archived agent only; any other agent is `not_found` ("That agent is not archived here."). | `archive_items {convId, agentId, items, cursor?, more?}` to this tab (no `draft`). |
+| `auto_compact` | `convId`, `on` | `Conversation.setAutoCompact(on)`: switches automatic tidying off (`meta.autoCompact: false`) or back to the setting for this conversation only. A non-boolean `on` is `invalid` ("Say on or off."). | `conversations`. |
 | `dirs` | `path` | Lists sub-folders for the folder picker (default home; `~` expands; hidden folders left out; symbolic links to folders included; on Windows, a `drives:` list above a drive root). | `dirs` to this tab. |
 
 Messages handled by `App.remoteMessage()`:
@@ -147,7 +152,9 @@ Messages handled by `App.remoteMessage()`:
 | `check_backends` | Local browser, `full` and `approve` devices | Runs backend detection again; then a `backends` event to every tab. |
 | `forget_me` | Remote devices only | The device removes itself. |
 
-The role table is `allowedMessage()` in `server/remote/authorise.ts`: `read` may send `hello`, `open`, `items`, `subscribe`, `unsubscribe`, `draft_sync`, `item_full`; `approve` adds `permission`, `interrupt`, `stop_agent`, `stop_all`, `check_backends`; `full` may send everything except the local-only messages. Golf's [Security model](Security-Model.md) explains the roles.
+The role table is `allowedMessage()` in `server/remote/authorise.ts`: `read` may send `hello`, `open`, `items`, `subscribe`, `unsubscribe`, `draft_sync`, `item_full`, `archive_items`; `approve` adds `permission`, `interrupt`, `stop_agent`, `stop_all`, `check_backends`, `compact_answer`, `compact_cancel`; `full` may send everything except the local-only messages. So for team compaction: any device may read archived chats; an `approve` device may answer the card or cancel; only the local browser and `full` devices may `restore_agent`, switch `auto_compact`, or start a compaction (typing `/compact` is a `send`).
+
+A version 2 tab must also be subscribed to the conversation before sending `archive_items`, `compact_answer`, `compact_cancel`, `restore_agent` or `auto_compact` (`Hub.admit()`; otherwise `refused`, "Subscribe to that conversation first."). Golf's [Security model](Security-Model.md) explains the roles.
 
 Any other `t` gets "Unknown request." (code `invalid`).
 
@@ -175,6 +182,9 @@ Any other `t` gets "Unknown request." (code `invalid`).
 | `remote_audit` | `entries` | Reply to `remote_audit`. |
 | `resync` | `convId` | Version 2: the events since `since` cannot be replayed; a snapshot follows. |
 | `item_full` | `convId`, `agentId`, `item` | Reply to `item_full`. |
+| `compact` | `convId`, `compact: CompactState \| null` | Every tab (list-level, no `seq`): the team-compaction flow of a conversation changed (`App.compactChanged()`). `null` when the conversation has none. |
+| `archived` | `convId`, `agents: AgentInfo[]` | Every tab, right after each `compact`: the conversation's archived agents (those with `archived` set). Restoring sends `agent` instead. |
+| `archive_items` | `convId`, `agentId`, `items`, `cursor?`, `more?` | Reply to `archive_items`. |
 | `dirs` | `path`, `parent`, `entries`, `error?` | Reply to `dirs`. |
 | `error` | `message`, `code?`, `ref?` | Something the tab sent failed (below). |
 
@@ -190,7 +200,7 @@ Codes (`ErrorCode` in `shared/protocol-v2.ts`):
 | Code | Meaning |
 |---|---|
 | `protocol` | Wrong or missing protocol version: a remote device sent something before saying hello with protocol 2; a tab sent a version 2 message (`subscribe`, `unsubscribe`, `draft_sync`, `item_full`) before saying hello with protocol 2; or `hello` named a protocol other than 2. |
-| `refused` | Not allowed: the device's role does not permit the message ("This device may not do that."), a version 2 tab asked for a conversation it has not subscribed to (`open`, `items`, `item_full`, `draft_sync`: "Subscribe to that conversation first."), a remote-access change was refused (with Tailscale's reason and, if needed, the command to run), or the local browser sent `forget_me`. |
+| `refused` | Not allowed: the device's role does not permit the message ("This device may not do that."), a version 2 tab asked for a conversation it has not subscribed to (`open`, `items`, `item_full`, `draft_sync`, `archive_items`, `compact_answer`, `compact_cancel`, `restore_agent`, `auto_compact`: "Subscribe to that conversation first."), a remote-access change was refused (with Tailscale's reason and, if needed, the command to run), or the local browser sent `forget_me`. |
 | `not_found` | The conversation, agent, item, picture or team profile does not exist here (also a picture ref from another conversation, and remote access on a server that does not offer it). |
 | `too_large` | Over a limit: message text (400,000 characters), image count (8), one image over 5 MB, images over 30 MB together. |
 | `invalid` | Malformed JSON or message, unknown request, or a bad field ("The message is empty.", "Unsupported image.", "Bad image list.", a folder that is not a folder, "Allow or deny."). |
@@ -245,4 +255,4 @@ Each item has an `id` and a timestamp `ts`, plus one of these kinds (`Item` in `
 
 ## Related pages
 
-[shared/protocol.ts](Source-Shared-Protocol.md) · [Clients](Source-Clients.md) · [server/app](Source-App.md) · [server/http.ts](Source-Http.md) · [Web store](Source-Web-Store.md) · [Security model](Security-Model.md) · [Remote access](Remote-Access.md) · [Architecture](Architecture.md)
+[shared/protocol.ts](Source-Shared-Protocol.md) · [Clients](Source-Clients.md) · [server/app](Source-App.md) · [server/http.ts](Source-Http.md) · [Web store](Source-Web-Store.md) · [Security model](Security-Model.md) · [Remote access](Remote-Access.md) · [Architecture](Architecture.md) · [Compact team](Compact-Team.md)

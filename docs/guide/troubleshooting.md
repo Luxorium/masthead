@@ -18,10 +18,28 @@ Open a terminal and run `masthead doctor`. It checks your set-up and prints one 
 | **Secret** | "does not exist yet (made on first start)" is fine. A folder: "Remove …; a new secret is made on the next start." Readable by others (macOS, Linux): `chmod 600 '<file>'`. On Windows it is not checked. |
 | **Port 7717** | "in use by another program": "Stop that program, or use another port: masthead --port <n>." "served by this Masthead" is fine. |
 | **Service** | "not installed" is fine if you start Masthead yourself; to start it at login: `masthead service install`. Installed but not running: `masthead service install`. |
-| **SDK private binary** | An unused private copy of Claude Code was installed with Masthead. Harmless, but you can reinstall without it: `npm i -g --omit=optional @luxorium/masthead`. |
+| **SDK private binary** | An unused private copy of Claude Code was installed with Masthead. Harmless, but you can reinstall without it: `npm i -g --os=none --cpu=none @luxorium/masthead`. |
 | **Keep awake** | The tool that keeps the computer awake was not found, so it may sleep while agents work. On Linux: "Install systemd (systemd-inhibit), or keep the computer awake yourself". See [Keeping the computer awake](keeping-awake.md). |
 
 ## Common problems
+
+**Another device cannot open the `….ts.net` address at all ("server not found", "can't resolve").**
+That device's Tailscale is not using Tailscale DNS ("Use Tailscale DNS" off, `accept-dns=false`), so
+it cannot look up `….ts.net` names. You can recognise it when the computer's own Tailscale address
+(`100.x.y.z`, in the Tailscale app) answers a ping but the name does not. Fix it on that device: in the
+Tailscale app turn on **Use Tailscale DNS** (Windows: tray icon → Preferences; phones: settings), or
+run `tailscale set --accept-dns=true`. Then open the address again.
+
+**Windows: "masthead.ps1 cannot be loaded because running scripts is disabled on this system."**
+Stock Windows PowerShell does not run npm's `masthead.ps1`. Type `masthead.cmd` instead (for
+example `masthead.cmd doctor`), or use Command Prompt, where plain `masthead` works. To make plain
+`masthead` work in PowerShell for good, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+once (optional). `masthead doctor` on Windows prints its fixes with `masthead.cmd`.
+
+**"SDK private binary" after installing with `--omit=optional`.** npm ignores `--omit=optional` for a
+global install, so the unused private copy of Claude Code comes along anyway. Reinstall with
+`npm i -g --os=none --cpu=none <package or .tgz>`: no platform package matches "none", so it is
+skipped.
 
 ### The browser did not open, or opened without signing in
 

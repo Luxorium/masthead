@@ -21,7 +21,7 @@
 | `removeServe(port, target)` | Removes Masthead's entry only. Refuses if the port serves something else. |
 | `whois(address)` | The `Identity` behind an address, or `null`. |
 
-There are three implementations: `CliTailscale` (the real one), `FakeTailscale` (tests) and `CachedWhois` (a wrapper). `server/main.ts` builds `new CliTailscale()` and hands it to `RemoteAccess`, which wraps it in `CachedWhois`.
+There are four implementations: `CliTailscale` (the real one), `OffTailscale` (switched off), `FakeTailscale` (tests) and `CachedWhois` (a wrapper). `server/main.ts` builds one with `tailscaleFor(process.env)` and hands it to `RemoteAccess`, which wraps it in `CachedWhois`.
 
 ## `runTailscale`
 
@@ -79,6 +79,10 @@ The real provider. `constructor(run = runTailscale)`.
 - `addServe(port, target)` builds the command first (so bad input throws before anything runs), then reads the state. `ours` returns with nothing run. Anything other than `off` throws `Port N on Tailscale is already in use (…). Choose another port.` Only on `off` does it run `addCommand`.
 - `removeServe(port, target)` mirrors it. `off` returns with nothing run. Anything other than `ours` throws `…serves something other than Masthead; left as it is.` Only on `ours` does it run `removeCommand`.
 - `whois(address)` returns `null` without running anything unless the address is only hex digits, colons and dots. Errors give `null`.
+
+## `class OffTailscale` and `tailscaleFor(env)`
+
+`tailscaleFor(env)` returns `OffTailscale` when `MASTHEAD_TAILSCALE=off` or `MASTHEAD_BACKEND=fake`, else `CliTailscale`. `OffTailscale` never runs the binary: `status()` is `null` (shown as "not installed or not running"), `whois()` is `null`, and `serveState`, `addServe` and `removeServe` throw. Test and fake servers use it so they can neither see nor touch the real Masthead's serve entry; `scripts/ci-e2e.mjs` sets both variables, and `test/ui.e2e.mjs` fails if the server's remote switch is not greyed out. Tested by "remote: test and fake servers never run the real tailscale".
 
 ## `class FakeTailscale`
 

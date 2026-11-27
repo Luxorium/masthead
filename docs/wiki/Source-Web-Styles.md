@@ -23,7 +23,7 @@ Code blocks stay dark in both schemes, to suit highlight.js's `github-dark` them
 
 ### Tier colours
 
-Tier colours are data in 0.2.0: a team profile gives each level a colour **slot** from the shared `PALETTE` (`amber`, `violet`, `blue`, `teal`, `rose`, `green`, `slate`, `orange`), and the page owns what each slot looks like. `app.css` defines `--pal-<slot>` in light and dark, each, per its comment, at least 4.5:1 on the page background so names stay readable. The class `pal-<slot>` sets `--tier` for everything inside it; `.tier-badge` (a small pill with the model name) and the level boxes use `--tier`.
+Tier colours are data in 0.2.0: a team profile gives each level a colour **slot** from the shared `PALETTE` (`amber`, `violet`, `blue`, `teal`, `rose`, `green`, `slate`, `orange`), and the page owns what each slot looks like. `app.css` defines `--pal-<slot>` in light and dark, each, per its comment, at least 4.5:1 on the page background so names stay readable. The class `pal-<slot>` sets `--tier` for everything inside it; `.tier-badge` (a small pill with the model name) and the level boxes use `--tier`. The badge's background is an opaque tint, `--tier` at 10% over `--raised`, so a hovered or selected row behind it cannot lower its contrast.
 
 The older `--tier-lead`, `--tier-opus`, `--tier-sonnet`, `--tier-haiku` variables and `.tier-*` classes stay for 0.1.x agents whose tier ids are the Claude names.
 
@@ -35,7 +35,7 @@ The older `--tier-lead`, `--tier-opus`, `--tier-sonnet`, `--tier-haiku` variable
 - `tierClass(settings, tier)`: `pal-<colour>` from the profile. If the profile is gone, 0.1.x ids fall back to fixed colours (lead amber, opus violet, sonnet blue, haiku teal); anything else, or a colour not in `PALETTE`, is `pal-slate`.
 - `profileById(settings, id)`: that profile, else the built-in Claude profile, else the first.
 
-Used by `TeamPanel`, `TeamMap`, `TierControls` and `Composer`. Tested in `web/test/tiers.test.ts`.
+Used by `TeamOutline` (rows and the archived list), `TierControls` and `Composer`. Tested in `web/test/tiers.test.ts`.
 
 ### Status dots
 

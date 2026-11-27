@@ -1058,3 +1058,277 @@ test('data safety: older 0.2.0 data whose team is gone, with no copy, falls back
   assert.equal(notices(items, 'alpha', /team "gone" no longer exists, so this chat now runs on the built-in Claude team/).length, 1);
   assert.match(chat.spawn(chat.lead, 'A', 'task', undefined), /^Started Opus 5\.5 agent "bravo"/);
 });
+
+// ---- team compaction and archived helpers ----
+
+/** A team: bravo, charlie, delta finished (they fail at once without Claude Code); echo still queued (working). */
+async function compactTeam(opts: { auto?: boolean } = {}) {
+  const t = setup();
+  Object.assign(t.settings, { autoCompact: opts.auto ?? false }); // the card flow unless asked
+  const { conv, block, byName } = t;
+  for (const x of ['A', 'B', 'C']) conv.spawn(conv.lead, x, 'task', undefined);
+  await tick();
+  block('opus');
+  conv.spawn(conv.lead, 'D', 'task', undefined);
+  const compacted: string[] = [];
+  for (const a of conv.agents.values()) {
+    (a as unknown as { sessionId: string }).sessionId = `s-${a.name}`;
+    (a as unknown as { compact: () => Promise<{ ok: boolean }> }).compact = async () => (compacted.push(a.name), { ok: true });
+  }
+  t.host.readItems = (_c, id) => {
+    const a = [...conv.agents.values()].find((x) => x.id === id)!;
+    return [
+      { id: '1', ts: 1, kind: 'inbound', via: 'task', from: 'alpha', text: `Task for ${a.name}` },
+      { id: '2', ts: 2, kind: 'tool', name: 'Read', input: { file_path: '/x' }, result: 'contents', done: true },
+      { id: '3', ts: 3, kind: 'text', text: `Final report from ${a.name}.\nSecond line about the API.` },
+    ] as Item[];
+  };
+  return { ...t, byName, compacted };
+}
+
+test('compact: /compact asks the lead, propose_compact raises the card, the person confirms; the others are archived and the rest compact', async () => {
+  const { conv, byName, compacted, items } = await compactTeam();
+  conv.startCompact('tidy up');
+  assert.equal(conv.meta.compact!.auto, false, 'automatic tidying off: the card flow');
+  assert.equal(conv.meta.compact!.phase, 'asked');
+  assert.ok(items.some((x) => x.agent === 'alpha' && x.item.kind === 'user' && x.item.text === '/compact tidy up'));
+  assert.match(conv.compactTeam(byName('bravo'), [], ''), /^Error: only the lead tidies the team/);
+  assert.match(conv.compactTeam(conv.lead, [{ name: 'zulu', why: 'x' }], ''), /no helper named "zulu"/);
+  assert.match(conv.compactTeam(conv.lead, [{ name: 'bravo', why: 'holds the API notes' }], 'Keeping bravo.'), /keep 2, archive 2/);
+  const c = conv.meta.compact!;
+  assert.equal(c.phase, 'proposed');
+  assert.deepEqual(c.keep, [{ name: 'bravo', why: 'holds the API notes' }, { name: 'echo', why: 'still working', forced: true }]);
+  assert.deepEqual(c.archive, ['charlie', 'delta']);
+  conv.answerCompact(c.id, ['bravo', 'charlie'], true); // the ticked names: the person also keeps charlie; echo stays (forced) though not listed
+  await tick();
+  await tick();
+  const done = conv.meta.compact!;
+  assert.equal(done.phase, 'done');
+  assert.deepEqual(done.archive, ['delta']);
+  assert.notEqual(byName('delta').info.archived, undefined);
+  assert.equal(byName('charlie').info.archived, undefined);
+  assert.deepEqual(compacted, ['bravo', 'charlie', 'alpha'], 'helpers first, the lead last; the working one skipped');
+  assert.deepEqual(done.failed, [{ name: 'echo', why: 'still working' }]);
+  assert.deepEqual(
+    notices(items, 'alpha', /^Archived/).map((x) => (x.item as { text: string }).text),
+    ['Archived 1 finished helper and compacted the memory of 3 that stay. Kept: bravo because holds the API notes; charlie because kept by the person. Also kept: echo (still working). Not compacted: echo (still working). Archived helpers can be read or restored from the team panel.'],
+  );
+});
+
+test('archived helpers leave the team: not listed (only counted), not woken by agents or the person, readable, restorable', async () => {
+  const { conv, byName, items } = await compactTeam();
+  conv.startCompact('');
+  conv.compactTeam(conv.lead, [{ name: 'bravo', why: 'needed' }], '');
+  conv.answerCompact(conv.meta.compact!.id, ['bravo'], true);
+  await tick();
+  const list = conv.list(conv.lead);
+  assert.doesNotMatch(list, /- charlie:|- delta:/);
+  assert.match(list, /2 archived helpers: read their chats with read_archive\./);
+  assert.match(conv.message(byName('bravo'), 'charlie', 'hi'), /^Error: "charlie" is archived and cannot be woken/);
+  assert.match(conv.stop(conv.lead, 'delta'), /archived/);
+  conv.userSend('wake up', undefined, byName('charlie').id);
+  assert.equal(byName('charlie').status, 'failed', 'still finished');
+  assert.equal(notices(items, 'charlie', /is archived\. Restore it/).length, 1);
+  // A kept agent reads the archive: the index, a chat, a search.
+  const index = conv.readArchive(byName('bravo'));
+  assert.match(index, /- charlie: Opus 5\.5, B, archived \d{4}-\d\d-\d\d \d\d:\d\d\n  Report: Final report from charlie\. Second line about the API\./);
+  assert.match(conv.readArchive(byName('bravo'), 'charlie'), /^charlie's chat, page 1 of 1:\n\[task from alpha\] Task for charlie\n\[tool Read\] \{"file_path":"\/x"\} -> contents\ncharlie: Final report from charlie\./);
+  assert.match(conv.readArchive(byName('bravo'), 'charlie', 1, 'API'), /lines with "API"[\s\S]*Second line about the API/);
+  assert.match(conv.readArchive(byName('bravo'), 'bravo'), /no archived helper named "bravo"/);
+  // The person restores one.
+  conv.restoreAgent(byName('charlie').id);
+  assert.equal(byName('charlie').info.archived, undefined);
+  assert.match(conv.message(byName('bravo'), 'charlie', 'hi'), /^Delivered to "charlie"/);
+  assert.match(conv.list(conv.lead), /1 archived helper: read its chat with read_archive\./);
+});
+
+test('compact: with nothing to archive it just compacts; refused or cancelled it archives nothing', async () => {
+  const empty = setup();
+  Object.assign(empty.settings, { autoCompact: false });
+  (empty.conv.lead as unknown as { compact: () => Promise<{ ok: boolean }> }).compact = async () => ({ ok: true });
+  empty.conv.startCompact('');
+  assert.equal(empty.conv.meta.compact!.phase, 'compacting');
+  await tick();
+  assert.equal(empty.conv.meta.compact!.phase, 'done');
+
+  const { conv, byName } = await compactTeam();
+  conv.startCompact('');
+  conv.compactTeam(conv.lead, [], '');
+  conv.answerCompact(conv.meta.compact!.id, [], false);
+  assert.equal(conv.meta.compact!.phase, 'cancelled');
+  assert.equal(byName('charlie').info.archived, undefined);
+  conv.startCompact('again');
+  conv.cancelCompact();
+  assert.equal(conv.meta.compact!.phase, 'cancelled');
+  assert.match(conv.compactTeam(conv.lead, [], ''), /nobody asked to tidy the team now/);
+});
+
+test('compact: a restart midway carries on (archiving, compacting) or starts over (asked); archived survive the restart', async () => {
+  const { conv, host, byName } = await compactTeam();
+  conv.startCompact('');
+  conv.compactTeam(conv.lead, [], '');
+  const stored = JSON.parse(JSON.stringify(conv.toStored()));
+  stored.meta.compact.phase = 'archiving'; // cut off while archiving
+  const again = Conversation.restore(host, stored);
+  await tick();
+  await tick();
+  const c = again.meta.compact!;
+  assert.equal(c.phase, 'done', 'archiving re-ran, then compacting ran (nothing could compact after the restart)');
+  const delta = [...again.agents.values()].find((a) => a.name === 'delta')!;
+  assert.notEqual(delta.info.archived, undefined);
+  assert.ok(c.failed.length > 0 && c.failed.every((f) => f.why.length > 0), 'without a backend nobody could compact, and each says why');
+  const thrice = Conversation.restore(host, JSON.parse(JSON.stringify(again.toStored())));
+  const d3 = [...thrice.agents.values()].find((a) => a.name === 'delta')!;
+  assert.match(thrice.message(thrice.lead, 'delta', 'x'), /archived/, 'still archived after another restart');
+  assert.notEqual(d3.info.archived, undefined);
+
+  const asked = JSON.parse(JSON.stringify(conv.toStored()));
+  asked.meta.compact = { ...asked.meta.compact, phase: 'asked' };
+  const cut = Conversation.restore(host, asked);
+  await tick();
+  assert.equal(cut.meta.compact!.phase, 'cancelled');
+  void byName;
+});
+
+test('compact: with automatic tidying off, the lead is told once to suggest /compact when its memory is filling', () => {
+  const { conv, settings } = setup();
+  Object.assign(settings, { autoCompact: false });
+  const sent: unknown[] = [];
+  conv.lead.deliver = (m) => void sent.push(m);
+  conv.lead.info.usage.context = 750_000;
+  conv.userSend('next task', undefined);
+  assert.match(String(sent[0]), /^\[Masthead: your memory is 75% full\. You may suggest once, in your reply, that the person type \/compact to tidy the team\.\]\n\nnext task$/);
+  conv.userSend('and another', undefined);
+  assert.equal(sent[1], 'and another', 'only once');
+  assert.equal(conv.meta.compactSuggested, true);
+});
+
+// ---- automatic tidying (the default) ----
+
+async function autoTeam(helpers: number) {
+  const t = setup();
+  const told: unknown[] = [];
+  t.conv.lead.deliver = (m) => void told.push(m);
+  const finish = async (n: number) => {
+    for (let i = 0; i < n; i++) t.conv.spawn(t.conv.lead, `job ${i}`, 'task', undefined);
+    await tick();
+    for (const a of t.conv.agents.values()) (a as unknown as { compact: () => Promise<{ ok: boolean }> }).compact = async () => ({ ok: true });
+  };
+  await finish(helpers);
+  return { ...t, told, finish };
+}
+
+test('auto: past 15 finished helpers, the lead\'s turn end starts tidying; compact_team archives at once; the person is told', async () => {
+  const { conv, told, items, byName } = await autoTeam(15);
+  endTurn(conv, conv.lead);
+  const c = conv.meta.compact!;
+  assert.equal(c.phase, 'asked');
+  assert.equal(c.auto, true);
+  assert.match(String(told.at(-1)), /^Masthead is tidying the team because the team has 15 finished helpers\. Call compact_team/);
+  assert.match(conv.compactTeam(conv.lead, [{ name: 'bravo', why: 'it knows the schema' }], ''), /^Archiving 14 and keeping 1/);
+  await tick();
+  await tick();
+  assert.equal(conv.meta.compact!.phase, 'done');
+  assert.equal(byName('charlie').info.archived !== undefined, true);
+  assert.equal(byName('bravo').info.archived, undefined);
+  assert.deepEqual(notices(items, 'alpha', /^Archived/).map((x) => (x.item as { text: string }).text), [
+    'Archived 14 finished helpers and compacted the memory of 1 that stays. Kept: bravo because it knows the schema. Archived helpers can be read or restored from the team panel.' // bravo never had a session: nothing to compact,
+  ]);
+});
+
+test('auto: cool-down — not again until 15 more helpers have finished', async () => {
+  const { conv, finish } = await autoTeam(15);
+  endTurn(conv, conv.lead);
+  conv.compactTeam(conv.lead, [], '');
+  await tick();
+  await tick();
+  const first = conv.meta.compact!.id;
+  endTurn(conv, conv.lead);
+  assert.equal(conv.meta.compact!.id, first, 'nothing new right after');
+  await finish(14);
+  endTurn(conv, conv.lead);
+  assert.equal(conv.meta.compact!.id, first, '14 more is not enough');
+  await finish(1);
+  endTurn(conv, conv.lead);
+  assert.notEqual(conv.meta.compact!.id, first);
+  assert.equal(conv.meta.compact!.phase, 'asked');
+});
+
+test('auto: memory past 70 % starts it once; it fires again only after memory dropped and rose again', async () => {
+  const { conv } = await autoTeam(1);
+  conv.lead.info.usage.context = 750_000;
+  endTurn(conv, conv.lead);
+  assert.match(conv.meta.compact!.reason ?? '', /lead's memory is 75% full/);
+  conv.compactTeam(conv.lead, [], '');
+  await tick();
+  await tick();
+  const first = conv.meta.compact!.id;
+  endTurn(conv, conv.lead); // still 75 % (the figure drops only after a turn)
+  assert.equal(conv.meta.compact!.id, first);
+  conv.lead.info.usage.context = 300_000;
+  endTurn(conv, conv.lead); // dropped: re-armed
+  assert.equal(conv.meta.compact!.id, first);
+  conv.lead.info.usage.context = 720_000;
+  endTurn(conv, conv.lead);
+  assert.notEqual(conv.meta.compact!.id, first);
+});
+
+test('auto: never while the person has an approval or question open for the lead; not where switched off; not when the setting is off', async () => {
+  const { conv, host } = await autoTeam(15);
+  host.askPermission = () => new Promise(() => {});
+  void conv.askPermission(conv.lead, { kind: 'question', toolName: 'AskUserQuestion', input: {}, canAlways: false, signal: new AbortController().signal } as never);
+  endTurn(conv, conv.lead);
+  assert.equal(conv.meta.compact, undefined, 'a question is open');
+
+  const off = await autoTeam(15);
+  off.conv.setAutoCompact(false);
+  endTurn(off.conv, off.conv.lead);
+  assert.equal(off.conv.meta.compact, undefined, 'switched off for this conversation');
+
+  const card = await autoTeam(15);
+  Object.assign(card.settings, { autoCompact: false });
+  endTurn(card.conv, card.conv.lead);
+  assert.equal(card.conv.meta.compact, undefined, 'setting off: nothing automatic');
+  card.conv.startCompact('');
+  card.conv.compactTeam(card.conv.lead, [], '');
+  assert.equal(card.conv.meta.compact!.phase, 'proposed', 'setting off: /compact raises the card');
+});
+
+test('auto: /compact with tidying on skips the card; a lead that ignores the request archives nothing', async () => {
+  const { conv, items } = await autoTeam(3);
+  conv.startCompact('');
+  assert.equal(conv.meta.compact!.auto, true);
+  conv.compactTeam(conv.lead, [{ name: 'bravo', why: 'x' }], '');
+  assert.equal(conv.meta.compact!.phase === 'archiving' || conv.meta.compact!.phase === 'compacting', true, 'no card');
+  await tick();
+  await tick();
+
+  const t = await autoTeam(3);
+  t.conv.startCompact('');
+  endTurn(t.conv, t.conv.lead); // the turn that reads the request
+  endTurn(t.conv, t.conv.lead); // and one more without choosing
+  assert.equal(t.conv.meta.compact!.phase, 'cancelled');
+  assert.equal(notices(t.items, 'alpha', /did not choose who to keep/).length, 1);
+  assert.equal([...t.conv.agents.values()].some((a) => a.info.archived !== undefined), false);
+  void items;
+});
+
+test('compact: the lead, inside the turn that called compact_team, compacts when that turn ends', async () => {
+  const { conv, items } = await autoTeam(3);
+  let leadCompacted = 0;
+  (conv.lead as unknown as { compact: () => Promise<{ ok: boolean }> }).compact = async () => (leadCompacted++, { ok: true });
+  conv.startCompact('');
+  conv.lead.setStatus('running'); // the lead is in its turn when it calls the tool
+  conv.compactTeam(conv.lead, [], '');
+  await tick();
+  await tick();
+  assert.equal(conv.meta.compact!.phase, 'compacting', 'waits for the lead');
+  assert.equal(leadCompacted, 0);
+  endTurn(conv, conv.lead);
+  await tick();
+  await tick();
+  assert.equal(leadCompacted, 1);
+  assert.equal(conv.meta.compact!.phase, 'done');
+  assert.deepEqual(conv.meta.compact!.failed, []);
+  assert.equal(notices(items, 'alpha', /^Archived 3 finished helpers and compacted the memory of 1 that stays\./).length, 1);
+});

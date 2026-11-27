@@ -19,6 +19,10 @@ export interface TeamActions {
   label(tier: Tier): string;
   /** The tier an agent of `tier` may start, from its team profile; null for the last tier. */
   childTier(tier: Tier): Tier | null;
+  /** compact_team (the lead, when asked to tidy the team): who to keep and why. */
+  compactTeam?(caller: Agent, keep: Array<{ name: string; why: string }>, note: string): string;
+  /** read_archive: the archived helpers, or one archived helper's chat (paged, optionally searched). */
+  readArchive?(viewer: Agent, name?: string, page?: number, search?: string): string;
   /** The agent's backend capabilities; all on when the conversation does not say. */
   caps?(agent: Agent): Pick<BackendCaps, 'efforts'> | undefined;
 }
@@ -53,6 +57,31 @@ export function teamToolDefs(agent: Agent, team: TeamActions): ToolDef[] {
     (a) => team.message(agent, s(a.to), s(a.message), a.wait === true),
   );
   add('list_agents', 'List the agents in this conversation: name, tier, status, effort, who started each and its task.', object({}, []), () => team.list(agent));
+  if (team.readArchive) {
+    const readArchive = team.readArchive.bind(team);
+    add(
+      'read_archive',
+      'Read archived helpers\' work: no name gives the list with their reports; a name gives that chat, a page at a time.',
+      object({ name: str(1, 80), page: { type: 'integer', minimum: 1 }, search: str(1, 100, 'Only lines with this word') }, []),
+      (a) => readArchive(agent, typeof a.name === 'string' ? a.name : undefined, typeof a.page === 'number' ? a.page : 1, typeof a.search === 'string' ? a.search : undefined),
+    );
+  }
+  if (isLead && team.compactTeam) {
+    const propose = team.compactTeam.bind(team);
+    add(
+      'compact_team',
+      'When asked to tidy the team: name the finished helpers to keep and why. The rest are archived; their chats stay readable.',
+      object(
+        {
+          // A bare name is accepted too: leads often send a plain list of names.
+          keep: { type: 'array', maxItems: 100, description: 'Each one {name, why}', items: { anyOf: [object({ name: str(1, 80), why: str(0, 200) }, ['name']), str(1, 80)] } },
+          note: str(0, 500, 'One line for the person'),
+        },
+        ['keep'],
+      ),
+      (a) => propose(agent, Array.isArray(a.keep) ? (a.keep as Array<{ name?: unknown; why?: unknown } | string>).map((k) => (typeof k === 'string' ? { name: k, why: '' } : { name: s(k?.name), why: s(k?.why) })) : [], s(a.note)),
+    );
+  }
 
   if (child) {
     add(

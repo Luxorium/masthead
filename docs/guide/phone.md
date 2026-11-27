@@ -19,9 +19,12 @@ Tailscale network. Nothing is opened to the internet, and a device gets in only 
 3. One of these happens:
    - It says **On** and shows an address like `https://<computer>.<tailnet>.ts.net:7443`. Go on to the
      next part.
-   - It says Tailscale did not let Masthead change its settings, and shows a command such as
-     `sudo tailscale set --operator=<you>`. Copy it, run it once in a terminal, then turn the switch on
-     again. (On Windows, run Tailscale as an administrator instead.)
+   - It says Tailscale needs your password once, and shows a command such as
+     `sudo tailscale serve --bg --https=7443 unix:/run/user/1000/masthead/remote.sock`. Copy it, run it
+     once in a terminal (it asks for your password), then turn the switch on again. This lets Tailscale
+     share Masthead's private connection; you only do it once.
+   - On Windows it may instead say Tailscale did not let Masthead change its settings: run Tailscale as
+     an administrator, then turn the switch on again. The message ends with what Tailscale said.
    - It says the port already serves something else. Turn the switch off, choose another port, and
      turn it on again.
 
@@ -76,9 +79,11 @@ them. Allow a device only while you are pairing it yourself, and only when the c
 |---|---|
 | "Tailscale is not available on this computer" | Install Tailscale, sign in, and make sure it is connected. |
 | "HTTPS certificates are switched off" | Enable HTTPS certificates in the Tailscale admin console. |
-| A command to run, e.g. `sudo tailscale set --operator=…` | Run it once in a terminal, then switch on again. |
+| A command to run, e.g. `sudo tailscale serve --bg --https=7443 unix:…` | Run it once in a terminal, then switch on again. |
+| After switching off: "Tailscale still has Masthead's entry" and `sudo tailscale serve --https=7443 off` | Nothing can reach Masthead; run the command once to tidy up, or leave it. |
 | "Port … already serves something else" or mentions Funnel | Choose another port while the switch is off. |
 | The phone cannot open the address | Check that the phone is connected to Tailscale and the switch is on. |
+| "Server not found" for the `….ts.net` address | That device's Tailscale has **Use Tailscale DNS** off. Turn it on in the Tailscale app, or run `tailscale set --accept-dns=true` there. See [Troubleshooting](troubleshooting.md). |
 | The phone says "This computer does not accept this device" | It may be a device of another tailnet or a tagged device; allow those in the settings if you mean to. |
 | "A request from this device is already waiting" | Approve or deny the waiting card on this computer, or wait 10 minutes. |
 | The phone says "This computer withdrew access" | The device was removed; tap **Ask again**. |

@@ -33,11 +33,23 @@ flowchart LR
 - **Before changing anything** it reads `tailscale serve status --json`. If the port already serves
   something else, is published with Funnel, or has a layout Masthead does not fully understand, it
   refuses and says why. It also refuses when HTTPS certificates are off for the tailnet.
-- **When Tailscale says no** (Masthead's user is not the Tailscale operator), the settings show the
-  command to run once, e.g. `sudo tailscale set --operator=<you>`, with a Copy button.
+- **When Tailscale says no**, the settings show the command to run once, with a Copy button. For
+  Masthead's private socket (Linux, macOS) Tailscale wants root: being the Tailscale operator is not
+  enough unless `sudo` works without a password. So Masthead offers its own entry added once as root,
+  `sudo tailscale serve --bg --https=<port> unix:<socket>`; after that switching on finds the entry
+  and succeeds. On Windows (loopback target) the advice is to run Tailscale as an administrator, and
+  any other refusal ends with what Tailscale said.
+- **Switching off always works.** The listener closes and the setting is saved off even if Tailscale
+  refuses to remove the entry; the leftover entry points at a closed socket, so nothing is reachable,
+  and the settings show a quiet note with `sudo tailscale serve --https=<port> off`.
 - **The setting is remembered** in `<data folder>/remote/config.json`. At every start Masthead brings
-  Tailscale in line with it (`reconcile()`): a leftover entry of its own is removed when the setting is
-  off, and re-added when it is on. Someone else's entry is never touched.
+  Tailscale in line with it (`reconcile()`): its entry is re-added when the setting is on, and a
+  leftover entry is removed when the setting is off, but only if this instance had added it
+  (`hadEntry`). Someone else's entry is never touched.
+- **One instance never touches another's entry.** Each data folder has its own socket (the usual one
+  `remote.sock`, any other `remote-<hash>.sock`), so a second instance or a test server sees the real
+  entry as someone else's. Test and fake servers (`MASTHEAD_BACKEND=fake` or `MASTHEAD_TAILSCALE=off`)
+  never run `tailscale` at all.
 - **The port** (7443 by default; not 7717, 8443 or 10000) can be changed only while the switch is off.
 
 ### Who a request comes from
@@ -97,13 +109,23 @@ denials, token collection, connections, role changes, removals, expiries and ref
 device, user and address. Refusals are written at most once a minute per device and reason. The file
 is moved aside at 1 MB; the settings show the newest entries.
 
+### A device that cannot resolve the address
+
+The address is a MagicDNS name (`<computer>.<tailnet>.ts.net`). A device whose Tailscale has "Use
+Tailscale DNS" off (`accept-dns=false`) cannot resolve it at all: the browser says the server was not
+found, while the computer's `100.x.y.z` address still answers. This was seen on a real Windows machine
+on 2026-11-27. The fix is on that device: turn on **Use Tailscale DNS** in the Tailscale app, or run
+`tailscale set --accept-dns=true`. Masthead cannot detect this from its side, and opening the
+`100.x.y.z` address instead does not work, because the HTTPS certificate is for the name.
+
 ## What a remote device can and cannot do
 
 | | Local page | Remote `full` | `approve` | `read` |
 |---|---|---|---|---|
 | Read conversations | ✓ | ✓ | ✓ | ✓ |
-| Answer approvals, stop work | ✓ | ✓ | ✓ | |
-| Send messages, start conversations, change settings, attach pictures | ✓ | ✓ | | |
+| Read archived helpers' chats | ✓ | ✓ | ✓ | ✓ |
+| Answer approvals, stop work, answer or cancel tidying the team | ✓ | ✓ | ✓ | |
+| Send messages (including `/compact`), start conversations, change settings, attach pictures, restore an archived helper, switch automatic tidying | ✓ | ✓ | | |
 | Manage remote access and devices, see the audit log | ✓ | | | |
 | Shut Masthead down | ✓ | | | |
 

@@ -17,7 +17,9 @@ It exports one object, `T` (declared `as const`), and two functions. Entries are
 | `composer` | Message box placeholders, Stop, folder chip, picture errors |
 | `transcript` | Show earlier, inbound headings, thinking, tool labels |
 | `status` | Agent statuses (used by `words.ts`) |
-| `team` | Team panel, levels, map |
+| `team` | Team panel: outline, Hide finished, the "N finished: …" row, expand and collapse labels, panel width, Stop, levels |
+| `map` | Left from the removed map: "Report from", "Message from" and "Thinking…" in the team panel's preview (`meta` and `onlyLead` are unused) |
+| `compact` | Tidying the team ([Compact team](Compact-Team.md)): the setting and per-chat switch, the card, progress lines and Cancel, the "Archived helpers (M)" row, the Archived note, Restore, the `/compact` hint |
 | `usage` | Usage meter and the names of usage windows |
 | `settings` | Settings view: General, ask modes, thinking, Appearance, About |
 | `effort` | Thinking time names: Short, Medium, Long, Longest |
@@ -26,6 +28,8 @@ It exports one object, `T` (declared `as const`), and two functions. Entries are
 | `device` | Settings > This device, role lines |
 | `remote` | Remote sign-in, device requests, roles, Remote access section, audit events (`event()`), `when()` |
 | `teams` | Agent programs, teams, levels, problems, the team chip |
+| `folder` | The folder picker |
+| `wants` | The "wants to …" phrase per tool on approval cards |
 | `errors` | `notConnected` |
 
 Two private helpers: `plural(n, one, many)` and `when(ts)`, a short local date and time.
@@ -42,7 +46,7 @@ The settings group still has `leanOpus`, `leanSub` and their help lines, which n
 
 ### Words outside `text.ts`
 
-Some components still write their words inline: `FolderPicker` (all of its words), `TeamMap` ("thinking", "memory", "Report from", "Message from", "Thinking…", the only-the-lead hint), `PermissionCard` (the "wants to …" phrase per tool), `markdown.ts` ("Copy", "Copied"), `RemoteSignIn` ("this device", the "Code …" label), `DeviceRequestCard` (the "Code …" label), `images.ts` (the upload failure) and `store.send()` (its own not-connected sentence). The jargon test does not see these.
+`web/test/no-inline-text.test.ts` scans the markup of every `.svelte` file (text between tags and the `aria-label`, `title`, `placeholder` and `alt` attributes) and fails on English written inline; only "Masthead" and "Copy" are allowed ([Page tests](Source-Web-Tests.md#test-files)). It does not read scripts, so a few words are still set in TypeScript: `markdown.ts` ("Copy", "Copied" on code blocks), `RemoteSignIn` (its "this device" default), `images.ts` (the upload failure) and `store.send()` (its own not-connected sentence). The jargon test does not see these.
 
 ### `friendlyError`
 

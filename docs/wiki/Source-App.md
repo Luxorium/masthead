@@ -90,6 +90,19 @@ Returns true for the types it handles. The comment says these come from the loca
 - **`check_backends`**: re-runs `registry.detectAll()` in the background, then `backendsDetected()` and a broadcast of `{t:'backends', backends}` to every tab. The comment says any approved device may ask except `read` devices, because it runs programs to check versions.
 - **`forget_me`**: a device removing its own approval. It needs `client.deviceId` (`refused`, "Only a paired device can forget itself.") and calls `remote.forget(deviceId)`, which revokes the device, writes a `forget` audit entry and ends its sockets. The gate refuses it from the local browser.
 - **`remote_audit`**: sends this tab `{t:'remote_audit', entries: remote.audit()}`.
+- **`delete_profile`** (`id`, `force?`): an unknown team is `not_found`. If chats use it (`chatsUsing()` over every conversation's `meta.profileId`) and `force` is not true, the tab gets `{t:'error', code:'refused', message, inUse: {id, chats}}` and nothing changes. Otherwise `updateSettings(deleteProfile(...))`; the built-in Claude team cannot be deleted (`refused`). Tested in `test/protocol-v2.test.ts`.
+- **Team compaction** (foxtrot's flow in `server/core/conversation.ts`; tested in `test/compact-app.test.ts`):
+  - **`compact_answer`** (`convId`, `id`, `keep`, `accept`): `conv.answerCompact(id, keep, accept === true)`; `keep` keeps only strings, at most 200.
+  - **`compact_cancel`** (`convId`): `conv.cancelCompact()`.
+  - **`restore_agent`** (`convId`, `agentId`): `conv.restoreAgent(agentId)`.
+  - **`auto_compact`** (`convId`, `on`): `conv.setAutoCompact(on)`; a non-boolean `on` is `invalid`.
+  - **`archive_items`** (`convId`, `agentId`, `before?`, `limit?`): like `items`, paged when `limit` is given, and only for an agent with `info.archived` set (`not_found` otherwise). Replies `{t:'archive_items', convId, agentId, items, cursor?, more?}`.
+
+### `/compact` and the compaction hooks
+
+- In **`send`** to an existing conversation, a message to the main assistant (no `agentId`, or the lead's) whose trimmed text is exactly `/compact` or `/compact <words>`, with no images, calls `conv.startCompact(words)` instead of `userSend()`. Anything else, including `/compact` to a helper, is chat.
+- **`readItems(convId, agentId)`** (ConversationHost) returns the stored transcript (`store.loadItems`), for the `read_archive` tool.
+- **`compactChanged(conv)`** (ConversationHost) broadcasts `{t:'compact', convId, compact: meta.compact ?? null}` and `{t:'archived', convId, agents}` (the agents with `archived` set) to every tab.
 
 ## dispatch(): the version 1 messages
 

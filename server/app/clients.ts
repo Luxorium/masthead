@@ -148,7 +148,7 @@ export class Hub {
     const s = this.sessions.get(client);
     if (s?.version === 0 && msg.t !== 'hello') throw new ClientError('protocol', 'Say hello with protocol 2 first.');
     if (!allowedMessage(client.role ?? 'local', msg.t)) throw new ClientError('refused', 'This device may not do that.');
-    if (s?.version === 2 && ['open', 'items', 'item_full', 'draft_sync'].includes(msg.t) && !s.subscribed.has(String(msg.convId ?? ''))) {
+    if (s?.version === 2 && ['open', 'items', 'item_full', 'draft_sync', 'archive_items', 'compact_answer', 'compact_cancel', 'restore_agent', 'auto_compact'].includes(msg.t) && !s.subscribed.has(String(msg.convId ?? ''))) {
       throw new ClientError('refused', 'Subscribe to that conversation first.');
     }
   }

@@ -9,10 +9,23 @@ Rules for every check: use a throwaway data folder unless the check says otherwi
 (`MASTHEAD_DATA_DIR`, `MASTHEAD_CONFIG_DIR`), and a port other than 7717 unless the check is about the
 installed service.
 
+## Verified for real on 2026-11-27
+
+- **Windows 11, Node 24.22.1, npm 11.19.1:** the packaged install, `masthead doctor`, chats with
+  agents and helpers, `masthead service install` and Masthead starting at login after a reboot. Found
+  and fixed on the way: `--omit=optional` is ignored for a global install (now `--os=none
+  --cpu=none`), PowerShell refuses `masthead.ps1` (the docs say `masthead.cmd`), `service status`
+  hid that Masthead was running by hand, the no-browser hint dropped a non-default port.
+- **Remote access, Tailscale 1.104.7 on Linux:** switching on through the one-time `sudo tailscale
+  serve` command, pairing a phone and using it fully; from a second device by script: the `read` and
+  `approve` roles enforced, a role lowered in place on an open socket, revoke closing it with 4001.
+- **Not yet:** macOS (all of it); Windows keep-awake and the permission prompt; the page on
+  restricted devices; a real usage limit.
+
 ## 1. The browser opens, signed in (macOS and Windows)
 
 1. Install from the packed tarball: `npm pack` in a checkout, then
-   `npm i -g --omit=optional ./luxorium-masthead-<version>.tgz`.
+   `npm i -g --os=none --cpu=none ./luxorium-masthead-<version>.tgz`.
 2. With Claude Code installed and signed in, run `masthead --port 7790` in a terminal.
 3. Expect: the default browser opens on `http://127.0.0.1:7790/`, the page is signed in (no
    "Open Masthead with the masthead command" screen), and the address bar shows no `#key=`.
@@ -72,7 +85,7 @@ Only on an account that can reach a limit (or a low-limit test account):
 
 On a Linux machine that runs 0.1.4 as installed by `scripts/install.sh`, with real conversations:
 1. Back up `~/.local/share/masthead` and `~/.config/masthead` (copy both folders).
-2. Install 0.2.0 the new way (`npm i -g --omit=optional …`, then `masthead service install`), or with
+2. Install 0.2.0 the new way (`npm i -g --os=none --cpu=none …`, then `masthead service install`), or with
    `scripts/install.sh` from the 0.2.0 checkout; it must stop the old service cleanly (busy check first).
 3. Expect: every conversation and transcript is listed and opens; settings kept (limits, efforts,
    permission mode); the `.bak` files of the migration exist next to the converted files.

@@ -13,6 +13,8 @@
  *   task, then a turn the backend starts by itself  - [[background-silent]] the task ends, no turn
  * - [[limit]] / [[limit 60s]]  the usage limit   - [[error text]]   an ordinary failed turn
  * - [[crash]]          the process dies
+ * The core's tidy message ("Call compact_team with the finished helpers to keep…") makes the lead call
+ * list_agents, keep the first finished helper it lists (with a reason) and call compact_team.
  * Anything else gets "Fake reply: <the message's first line>".
  */
 export type Step =
@@ -28,7 +30,8 @@ export type Step =
   | { kind: 'background'; ms?: number; silent: boolean }
   | { kind: 'limit'; seconds: number }
   | { kind: 'error'; message: string }
-  | { kind: 'crash' };
+  | { kind: 'crash' }
+  | { kind: 'compact' };
 
 function duration(v: string | undefined): number | undefined {
   if (!v) return undefined;
@@ -51,6 +54,8 @@ export function plan(text: string, info: { hasImage?: boolean } = {}): Step[] {
     else if (name === 'error') steps.push({ kind: 'error', message: arg?.trim() || 'The fake turn failed.' });
     else if (name === 'crash') steps.push({ kind: 'crash' });
   }
+  // The core's tidy message ("… Call compact_team with the finished helpers to keep and why …").
+  if (/call compact_team with the finished helpers/i.test(text)) steps.push({ kind: 'compact' });
   const tool = /call the tool ([A-Za-z0-9_]+) with input (\{.*?\})(?=\s|$|[.,;])/i.exec(text);
   if (tool) {
     let input: unknown = {};

@@ -62,6 +62,7 @@ export function defaultSettings(): Settings {
     collapseReports: false,
     maxRunMinutes: 0,
     keepAwake: true,
+    autoCompact: true,
     defaultCwd: HOME,
   });
 }
@@ -215,6 +216,8 @@ export function sanitizeSettings(raw: unknown, base: Settings = defaultSettings(
   if (typeof r.collapseReports === 'boolean') d.collapseReports = r.collapseReports;
   if (typeof r.keepAwake === 'boolean') d.keepAwake = r.keepAwake;
   if (typeof d.keepAwake !== 'boolean') d.keepAwake = true; // settings made before the field existed
+  if (typeof r.autoCompact === 'boolean') d.autoCompact = r.autoCompact;
+  if (typeof d.autoCompact !== 'boolean') d.autoCompact = true;
   d.maxRunMinutes = clampInt(r.maxRunMinutes, 0, 24 * 60, d.maxRunMinutes);
   if (absoluteFolder(r.defaultCwd)) d.defaultCwd = r.defaultCwd;
   return withCompat(d);

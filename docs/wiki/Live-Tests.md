@@ -4,7 +4,7 @@
 
 | Backend | Command | What it runs | Cost |
 |---|---|---|---|
-| Claude Code | `npm run test:live` | `test/live.e2e.ts`: seven scenarios through a real `App` | Real Claude usage; every tier on `claude-haiku-5-5` |
+| Claude Code | `npm run test:live` | `test/live.e2e.ts`: eight scenarios through a real `App` | Real Claude usage; every tier on `claude-haiku-5-5` |
 | Codex | `node --import tsx --test test/codex.live.ts` | The backend conformance suite on the real Codex CLI | Real, small Codex usage; `gpt-6-luna` at low effort |
 | Codex | `node --import tsx test/codex-team.live.ts` | One conversation on the generated Codex team through a real `App` | Real, small Codex usage; every tier `gpt-6-luna` at low effort |
 | Fake | (none needed) | The fake backend runs in `npm test` and in CI's browser test | Nothing: no account, no CLI. See [server/backends/fake/](Source-Backend-Fake.md) |
@@ -30,10 +30,11 @@
 5. **`wait: true`:** a question keeps the asker alive until it is answered; the question is not taken as a report.
 6. **Settings change, then a resume whose session file is gone** (the file is deleted on purpose): one fresh session, the message answered.
 7. **Automatic effort switched back** restarts the process on the same session, with no second fresh start.
+8. **`/compact`** ([Compact team](Compact-Team.md)): the lead chooses which finished helpers to keep with `compact_team`; the rest are archived and every kept agent compacts, the lead last, right after the turn that called `compact_team`. Checks: helpers archived, the lead never archived, the summary notice says the lead's memory was compacted ("compacted the memory of 1 that stays", no "Not compacted: alpha"), then a further turn: `send_message` to an archived helper is refused and `read_archive` lists it. Passed on 2026-11-28 (26 checks, about 90 s).
 
 Finally it checks that usage (context and output) was recorded for every agent that ran a turn. Exit code 1 on any failure or time-out.
 
-**Cost and time:** real Claude usage at Haiku prices for every agent in all seven scenarios. Not run for this page, so no current timing is given.
+**Cost and time:** real Claude usage at Haiku prices for every agent in all eight scenarios. Not run for this page, so no current timing is given.
 
 ## Codex: `test/codex.live.ts`
 
@@ -51,6 +52,10 @@ Finally it checks that usage (context and output) was recorded for every agent t
 4. Checks: the leaf ran on the second Codex tier (`codex:1`) and finished; its report reached the lead; the lead passed it on.
 
 Afterwards it shuts the app down, disposes the registry and deletes every thread it created with `codex delete --force`. Exit 1 on failure.
+
+## Claude Code: `test/compact.live.ts`
+
+`node --import tsx test/compact.live.ts`. `Agent.compact()` on the real Claude Code through a minimal host (no `App`): a Haiku agent remembers a word and finishes; `compact()` resumes its session quietly, Claude Code runs `/compact`, the process closes again. Checks: compaction ok, no turn counted, the status stayed done, the "summarized" notice appeared, the slot was given back, and the agent still knew the word afterwards. Temp folder; two short Haiku turns plus one compaction. Passed on 2026-11-28.
 
 ## When adding scenarios
 

@@ -69,7 +69,19 @@
 
   const totalBytes = () => draft.images.reduce((n, img) => n + img.size, 0);
 
+  /** The one command for now: shown while the person types "/" in a chat with a team, sent as typed. */
+  const slash = $derived(!isNew && !direct && draft.text.startsWith('/') && !draft.text.includes(' ') && T.compact.slashCompact.startsWith(draft.text));
+  function useSlash() {
+    draft.text = `${T.compact.slashCompact} `;
+    area?.focus();
+  }
+
   function onKey(e: KeyboardEvent) {
+    if (slash && (e.key === 'Tab' || (e.key === 'Enter' && draft.text !== T.compact.slashCompact))) {
+      e.preventDefault();
+      useSlash();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       submit();
@@ -172,6 +184,13 @@
     {/if}
   </div>
 {/if}
+{#if slash}
+  <div class="slash" role="listbox" aria-label={T.compact.slashHint}>
+    <button role="option" aria-selected="true" class="slash-item" onclick={useSlash}>
+      <b>{T.compact.slashCompact}</b> <span>{T.compact.slashCompactHelp}</span>
+    </button>
+  </div>
+{/if}
 <div
   class="composer {direct && agent ? `direct ${tierClass(store.settings, agent.tier)}` : ''}"
   class:dragging
@@ -258,6 +277,32 @@
     margin: 0 6px 6px;
     font-size: 12.5px;
     color: var(--muted);
+  }
+  .slash {
+    margin: 0 6px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    background: var(--raised);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .slash-item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 13.5px;
+  }
+  .slash-item span {
+    color: var(--muted);
+  }
+  .slash-item:hover {
+    background: var(--accent-soft);
+  }
+  @media (pointer: coarse) {
+    .slash-item {
+      min-height: 44px;
+    }
   }
   .composer {
     border: 1px solid var(--border-strong);

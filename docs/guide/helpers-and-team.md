@@ -20,13 +20,21 @@ A team has levels, each named after the model it uses. With the built-in Claude 
 
 ## The Team panel
 
-1. Press **Team** at the top of the page. It shows **Team · 2 working** (**Team · 2** on a small screen) while helpers work.
-2. The panel lists everyone in this chat, with what each is doing: **Working**, **Waiting its
-   turn**, **Waiting**, **Idle**, **Done**, **Failed** or **Stopped**.
-3. Click a helper (**Click to open the chat**) to read its own chat, or to message it directly.
+1. Press **Team** at the top of the page. It shows **Team · 2 working** (**Team · 2** on a small
+   screen) while helpers work.
+2. The panel shows the team as an outline: the **Main assistant** at the top, and each helper
+   under the one that started it, with its model and its job. Under each name a line says what it
+   is doing: **Working**, **Waiting its turn**, **Waiting**, **Idle**, **Done**, **Failed** or
+   **Stopped**.
+3. The small arrow beside a name hides or shows the helpers under it.
+4. **Hide finished** folds each helper's finished helpers into one row (for example **3 finished:
+   Delta, Echo, Foxtrot**). Click that row to see them again. Helpers that failed are never folded.
+5. Rest the pointer on a helper (or move to it with the keyboard) to see its task and its last few
+   lines. Click it (**Click to open the chat**) to read its own chat or to message it directly.
    **Back to …** returns you.
-4. **Show as a map** draws the team as a tree. **Back to the chat** returns.
-5. **Memory used: …%** shows how full the main assistant's memory of this chat is.
+6. **Memory used: …%** shows how full the main assistant's memory of this chat is.
+7. When the team has been tidied, **Archived helpers (N)** at the foot of the panel lists the
+   helpers that were archived. See [Tidying a long chat](tidying-a-long-chat.md).
 
 ## Team controls
 

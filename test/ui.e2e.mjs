@@ -1,7 +1,8 @@
 // Drives the real page in a headless browser against a running Masthead and saves screenshots.
 // Usage: node test/ui.e2e.mjs <url> <screenshot folder>
 // It sends real messages, so point it at a test server whose settings use cheap models, started with
-// its own XDG_CONFIG_HOME and XDG_DATA_HOME. The server's secret is taken from the URL's ?key=, else
+// its own XDG_CONFIG_HOME and XDG_DATA_HOME, and with MASTHEAD_BACKEND=fake or MASTHEAD_TAILSCALE=off so
+// it never runs the real tailscale (the run fails if it does). The server's secret is taken from the URL's ?key=, else
 // MASTHEAD_KEY, else $MASTHEAD_DATA_DIR/secret, else $XDG_DATA_HOME/masthead/secret. It never runs
 // against the installed app on 7717. The browser is $CHROMIUM, else /usr/bin/chromium if present, else
 // Playwright's own Chromium (as in CI).
@@ -62,6 +63,52 @@ const SIGN_IN = 'to sign this browser in';
 
 // Accessibility: axe-core's WCAG 2 A/AA rules, run inside the page (evaluate is not subject to the CSP).
 const AXE = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
+/** Neither the page nor the team panel scrolls sideways. */
+async function noSideways(p) {
+  return p.evaluate(() => {
+    const over = (el) => !!el && el.scrollWidth > el.clientWidth + 1;
+    return !over(document.scrollingElement) && !over(document.querySelector('aside.right')) && !over(document.querySelector('aside.right .outline'));
+  });
+}
+
+/** Every open parent's guide in the team panel meets its ticks and corner exactly (layout px). */
+async function guidesExact(p, label) {
+  const bad = await p.evaluate(() => {
+    const out = [];
+    const same = (a, b) => Math.abs(a - b) < 0.02;
+    const nodes = [...document.querySelectorAll('aside.right .node.open')];
+    for (const n of nodes) {
+      const name = n.querySelector('.name')?.textContent;
+      const vline = n.querySelector(':scope > .row > .vline')?.getBoundingClientRect();
+      const box = n.querySelector(':scope > .row .twisty .expander')?.getBoundingClientRect();
+      if (!vline || !box) { out.push({ name, missing: true }); continue; }
+      const ty = box.top + 6 - n.getBoundingClientRect().top;
+      if (!same(vline.left, box.left + 6) || vline.width !== 1) out.push({ name, vlineX: vline.left, boxMiddle: box.left + 6 });
+      if (!same(vline.top, box.bottom)) out.push({ name, vlineTop: vline.top, boxBottom: box.bottom });
+      const kids = [...n.querySelectorAll(':scope > .group > .node')];
+      kids.forEach((k, i) => {
+        const tick = k.querySelector(':scope > .tick')?.getBoundingClientRect();
+        const top = k.getBoundingClientRect().top;
+        if (!tick) return out.push({ name, child: i, noTick: true });
+        if (!same(tick.left, vline.left)) out.push({ name, child: i, tickX: tick.left, vlineX: vline.left });
+        if (i < kids.length - 1) {
+          if (!same(tick.top, top + ty) || !same(tick.height, 1)) out.push({ name, child: i, tickY: tick.top, want: top + ty });
+        } else {
+          if (!same(tick.top, vline.bottom)) out.push({ name, child: i, cornerTop: tick.top, vlineBottom: vline.bottom });
+          if (!same(tick.bottom - 1, top + ty)) out.push({ name, child: i, cornerFoot: tick.bottom - 1, want: top + ty });
+        }
+        const kidBox = k.querySelector(':scope > .row .twisty .expander')?.getBoundingClientRect();
+        if (kidBox && !same(kidBox.top + 6, top + ty)) out.push({ name, child: i, boxMiddle: kidBox.top + 6, want: top + ty });
+      });
+    }
+    const o = document.querySelector('aside.right .outline')?.getBoundingClientRect();
+    if (o && !same(o.top, Math.round(o.top))) out.push({ outlineTop: o.top });
+    return nodes.length < 2 ? [{ tooFew: nodes.length }] : out;
+  });
+  if (bad.length) log(`guides ${label}: ${JSON.stringify(bad)}`);
+  return bad.length === 0;
+}
+
 async function axeCheck(p, name) {
   await p.evaluate(AXE);
   const result = await p.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } }));
@@ -162,6 +209,9 @@ try {
   // Remote access (golf): a test server has no Tailscale, so the section says so in its status line.
   if (await page.getByRole('heading', { name: 'Remote access' }).count()) {
     check('the remote access section renders', (await page.getByRole('status').filter({ hasText: /Tailscale|Off/ }).count()) >= 1);
+    // A test server must not see the real Tailscale (MASTHEAD_BACKEND=fake or MASTHEAD_TAILSCALE=off): with
+    // it, its start-up could touch the real Masthead's serve entry. Then the switch is greyed out.
+    check('the test server does not use the real Tailscale', await page.getByLabel('Allow my other devices to connect').isDisabled());
   } else log('no remote access section (the server sent no state.remote)');
   await axeCheck(page, 'settings view');
   // Teams (bravo): editing the built-in team refuses an empty name in plain words, then Cancel.
@@ -238,7 +288,7 @@ try {
   }, 500);
 
   // With team controls on and a wide window, the team panel opens by itself once helpers start.
-  await page.waitForSelector('aside.right .agent >> text=helper job', { timeout: 120_000 });
+  await page.waitForSelector('aside.right div.row >> text=shell job', { timeout: 120_000 });
   await page.screenshot({ path: `${shots}/2-working-${scheme}.png` });
   check('the Team button appears once helpers work', (await page.locator('.team-btn').count()) === 1);
 
@@ -254,59 +304,60 @@ try {
   check('the stepper changes the limit', raised !== before && lowered === before);
   await axeCheck(page, 'chat with the team panel');
 
-  // Open the map; if the first click does not take (seen rarely on the fake backend, cause not found),
-  // try once more and say so in the log.
-  await page.getByRole('button', { name: 'Show as a map' }).click();
-  if (!(await page.locator('.map').waitFor({ timeout: 3000 }).then(() => true, () => false))) {
-    const why = await page.evaluate(() => ({
-      map: !!document.querySelector('.map'),
-      mapBox: document.querySelector('.map')?.getBoundingClientRect().height ?? -1,
-      cards: [...document.querySelectorAll('.map .card .name')].map((n) => n.textContent),
-      backToChat: !!document.querySelector('aside.right .link')?.textContent?.includes('Back to the chat'),
-      main: document.querySelector('main')?.innerText.slice(0, 120),
-    }));
-    log(`the map did not show within 3 s: ${JSON.stringify(why)}`);
-    if (!why.backToChat) await page.getByRole('button', { name: 'Show as a map' }).click();
-  }
-  // The third-level helper is started by a second-level one; slow CI runners can take a while.
-  const helperShown = await page.waitForSelector('.map .card >> text=helper job', { timeout: fake ? 90_000 : 30_000 }).then(() => true, () => false);
+  // The team panel: one outline that scrolls only up and down (0.2.0-beta.2 replaced the map).
+  const panel = page.locator('aside.right');
+  // A tree item contains its children, so find agents by their own row, then step up to the item.
+  const rowOf = (text) => panel.locator('div.row', { hasText: text }).first();
+  const itemOf = (text) => rowOf(text).locator('xpath=..');
+  const helperShown = await rowOf('helper job').waitFor({ timeout: fake ? 90_000 : 30_000 }).then(() => true, () => false);
   if (!helperShown) {
-    log(`map cards when "helper job" was missing: ${JSON.stringify(await page.locator('.map .card').allInnerTexts())}`);
-    throw new Error('"helper job" never appeared on the map');
+    log(`team rows when "helper job" was missing: ${JSON.stringify(await panel.locator('div.row').allInnerTexts())}`);
+    throw new Error('"helper job" never appeared in the team panel');
   }
-  // Lead > shell job > helper job: a card three levels deep in the tree.
-  check('the map shows three levels', (await page.locator('.map .tree.root > li > ul > li > ul > li > .card', { hasText: 'helper job' }).count()) === 1);
-  const names = await page.locator('.map .card .name').allTextContents();
+  check('the team panel shows three levels', (await itemOf('helper job').getAttribute('aria-level')) === '3');
+  const names = await panel.locator('div.row .name').allTextContents();
   check('agents are named Alpha, Bravo, Charlie, Delta', ['Alpha', 'Bravo', 'Charlie', 'Delta'].every((n) => names.includes(n)));
-  // Hover until the preview shows: the card may still be moving as others appear, and a hover that
-  // lands mid-layout (or before the 220 ms delay passes) can miss. Move away between tries.
-  const helperCard = page.locator('.map .card.tier-sonnet', { hasText: 'helper job' }).first();
+  check('nothing scrolls sideways at 1440 px', await noSideways(page));
+  // The tree guides, to the pixel: each open parent's line leaves its box's middle pixel, every tick
+  // starts on that line, the line ends where the last child's corner begins, and the corner's foot is on
+  // the same y as every tick (through each box's middle). At pixel ratio 1 here, and 1.5 below.
+  check('the tree guides meet to the pixel at pixel ratio 1', await guidesExact(page, 'dpr 1'));
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, deviceScaleFactor: 1.5 });
+    const p15 = await ctx.newPage();
+    await p15.goto(url);
+    await p15.waitForLoadState('networkidle');
+    await p15.goto(page.url());
+    await p15.waitForSelector('.team-btn', { timeout: 20_000 });
+    if (!(await p15.locator('aside.right').count())) await p15.locator('.team-btn').click();
+    await p15.locator('aside.right .node.open .vline').first().waitFor({ timeout: 20_000 });
+    check('the tree guides meet to the pixel at pixel ratio 1.5', await guidesExact(p15, 'dpr 1.5'));
+    await ctx.close();
+  }
+  // Hovering a row shows its latest lines below it, inside the panel.
+  const helperRow = rowOf('helper job');
   for (let tries = 0; tries < 5; tries++) {
-    await page.mouse.move(5, 5);
-    await helperCard.scrollIntoViewIfNeeded();
-    await helperCard.hover();
-    if (await page.locator('.map .preview').waitFor({ timeout: 3000 }).then(() => true, () => false)) break;
+    await page.mouse.move(700, 400);
+    await helperRow.hover();
+    if (await helperRow.locator('.preview').waitFor({ timeout: 3000 }).then(() => true, () => false)) break;
   }
-  await page.waitForSelector('.map .preview', { timeout: 5000 });
-  // Real content, not "Loading…": at least one chat line, or "Nothing yet." Hover again once if the
-  // first preview stays empty (its fetch can be dropped when a hover retry moved away).
-  const content = '.map .preview .p-line, .map .preview .p-empty:has-text("Nothing yet")';
-  if (!(await page.waitForSelector(content, { timeout: 5_000 }).then(() => true, () => false))) {
-    log(`the preview stayed empty (${JSON.stringify(await page.locator('.map .preview').innerText().catch(() => ''))}); hovering again`);
-    await page.mouse.move(5, 5);
-    await helperCard.hover();
-    await page.waitForSelector(content, { timeout: 10_000 }).catch(() => {});
-  }
-  await page.screenshot({ path: `${shots}/3-map-${scheme}.png` });
-  check(
-    'hovering an agent previews its chat',
-    (await page.locator('.map .preview .p-task').count()) === 1 &&
-      (await page.locator('.map .preview .p-line, .map .preview .p-empty:has-text("Nothing yet")').count()) >= 1,
-  );
-  await page.mouse.move(5, 5);
+  const content = '.preview .p-line, .preview .p-empty:has-text("Nothing yet")';
+  await helperRow.locator(content).first().waitFor({ timeout: 10_000 }).catch(() => {});
+  await page.screenshot({ path: `${shots}/3-team-${scheme}.png` });
+  check('hovering an agent previews its chat', (await helperRow.locator('.preview .p-task').count()) === 1 && (await helperRow.locator(content).count()) >= 1);
+  check('the preview causes no sideways scrolling', await noSideways(page));
+  await page.mouse.move(700, 400);
 
-  // Stop: the ■ on a busy agent's map card stops it.
-  const busyOne = page.locator('.map .card', { hasText: 'busy one' }).first();
+  // Collapse a branch with the keyboard, then open it again.
+  const shellItem = itemOf('shell job');
+  await shellItem.focus();
+  await page.keyboard.press('ArrowLeft');
+  check('← closes a branch', (await shellItem.getAttribute('aria-expanded')) === 'false' && (await panel.locator('div.row', { hasText: 'helper job' }).count()) === 0);
+  await page.keyboard.press('ArrowRight');
+  check('→ opens it again', (await panel.locator('div.row', { hasText: 'helper job' }).count()) === 1);
+
+  // Stop: the ■ on a busy helper's row stops it.
+  const busyOne = rowOf('busy one');
   await busyOne.locator('.dot.running, .dot.waiting').first().waitFor({ timeout: 90_000 });
   const stopBtn = busyOne.getByRole('button', { name: /^Stop / });
   await stopBtn.hover();
@@ -314,10 +365,28 @@ try {
   await page.screenshot({ path: `${shots}/3b-stop-hover-${scheme}.png` });
   await stopBtn.click();
   await busyOne.locator('.doing', { hasText: 'Stopped' }).waitFor({ timeout: 20_000 }).catch(() => {});
-  check('the map ■ stops the agent', (await busyOne.locator('.doing', { hasText: 'Stopped' }).count()) === 1);
+  check('the row\'s ■ stops the agent', (await busyOne.locator('.doing', { hasText: 'Stopped' }).count()) === 1);
+  check('a stopped agent stays in the outline, dimmed', (await busyOne.evaluate((el) => el.classList.contains('ended'))) === true);
 
-  // Open a sub-agent from the map and come back.
-  await page.locator('.map .card.tier-opus .open', { hasText: 'list job' }).first().click();
+  // "Hide finished" folds finished helpers into one row; failed ones never fold.
+  await panel.getByLabel('Hide finished').check();
+  check('"Hide finished" folds finished helpers into one row', (await panel.locator('div.row', { hasText: /\d+ finished:/ }).count()) >= 1);
+  await panel.getByLabel('Hide finished').uncheck();
+
+  // Narrower window (900 px): the panel is a drawer; still nothing sideways.
+  await page.setViewportSize({ width: 900, height: 900 });
+  if (!(await panel.count())) await page.locator('.team-btn').click();
+  await panel.waitFor();
+  check('nothing scrolls sideways at 900 px', await noSideways(page));
+  await page.keyboard.press('Escape');
+  await panel.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(300);
+  if (!(await panel.count())) await page.locator('.team-btn').click();
+  await panel.waitFor();
+
+  // Open a helper's chat from its row and come back.
+  await rowOf('list job').click();
   await page.waitForSelector('.crumbs');
   await page.waitForSelector('.inbound.task');
   await page.screenshot({ path: `${shots}/4-agent-${scheme}.png` });
@@ -405,6 +474,69 @@ try {
     await page.screenshot({ path: `${shots}/5b-pictures-${scheme}.png` });
   }
 
+  if (fake) {
+    // Tidying the team (fake only: helpers finish on cue). Automatic path: 15 finished helpers and a
+    // lead turn end cross the threshold; Masthead archives them and posts a summary.
+    const ask = async (text) => {
+      const n = await page.locator('.user .bubble').count();
+      await page.locator('textarea').fill(text);
+      await page.locator('textarea').press('Enter');
+      await page.waitForFunction((k) => document.querySelectorAll('.user .bubble').length > k, n);
+    };
+    const spawnMsg = (title, task) => `Call the tool spawn_agent with input ${JSON.stringify({ title, task }).replace(/\[/g, '\\u005b').replace(/`/g, '\\u0060')}`;
+    // Automatic tidying is on (the default): /compact runs it without a card, as the threshold would.
+    for (let i = 1; i <= 3; i++) await ask(spawnMsg(`small job ${i}`, `Reply with exactly the word ok${i}`));
+    await ask('/compact');
+    const summary = page.locator('.notice', { hasText: /^Archived \d+ finished helper/ });
+    const tidied = await summary.first().waitFor({ timeout: 60_000 }).then(() => true, () => false);
+    check('the team is tidied without a card and Masthead says what it did', tidied && (await page.locator('[role="alertdialog"]', { hasText: 'Tidy the team?' }).count()) === 0);
+    await page.screenshot({ path: `${shots}/compact-auto-${scheme}.png` });
+    if (tidied) {
+      if (!(await page.locator('aside.right').count())) await page.locator('.team-btn').click();
+      const archivedRow = page.locator('aside.right .archived-toggle');
+      await archivedRow.click();
+      // The fake lead keeps one finished helper with a reason; any archived one will do from here on.
+      const first = page.locator('aside.right .archived-open').first();
+      const archivedName = (await first.locator('.title').textContent())?.trim() ?? '';
+      check('archived helpers sit under one row and leave the team list', /Archived helpers \(\d+\)/.test((await archivedRow.textContent())?.trim() ?? '') && archivedName !== '' && (await page.locator('aside.right div.row', { hasText: archivedName }).count()) === 0);
+      await first.click();
+      await page.locator('.archived-note').waitFor({ timeout: 10_000 });
+      check('an archived chat opens read-only, labelled Archived, with Restore', (await page.locator('.archived-note .archived-tag').textContent())?.trim() === 'Archived' && (await page.locator('.composer textarea').count()) === 0);
+      await axeCheck(page, 'archived chat');
+      await page.screenshot({ path: `${shots}/compact-archived-${scheme}.png` });
+      await page.locator('.archived-note button', { hasText: 'Restore' }).click();
+      await page.locator('aside.right div.row', { hasText: archivedName }).first().waitFor({ timeout: 10_000 }).catch(() => {});
+      check('Restore brings the helper back into the team', (await page.locator('aside.right div.row', { hasText: archivedName }).count()) === 1);
+      await page.locator('.crumbs .back, .addressee .back').first().click().catch(() => {});
+    }
+
+    // The "/" hint, and the card path with automatic tidying off.
+    await page.locator('textarea').fill('/');
+    check('typing "/" shows the /compact command', (await page.locator('.slash-item', { hasText: '/compact' }).count()) === 1);
+    await page.locator('textarea').fill('');
+    await page.locator('#settings-gear').click();
+    const autoBox = page.getByRole('dialog', { name: 'Settings' }).getByLabel(/Tidy the team automatically/);
+    if (await autoBox.count()) {
+      await autoBox.uncheck();
+      await page.getByRole('button', { name: 'Close settings' }).click();
+      await ask('/compact');
+      const card = page.locator('[role="alertdialog"]', { hasText: 'Tidy the team?' });
+      const shown = await card.waitFor({ timeout: 30_000 }).then(() => true, () => false);
+      check('with automatic tidying off, /compact asks first with a card', shown);
+      if (shown) {
+        await axeCheck(page, 'tidy card');
+        await page.screenshot({ path: `${shots}/compact-card-${scheme}.png` });
+        await card.getByRole('button', { name: 'Tidy up' }).click();
+        await card.waitFor({ state: 'detached', timeout: 20_000 }).catch(() => {});
+        check('the card goes once answered', (await card.count()) === 0);
+      }
+      // Put automatic tidying back on, so the settings this server keeps are as they were.
+      await page.locator('#settings-gear').click();
+      await page.getByRole('dialog', { name: 'Settings' }).getByLabel(/Tidy the team automatically/).check();
+      await page.getByRole('button', { name: 'Close settings' }).click();
+    } else log('no "Tidy the team automatically" setting from this server');
+  }
+
   // Phone: a 390 × 844 touch screen in the light theme, on the same server and conversation.
   {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: 'light', deviceScaleFactor: 2 });
@@ -442,6 +574,7 @@ try {
     await p.locator('.team-btn').tap();
     await p.locator('aside.right').waitFor();
     check('phone: the team opens as a drawer over the chat', (await p.locator('.backdrop').count()) === 1);
+    check('phone: nothing scrolls sideways at 390 px with the team open', await noSideways(p));
     await p.screenshot({ path: `${shots}/8-phone-team-light.png` });
     await p.locator('.backdrop').tap({ position: { x: 10, y: 400 } });
     await p.waitForFunction(() => !document.querySelector('aside.right'), null, { timeout: 5000 }).catch(() => {});

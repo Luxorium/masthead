@@ -3,7 +3,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, posix, win32 } from 'node:path';
-import { DEFAULT_PORT } from './paths.js';
+import { DEFAULT_PORT, mastheadCommand } from './paths.js';
 import { makeDirPrivate, proofOk, type Runner } from './transport/auth.js';
 
 /** A mistake in how the command was typed. The message is shown as it is and the exit code is 2. */
@@ -141,7 +141,11 @@ export function writeSignInFile(dir: string, target: string, now = Date.now(), p
 
 /** How long the opener may run before it counts as having opened the browser. */
 export const OPENER_WAIT_MS = 3_000;
-const BROWSER_HINT = 'If the browser did not open signed in, run: masthead --no-browser';
+/** The command that prints the sign-in address, with the port when it is not the default one. */
+export function noBrowserCommand(base: string, platform: NodeJS.Platform = process.platform): string {
+  const port = Number(new URL(base).port) || DEFAULT_PORT;
+  return `${mastheadCommand(platform)}${port !== DEFAULT_PORT ? ` --port ${port}` : ''} --no-browser`;
+}
 
 /**
  * Asks the server at `base` to prove it knows `secret` (see proofOf in config.ts), with a fresh nonce.
@@ -215,7 +219,7 @@ export async function openSignedIn(opts: {
       // Long enough for a browser that is still starting; the file's name is no secret.
       opener.detach(node, removeLaterArgs(file));
       // A confined browser (snap, flatpak) may not be able to read the file, which nothing here can see.
-      if (tty) opener.log(BROWSER_HINT);
+      if (tty) opener.log(`If the browser did not open signed in, run: ${noBrowserCommand(base, platform)}`);
       return true;
     }
     try {
@@ -226,9 +230,9 @@ export async function openSignedIn(opts: {
   }
   if (tty) {
     opener.log(`Open this address in your browser to sign it in (keep it private):\n  ${target}`);
-    opener.log(BROWSER_HINT);
+    opener.log(`If the browser did not open signed in, run: ${noBrowserCommand(base, platform)}`);
   } else {
-    opener.log('Could not open the browser. Run `masthead --no-browser` in a terminal to get the sign-in address.');
+    opener.log(`Could not open the browser. Run \`${noBrowserCommand(base, platform)}\` in a terminal to get the sign-in address.`);
   }
   return false;
 }

@@ -121,6 +121,9 @@ test('doctor: the service is reported; stopped fails, missing warns', async () =
   const none = byName(await doctor(deps({ service: svc({ installed: false, running: false, port: null, detail: 'Not installed.' }) })), 'Service');
   assert.ok(none.ok && none.warn);
   assert.equal(none.fix, 'masthead service install');
+  // Stock Windows PowerShell refuses masthead.ps1; masthead.cmd works there and in Command Prompt.
+  const win = byName(await doctor(deps({ platform: 'win32', service: svc({ installed: false, running: false, port: null, detail: 'Not installed.' }) })), 'Service');
+  assert.equal(win.fix, 'masthead.cmd service install');
   const unknown = byName(await doctor(deps({ service: svc({ installed: true, running: null, port: 7717, detail: 'x' }) })), 'Service');
   assert.ok(unknown.ok && unknown.warn);
   const err = byName(await doctor(deps({ service: svc(new Error('no bus')) })), 'Service');
@@ -132,7 +135,8 @@ test('doctor: the service is reported; stopped fails, missing warns', async () =
 test('doctor: the SDK private binary package warns with the reinstall fix', async () => {
   const c = byName(await doctor(deps({ sdkBinary: () => '/g/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64' })), 'SDK');
   assert.ok(c.ok && c.warn);
-  assert.match(c.fix!, /npm i -g --omit=optional/);
+  // npm ignores --omit=optional for a global install; --os=none --cpu=none skips the platform package.
+  assert.match(c.fix!, /npm i -g --os=none --cpu=none @luxorium\/masthead/);
   // The resolver tries <platform>-<arch>, then the musl build.
   const asked: string[] = [];
   const found = sdkBinaryPackage('linux', 'arm64', (id) => {

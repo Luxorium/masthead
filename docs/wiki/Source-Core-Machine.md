@@ -46,6 +46,7 @@ Why a `waiting` agent is not finished. Several can hold at once.
 | `run: { ms, since? }` | Run-time clock for the current piece of work: counts only `running` with no approval open. `since` is set while the clock runs. |
 | `liveSince?` | Awake time it last became live (queued, running or waiting). |
 | `stoppedByPerson` | The person stopped it while it was working; other agents may not wake it. Saved with the conversation. |
+| `archived?` | Archived by a team compaction: a finished helper out of the team, never woken until the person restores it. Saved (the shell keeps the time in `AgentInfo.archived`). See [Compact team](Compact-Team.md). |
 
 ### `UsageLimit`
 
@@ -78,6 +79,8 @@ A union on `type`:
 | `Woken` | `by: 'person' \| 'agent'`, `parentCanReceive` | yes |
 | `Restored` | | no (`Conversation.restore()` converts the saved statuses itself) |
 | `Status` | `status: AgentStatus` | yes: the runtime changed the agent's status itself |
+| `Archive` | | yes (`archiveAndCompact()`, a team compaction) |
+| `Unarchive` | | yes (`restoreAgent()`, the person restores it) |
 
 The events marked "no" are handled by `step()` and tested in `test/machine.test.ts`, but `server/core/conversation.ts` does not send them (checked by searching for each `type:` literal).
 
@@ -143,7 +146,7 @@ What the shell tells `step()` about the world:
 
 Returns `{ state, effects }`. The input state is not changed (the invariant tests check this).
 
-1. **Ended guard.** An `ended` agent reacts only to `Woken`, `Restored`, `Input` and a `Status` of `queued` or `running`; anything else is stale news and returns `prev` with no effects.
+1. **Archived guard, then ended guard.** An agent with `archived` set reacts only to `Unarchive`; every other event (`Woken`, `Input` and `Status` included) returns `prev` with no effects. An `ended` agent reacts only to `Woken`, `Restored`, `Input`, `Archive`, `Unarchive` and a `Status` of `queued` or `running`; anything else is stale news and returns `prev` with no effects.
 2. **Inner helpers** (closures over the copy `s` and the effect list):
    - `endAs(kind, error?, by?)`: phase `ended`, sets `end`, clears `owesReport`, all holds and `limitStreak`, emits `end`. No `releaseSlot`: the runtime's `end()` gives the slot back.
    - `finish(kind, text, error?)`: emits `stopChildren` if it has children, `endAs()`, `setEffortLow` with automatic effort, then `report` if a report was owed (for a failure: "The agent failed: <error>" plus "Its last message:" and the text) or `childEndedQuietly` otherwise.
@@ -157,13 +160,14 @@ Returns `{ state, effects }`. The input state is not changed (the invariant test
    - `Stop` on the lead ends its pause, drops what was held and calls `released()`; the lead never ends. On a live sub-agent: `stoppedByPerson` if `by` is `person`, `stopChildren` with the same `why`, `dropHeld`, `endAs('stopped', why, by)`, a notice, then `report` only for the person's stop with a report owed, `childEndedQuietly` for other stops, and nothing for `restart`.
    - `Woken` by the person clears `stoppedByPerson`. An ended sub-agent goes back to `queued` with its run clock reset and owes a report if `parentCanReceive`.
    - `Status` (the runtime's own change): `waiting`/`idle` are taken as they are. An end status makes the lead `waiting` or `idle` instead (**the lead never ends**), and is **ignored for a `queued` state**: that is a wake-up the runtime has not shown yet. Otherwise the agent ends with no effects (this is how a shutdown outside the machine is recorded).
+   - `Archive`: only for a sub-agent in phase `ended`: sets `archived`, clears `owesReport`, emits `save`. Ignored for the lead and for an agent that is not ended. `Unarchive` clears `archived` and emits `save`; the phase stays `ended`, so a later `Woken` follows the usual path.
    - `Restored`: clears holds, streak, report debt and run clock; the lead goes `idle`; a sub-agent that was live ends `stopped` with "Masthead was closed while this agent was working." and `by: 'restart'`.
 4. **Bookkeeping after every event:** sets `liveSince` when it becomes live (clears it when not); starts or stops the run clock (`running` with no approvals open); sets or clears `backgroundSince` for an agent waiting on background work alone, however it got there; emits `save` when `stoppedByPerson` changed.
 
 ## Tests
 
-`test/machine.test.ts` (30 tests): one per row of the table, two "fix" regressions (the background cap starting when a child ends; a pause ending during a person's turn keeps the clock on) and two invariant sweeps that run many event sequences and check that a waiting sub-agent always has a hold, the lead never ends, an ended agent holds nothing and `step()` is pure. Not run for this page; read only.
+`test/machine.test.ts`: one test per row of the table, two "fix" regressions (the background cap starting when a child ends; a pause ending during a person's turn keeps the clock on), "archive: only a finished helper is archived; nothing but Unarchive changes it; never the lead", and two invariant sweeps that run many event sequences and check that a waiting sub-agent always has a hold, the lead never ends, an ended agent holds nothing and `step()` is pure. Not run for this page; read only.
 
 ## Related pages
 
-[State machine](State-Machine.md) · [server/core/conversation.ts](Source-Core-Conversation.md) · [Agent life cycle](Agent-Life-Cycle.md) · [Team rules](Team-Rules.md)
+[State machine](State-Machine.md) · [Compact team](Compact-Team.md) · [server/core/conversation.ts](Source-Core-Conversation.md) · [Agent life cycle](Agent-Life-Cycle.md) · [Team rules](Team-Rules.md)
