@@ -16,7 +16,7 @@ The text is built from these parts:
 |---|---|---|
 | Identity | always | **Lead:** "You are "alpha", the lead agent in Masthead…". The person talks to it, and other agents reach the person through it. Every agent has a name from the phonetic alphabet (alpha, then bravo, charlie, …), and the person may refer to any of them by name. **Others:** its name, its model label with the right article ("an Opus 5.5 agent"), and the name of the agent that started it. |
 | Reporting | not the lead | Its last message when it finishes is its report to its parent, and all the parent sees. It should give the answer first, then file paths, what it checked and what it could not confirm. Keep it short; put bulky output in a file and give the path. Give line numbers relative to each file. |
-| No questions to the person | not the lead | It cannot ask the person anything. If blocked, it asks its parent with `send_message`. |
+| No questions to the person | not the lead | It cannot ask the person anything. If blocked, it asks its parent "with send_message and wait: true". |
 | Delegation | it has a child tier with `max > 0` | It can start agents of the child tier with `spawn_agent`; at most N run at once and more wait in a queue. Delegate work that splits into independent pieces, or reading that would fill its context; do small things itself. For work a finished agent already has the context for, `send_message` it (it resumes with what it read) instead of starting a new one. A child knows only what its task says. `spawn_agent` returns at once and reports arrive later in `<agent-report>` tags. End the turn if there is nothing else to do, and never invent a result. Check what comes back. |
 | Delegation off | it has a child tier with `max` 0 | Starting that tier is switched off in the settings, so it does the work itself. |
 | Effort | `settings.autoEffort` is on | "You run at X thinking effort", where X is the `effort` option (`launch()` passes the agent's current level; `low` if left out). Low keeps simple work fast; use `set_effort` before work that needs careful reasoning, and go back down afterwards. |
@@ -34,7 +34,7 @@ The prompt is built each time a process is launched, so it reflects the settings
 
 Used by `Conversation.report()`.
 
-## `messageEnvelope(from, tier, text, replyHint = false)`
+## `messageEnvelope(from, tier, text, hint?)`
 
 ```text
 <agent-message from="bravo" tier="opus">
@@ -43,7 +43,7 @@ Used by `Conversation.report()`.
 To answer, use send_message to "bravo".
 ```
 
-The last line is added only when `replyHint` is true. `Conversation.message()` sets it when the sender is not the target's parent; a parent's message is answered by the target's report, so it needs no reply line, and leaving the line out avoids acknowledgement turns.
+`hint` is `'reply' | 'wait'` or left out. With `'reply'` the last line is "To answer, use send_message to "bravo"."; with `'wait'` it is ""bravo" is waiting for your answer: reply with send_message to "bravo"."; with no hint there is no line. `Conversation.message()` passes `'wait'` when the sender waits for the answer (send_message with `wait: true`, counted only toward its parent or the lead), otherwise `'reply'` when the sender is not the target's parent. A parent's message is answered by the target's report, so it needs no reply line, and leaving the line out avoids acknowledgement turns.
 
 Used by:
 

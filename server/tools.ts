@@ -7,7 +7,7 @@ import { withArticle } from './prompts.js';
 /** What the tools can do; implemented by the conversation. Every method returns the text the agent sees. */
 export interface TeamActions {
   spawn(parent: Agent, title: string, task: string, effort: Effort | undefined): string;
-  message(from: Agent, to: string, text: string): string;
+  message(from: Agent, to: string, text: string, wait?: boolean): string;
   list(viewer: Agent): string;
   stop(caller: Agent, name: string): string;
   setOwnEffort(agent: Agent, level: Effort, reason: string): string;
@@ -34,8 +34,14 @@ export function teamTools(agent: Agent, team: TeamActions): McpSdkServerConfigWi
     tool(
       'send_message',
       'Send a short message to another agent in this conversation by name, e.g. "charlie" ("lead" and "parent" also work). A finished agent resumes with its context to read it. Use it to ask a question, pass on a finding or answer a message. It returns once delivered; any answer arrives later as a message.',
-      { to: z.string().min(1).max(80), message: z.string().min(1).max(20_000) },
-      async (a) => reply(team.message(agent, a.to, a.message)),
+      agent.tier === 'lead'
+        ? { to: z.string().min(1).max(80), message: z.string().min(1).max(20_000) }
+        : {
+            to: z.string().min(1).max(80),
+            message: z.string().min(1).max(20_000),
+            wait: z.boolean().optional().describe('You need the answer to continue: end your turn and you resume when it arrives. Parent or lead only'),
+          },
+      async (a) => reply(team.message(agent, a.to, a.message, (a as { wait?: boolean }).wait === true)),
     ),
     tool(
       'list_agents',

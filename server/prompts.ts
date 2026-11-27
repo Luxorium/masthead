@@ -32,7 +32,7 @@ export function systemAppend(opts: {
     lines.push(
       `You are "${name}", ${withArticle(label(tier))} agent in Masthead, a local app that runs a tiered team of Claude agents. "${parentName}" started you and gave you your task.`,
       `Your last message when you finish is your report to "${parentName}", and it is all they see of your work. Lead with the answer, then give file paths, what you checked and what you could not confirm. Keep it short; write bulky output to a file and give the path. Give line numbers relative to each file.`,
-      `You cannot ask the person anything. If you are blocked, ask "${parentName}" with send_message.`,
+      `You cannot ask the person anything. If you are blocked, ask "${parentName}" with send_message and wait: true.`,
     );
   }
 
@@ -76,8 +76,12 @@ export function reportEnvelope(from: string, tier: Tier, status: string, text: s
   return `<agent-report from="${attr(from)}" tier="${tier}" status="${attr(status)}">\n${body}\n</agent-report>`;
 }
 
-/** `replyHint`: add a line saying how to answer; left out when the answer travels anyway (in a report). */
-export function messageEnvelope(from: string, tier: Tier, text: string, replyHint = false): string {
-  const hint = replyHint ? `\nTo answer, use send_message to "${attr(from)}".` : '';
-  return `<agent-message from="${attr(from)}" tier="${tier}">\n${escapeBody(text.trim())}\n</agent-message>${hint}`;
+/**
+ * `hint`: a line after the envelope. `reply` says how to answer (left out when the answer travels in a
+ * report anyway); `wait` also says the sender is waiting for the answer.
+ */
+export function messageEnvelope(from: string, tier: Tier, text: string, hint?: 'reply' | 'wait'): string {
+  const name = attr(from);
+  const line = hint === 'wait' ? `\n"${name}" is waiting for your answer: reply with send_message to "${name}".` : hint === 'reply' ? `\nTo answer, use send_message to "${name}".` : '';
+  return `<agent-message from="${attr(from)}" tier="${tier}">\n${escapeBody(text.trim())}\n</agent-message>${line}`;
 }

@@ -1,3 +1,4 @@
+import { displayName } from '../../../shared/protocol.ts';
 import type {
   AgentInfo,
   AppState,
@@ -426,10 +427,22 @@ export function shortPath(path: string, home: string | undefined): string {
   return home && (path === home || path.startsWith(home + '/')) ? '~' + path.slice(home.length) : path;
 }
 
+/**
+ * The words for what an agent is doing, wherever the page shows one (team panel, team map). A new
+ * sub-state of a status belongs here, as one line.
+ */
+export function statusWords(a: AgentInfo): string {
+  if (a.status === 'waiting' && a.waitingFor) return `Waiting for an answer from ${displayName(a.waitingFor)}`;
+  if (a.status === 'running') return a.activity ?? 'Working';
+  if (a.status === 'failed') return a.error ? `Failed: ${a.error}` : 'Failed';
+  return STATUS_LABEL[a.status];
+}
+
 export const STATUS_LABEL: Record<AgentInfo['status'], string> = {
   queued: 'Queued',
   running: 'Working',
-  waiting: 'Waiting on its agents',
+  // Waiting on agents it started, or on a command it left running in the background.
+  waiting: 'Waiting',
   idle: 'Idle',
   done: 'Done',
   failed: 'Failed',

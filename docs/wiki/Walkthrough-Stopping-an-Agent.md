@@ -41,18 +41,6 @@ When the process ends, `consume()` sees `closing` is set and does not report a l
 
 An agent stopped while it was still queued, or while its old process was exiting, is never launched afterwards. `end()` bumps the agent's generation counter; when the slot (or the old process's exit) arrives, `ensureProcess()` sees the counter changed, does not call `launch()`, and gives back a slot that was granted in the meantime. Without this, stopping one queued agent could free a slot that went straight to another agent already being stopped.
 
-## The person asks for a safe shut-down
-
-Each live sub-agent's box on the team map has an ✕ button (`web/src/lib/TeamMap.svelte`). The first press sends `close_agent`. `Conversation.closeAgent` (`server/conversation.ts`) then:
-
-1. Does nothing for the lead, for an agent that is not live, or for one already closing. A queued agent has nothing to finish, so it goes through `stopAgent` as above.
-2. Sets `closing` on the agent's `AgentInfo` and adds a notice to its transcript. Nothing is cut off.
-3. Delivers a message to the agent that started it, as text from the person: have the agent stop at a safe point, leave its work usable and report, or use `stop_agent` if nothing is worth finishing. If that agent cannot receive (it is neither the lead nor live), the request goes to the agent itself.
-
-While `closing` is set the box reads "Shutting down safely…" and the ✕ turns red; pressing it again sends `stop_agent`, the forceful stop described in the first section. How the shut-down goes is up to the owning agent: Masthead does not enforce a time limit. When the agent stops being live, however it ended, `agentChanged` clears `closing` and marks it as stopped by the person, so other agents cannot wake it.
-
-Tried in a browser on a test server with Haiku agents on 2026-11-26: the owner wound the agent down and it ended as done; a second press stopped it at once.
-
 ## The person stops the lead or everything
 
 - `{t:'stop_agent'}` with the lead's id: `stopTree()` on each of the lead's children, then `lead.interrupt()`, then `settle(lead)`. The lead keeps its session and process. `interrupt()` only acts if the lead is `running` (its turn then ends as interrupted); if the lead was `waiting` on those children, `settle()` moves it to `idle`.

@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { displayName, type Item } from '../../../shared/protocol.ts';
   import { handleCopyClick, renderMarkdown } from './markdown.ts';
-  import { STATUS_LABEL, store } from './store.svelte.ts';
+  import { STATUS_LABEL, statusWords, store } from './store.svelte.ts';
   import { toolLine } from './tools.ts';
 
   let scroller = $state<HTMLDivElement | null>(null);
@@ -158,7 +158,8 @@
       {:else if agent.status === 'queued'}
         <div class="working"><span class="dot queued"></span>Waiting for a free slot…</div>
       {:else if agent.status === 'waiting'}
-        <div class="working"><span class="dot waiting"></span>Waiting on {store.childrenOf(agent.id).filter((c) => c.status === 'running' || c.status === 'queued' || c.status === 'waiting').length} agent(s)</div>
+        {@const live = store.childrenOf(agent.id).filter((c) => c.status === 'running' || c.status === 'queued' || c.status === 'waiting').length}
+        <div class="working"><span class="dot waiting"></span>{agent.waitingFor ? statusWords(agent) : live > 0 ? `Waiting on ${live} agent${live > 1 ? 's' : ''}` : statusWords(agent)}</div>
       {/if}
     {/if}
     {#if store.creating}

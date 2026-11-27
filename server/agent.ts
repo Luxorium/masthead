@@ -43,6 +43,12 @@ export interface AgentHost {
   turnEnded(agent: Agent, outcome: TurnOutcome): void;
   /** The Claude Code process went away without being asked to. */
   processLost(agent: Agent, message: string): void;
+  /**
+   * The agent's background commands have all ended, its last turn is over and Claude Code did not
+   * start a new turn within a short grace time. A host that kept the agent waiting for that work
+   * should now end it as usual.
+   */
+  backgroundIdle?(agent: Agent): void;
   /** Starts a Claude Code session. Only tests set this; otherwise the Agent SDK's `query` is used. */
   query?: typeof query;
 }
@@ -94,6 +100,12 @@ const DISALLOWED = [
 /** What Claude Code writes when the session to resume no longer exists (seen in Claude Code 2.1.331). */
 const MISSING_SESSION = /No conversation found with session ID/;
 const STDERR_KEEP = 4_000;
+/**
+ * How long to wait, after the last background command ends, for the turn Claude Code starts by
+ * itself to tell the agent about it. In a real run (Claude Code 2.1.331) system/init followed the
+ * empty background_tasks_changed within 0.1 s.
+ */
+export const BACKGROUND_GRACE_MS = 3_000;
 
 export function clip(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}\n… (${text.length - limit} more characters not shown)`;
@@ -180,6 +192,19 @@ export class Agent {
   /** Whether this Claude Code names the messages a turn consumed (newer versions do). */
   private namesConsumed = false;
   private stderrTail = '';
+  /**
+   * Background commands (and other non-ambient tasks) the current process reports as running, from
+   * its latest system/background_tasks_changed. That message carries the full set each time; the
+   * set is per process, so it empties whenever a process starts or ends.
+   */
+  private background = new Set<string>();
+  private idleTimer: NodeJS.Timeout | null = null;
+  /** Between the first sign of a turn (init, stream, assistant) and its result. */
+  private inTurn = false;
+  /** The autoEffort setting the current process's tools were built with. */
+  private launchedAutoEffort: boolean | null = null;
+  /** Settings changed in a way the running process cannot take; relaunch it before its next turn. */
+  private stale = false;
 
   constructor(
     readonly info: AgentInfo,
@@ -214,6 +239,10 @@ export class Agent {
   get pendingSeed(): string | null {
     return !this.sessionId && typeof this.seed === 'string' ? this.seed : null;
   }
+  /** True while Claude Code runs commands it put in the background for this agent. */
+  get hasBackgroundWork(): boolean {
+    return this.background.size > 0;
+  }
   /** True while something it was sent has not been answered by a finished turn. */
   get busy(): boolean {
     return this.unanswered.size > 0 || this.starting;
@@ -243,6 +272,16 @@ export class Agent {
   /** Sends a message into the session, starting or resuming it if needed. */
   deliver(content: Content): void {
     const msg = this.userMessage(content);
+    if (this.stale && this.input && !this.closing && this.unanswered.size === 1 && !this.inTurn && !this.hasBackgroundWork) {
+      // Between turns: let the old process exit and resume the same session with the new settings.
+      // ensureProcess keeps the slot (the scheduler sees the same agent) and waits for the exit.
+      this.stale = false;
+      this.closing = true;
+      this.input.close();
+      this.backlog.push(msg);
+      this.ensureProcess();
+      return;
+    }
     if (this.input && !this.closing) {
       this.input.push(msg);
       this.sent.push(msg);
@@ -361,6 +400,10 @@ export class Agent {
     };
     if (this.sessionId) options.resume = this.sessionId;
     this.resumedFrom = this.sessionId;
+    this.launchedAutoEffort = settings.autoEffort;
+    this.stale = false;
+    this.inTurn = false;
+    this.clearBackground();
     this.sawInit = false;
     this.sessionMissing = false;
     this.stderrTail = '';
@@ -407,6 +450,8 @@ export class Agent {
     this.costBefore = this.info.usage.costUsd;
     this.setDraft(null, true);
     this.closeOpenTools();
+    this.inTurn = false;
+    this.clearBackground();
     if (this.closing) return; // we asked it to end
     if (this.resumeWasMissing(failure)) {
       this.startFresh();
@@ -458,6 +503,7 @@ export class Agent {
           const init = m as { session_id: string; model: string };
           this.sawInit = true;
           this.freshRetried = false;
+          this.turnStarted();
           if (this.sessionId !== init.session_id) {
             this.sessionId = init.session_id;
             this.seed = null;
@@ -468,16 +514,20 @@ export class Agent {
         } else if (sub === 'status') {
           const st = (m as { status?: string | null }).status;
           if (st === 'compacting') this.setActivity('Compacting its context');
+        } else if (sub === 'background_tasks_changed') {
+          this.backgroundChanged((m as { tasks?: Array<{ task_id: string; ambient?: boolean }> }).tasks ?? []);
         } else if (sub === 'compact_boundary') {
           this.addItem({ kind: 'notice', level: 'info', text: 'Earlier context was summarized to free up space.' });
         }
         return;
       }
       case 'stream_event':
+        this.turnStarted();
         this.handleStream(m.event as unknown as Record<string, any>);
         return;
       case 'assistant': {
         this.setDraft(null, true);
+        this.turnStarted();
         if (typeof (m as { user_message_uuid?: unknown }).user_message_uuid === 'string') this.namesConsumed = true;
         const err = (m as { error?: string }).error;
         const blocks = (m.message.content ?? []) as unknown as Array<Record<string, any>>;
@@ -598,6 +648,7 @@ export class Agent {
     if (consumed.length > 0 || this.namesConsumed) for (const id of consumed) this.unanswered.delete(id);
     else this.unanswered.clear();
 
+    this.inTurn = false;
     this.info.usage.turns += 1;
     if (typeof m.total_cost_usd === 'number') this.info.usage.costUsd = this.costBefore + m.total_cost_usd;
     this.closeOpenTools();
@@ -625,8 +676,46 @@ export class Agent {
       if (error) this.addItem({ kind: 'notice', level: 'error', text: error });
       return;
     }
-    this.runTexts = [];
+    // With background work still running the run is not over: Claude Code starts a turn by itself
+    // when it ends, and that turn's outcome carries this turn's text too.
+    if (!this.hasBackgroundWork) this.runTexts = [];
     this.host.turnEnded(this, { text, error, interrupted: wasInterrupted });
+  }
+
+  private turnStarted(): void {
+    this.inTurn = true;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+  }
+
+  private backgroundChanged(tasks: Array<{ task_id: string; ambient?: boolean }>): void {
+    const had = this.background.size > 0;
+    this.background = new Set(tasks.filter((t) => !t.ambient).map((t) => t.task_id));
+    const has = this.background.size > 0;
+    if (had !== has) this.host.agentChanged(this);
+    if (had && !has) this.checkIdleSoon();
+  }
+
+  private clearBackground(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    this.background.clear();
+  }
+
+  /**
+   * After background work ends, Claude Code normally starts a turn by itself to report it, and that
+   * turn's result ends the run. If no turn starts within the grace time, tell the host, so an agent
+   * kept waiting for the work never waits for ever.
+   */
+  private checkIdleSoon(): void {
+    if (this.idleTimer || this.hasBackgroundWork || !this.q || this.closing) return;
+    const q = this.q;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this.q !== q || this.closing || this.inTurn || this.busy || this.hasBackgroundWork) return;
+      this.host.backgroundIdle?.(this);
+    }, BACKGROUND_GRACE_MS);
+    this.idleTimer.unref?.();
   }
 
   private setActivity(activity: string | undefined): void {
@@ -682,6 +771,7 @@ export class Agent {
     this.backlog = [];
     this.unanswered.clear();
     this.runTexts = [];
+    this.clearBackground();
     if (status === 'done') this.input?.close();
     else {
       try {
@@ -703,6 +793,7 @@ export class Agent {
     this.backlog = [];
     this.unanswered.clear();
     this.runTexts = [];
+    this.clearBackground();
     try {
       this.q?.close();
     } catch {
@@ -719,6 +810,28 @@ export class Agent {
     this.q?.applyFlagSettings({ effortLevel: level }).catch(() => {
       // The level still applies the next time the session starts.
     });
+  }
+
+  /**
+   * Applies changed settings to a running process. Effort takes effect from the next request; the
+   * lead's model changes through setModel. A change to automatic effort changes the agent's tools,
+   * which are built at launch, so the process is relaunched (same session) before its next turn.
+   * An agent without a process needs nothing: launch() reads the settings.
+   */
+  applySettings(settings: Settings): void {
+    if (!this.q || this.closing) return;
+    const ceiling = settings.tiers[this.tier].effort;
+    const effort = settings.autoEffort ? capEffort(this.info.effort, ceiling) : ceiling;
+    if (effort !== this.info.effort) this.setEffort(effort);
+    if (this.tier === 'lead' && settings.tiers.lead.model !== this.info.model) {
+      const q = this.q;
+      this.info.model = settings.tiers.lead.model;
+      this.host.agentChanged(this);
+      q.setModel(this.info.model).catch(() => {
+        if (this.q === q) this.stale = true;
+      });
+    }
+    if (this.launchedAutoEffort !== null && settings.autoEffort !== this.launchedAutoEffort) this.stale = true;
   }
 
   /** Reads the real size of the context window from Claude Code, when a process is up. */

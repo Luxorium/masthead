@@ -133,6 +133,9 @@
   }
 </script>
 
+{#if direct && agent?.status === 'waiting' && agent.waitingFor}
+  <p class="hint">{displayName(agent.name)} is waiting for an answer from {displayName(agent.waitingFor)}. What you send here reaches it as that answer.</p>
+{/if}
 <div
   class="composer"
   class:dragging
@@ -207,6 +210,11 @@
 </div>
 
 <style>
+  .hint {
+    margin: 0 6px 6px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
   .composer {
     border: 1px solid var(--border-strong);
     border-radius: 16px;

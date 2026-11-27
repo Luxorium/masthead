@@ -12,7 +12,8 @@
     type Settings,
     type Tier,
   } from '../../../shared/protocol.ts';
-  import { STATUS_LABEL, fmtTokens, shortPath, store } from './store.svelte.ts';
+  import StopControl from './StopControl.svelte';
+  import { fmtTokens, shortPath, statusWords, store } from './store.svelte.ts';
 
   const WORKERS: Tier[] = ['opus', 'sonnet', 'haiku'];
   const ABOVE: Record<Tier, Tier | null> = { lead: null, opus: 'lead', sonnet: 'opus', haiku: 'sonnet' };
@@ -87,11 +88,11 @@
         <span class="dot {a.status}"></span>
         <span class="agent-text">
           <span class="agent-name">{displayName(a.name)} <span class="tier-badge tier-{a.tier}">{modelLabel(a.model).split(' ')[0]}</span>{#if a.title}<span class="agent-title"> {a.title}</span>{/if}</span>
-          <span class="agent-sub">{a.status === 'running' && a.activity ? a.activity : STATUS_LABEL[a.status]}{a.status === 'failed' && a.error ? `: ${a.error}` : ''}</span>
+          <span class="agent-sub">{statusWords(a)}</span>
         </span>
       </button>
       {#if isLive(a)}
-        <button class="stop" onclick={() => store.convId && store.send({ t: 'stop_agent', convId: store.convId, agentId: a.id })} title="Stop this agent and everything under it" aria-label="Stop {displayName(a.name)}">■</button>
+        <StopControl agent={a} placement="row" />
       {/if}
     </div>
     {@render branch(a.id, depth + 1)}
@@ -190,7 +191,7 @@
             <span class="dot {lead.status}"></span>
             <span class="agent-text">
               <span class="agent-name">{displayName(lead.name)} <span class="tier-badge tier-lead">{modelLabel(lead.model).split(' ')[0]}</span></span>
-              <span class="agent-sub">{lead.status === 'running' && lead.activity ? lead.activity : STATUS_LABEL[lead.status]}</span>
+              <span class="agent-sub">{statusWords(lead)}</span>
             </span>
           </button>
         </div>
@@ -407,17 +408,5 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .stop {
-    flex: none;
-    width: 22px;
-    height: 22px;
-    border-radius: 5px;
-    font-size: 9px;
-    color: var(--muted);
-  }
-  .stop:hover {
-    background: color-mix(in srgb, var(--bad) 15%, transparent);
-    color: var(--bad);
   }
 </style>

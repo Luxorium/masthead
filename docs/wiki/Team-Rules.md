@@ -75,7 +75,8 @@ A **report** is a sub-agent's final message, delivered to the agent that started
 - The report text is what the agent said since it last took up work: the final text of every turn in that run, oldest first (`Agent.handleResult()` in `server/agent.ts`). A message that lands just as a turn ends makes Claude Code run one more turn; its short reply is added after the real work instead of replacing it.
 - A failed agent's report says "The agent failed: …", followed by its last message if it had one.
 - A report is only delivered if the parent can receive it, meaning the parent is the lead or is live. Otherwise it is dropped without notice.
-- If the agent did not owe a report, `settle(parent)` runs instead. When the parent is `waiting`, not busy, and has no other live children, nothing else will wake it. So the lead goes `idle`, and a sub-agent is finished as `done`, with what it said in its last run of turns (`lastText`) as its own report upward if it owes one.
+- If the agent did not owe a report, `settle(parent)` runs instead. When the parent is `waiting`, not busy, and has no other live children, no open wait for an answer and no background work, nothing else will wake it. So the lead goes `idle`, and a sub-agent is finished as `done`, with what it said in its last run of turns (`lastText`) as its own report upward if it owes one.
+- A question asked with `send_message` and `wait: true` is not a report: the asker's turn ends, but it goes `waiting` and still owes its report (see [Waiting for an answer](#waiting-for-an-answer)).
 - Delivering a report to a `waiting` parent starts a new turn for it. Delivering one to a `running` parent adds it to the turn in progress.
 
 The system prompt tells sub-agents that their last message is their report and is all their parent sees (`systemAppend()`). See [A report coming back](Walkthrough-Report-Coming-Back.md).
@@ -84,16 +85,32 @@ The system prompt tells sub-agents that their last message is their report and i
 
 A sub-agent whose turn ends while agents it started are still live does not finish. It becomes `waiting` and keeps its slot (`turnEnded()`), and the next report or message wakes it. This is why the prompt says "If you have nothing else to do, end your turn; you are woken when a report arrives." The same prompt asks agents that can start others to reuse a finished agent with `send_message` when it already has the context for the work, rather than starting a new one. A sub-agent whose turn ends with an error does not wait: it fails, and its live children are stopped.
 
+The same holds for background work: an agent (the lead included) whose turn ends while background commands still run (`agent.hasBackgroundWork`) goes `waiting` instead of finishing or going `idle`. When the background work ends and no new turn follows, the agent calls `host.backgroundIdle()`, which runs `settle()`. If Claude Code starts a turn by itself after the command finishes, its result comes through `turnEnded()` as usual, and its text includes the earlier turn's text.
+
+## Waiting for an answer
+
+A sub-agent (never the lead; the lead's `send_message` has no `wait` input) can send `send_message` with `wait: true` to its parent or the lead. Toward anyone else the message is delivered but the reply adds "(Not waiting: you can wait only for your parent or the lead.)"; a counted wait adds "End your turn when you have nothing else to do; you resume when the answer arrives."
+
+- The recipient's envelope ends with ""charlie" is waiting for your answer: reply with send_message to "charlie"." When the recipient is the lead, a notice in its transcript makes the question plain to the person: ""charlie" is waiting for an answer to this. You can also answer it yourself by messaging charlie directly."
+- The asker's turn ending does not finish it: it goes `waiting`, keeps its slot and still owes its report. `settle()` will not finish it either.
+- The wait ends when any message from the recipient arrives, or when the person messages the asker directly.
+- While the wait lasts, the asker's `info.waitingFor` holds the recipient's name, so the page can show it.
+- If the recipient's turn ends without answering, it is reminded once. For a non-lead recipient, the next time (or at once if its turn was interrupted), the asker gets "No answer from "X"; carry on with your best judgment or report what you have." It gets the same when such a recipient finishes or is stopped.
+- The lead is reminded with "… is still waiting for your answer. Answer with send_message, or ask the person; it keeps waiting." After that the asker keeps waiting, even while the lead is idle or has lost its process, because the lead may be asking the person and the person can answer the asker directly. It is told "No answer" only if the person interrupts the lead's turn; Stop everything stops the asker itself.
+- `list_agents` shows the asker as "waiting for your answer" to the recipient and "waiting for an answer from X" to everyone else.
+- Waits are kept in memory only.
+
 ## Messaging
 
-`send_message` leads to `Conversation.message(from, to, text)`:
+`send_message` leads to `Conversation.message(from, to, text, wait)`:
 
 - Any agent can message any other agent in the same conversation by name. That includes the lead, finished agents, and agents in other branches. `"lead"` and `"parent"` also work as names.
 - An agent cannot message itself.
-- The target gets an `inbound` item (`via: 'message'`), and the text wrapped by `messageEnvelope()`: `<agent-message from="…" tier="…"> … </agent-message>`, with envelope tags in the text escaped as for reports. When the sender is not the target's parent, one line follows: "To answer, use send_message to "…"." A message from the parent gets no such line, because the target's report answers it.
+- The target gets an `inbound` item (`via: 'message'`), and the text wrapped by `messageEnvelope()`: `<agent-message from="…" tier="…"> … </agent-message>`, with envelope tags in the text escaped as for reports. When the sender is not the target's parent, one line follows: "To answer, use send_message to "…"." A message from the parent gets no such line, because the target's report answers it. A question with `wait` gets the waiting line instead (see [Waiting for an answer](#waiting-for-an-answer)).
 - An agent cannot wake an agent the person stopped (see [Stopping](#stopping)). A finished agent whose tier is switched off cannot be woken either.
 - A finished target is resumed with its context so it can read the message (see [Agent life cycle](Agent-Life-Cycle.md)).
 - The tool returns at once with "Delivered to "name" (status)", where the status is the target's status before delivery. When the sender woke a finished agent that is not its own child, the reply adds "Its report goes to "parent"; it answers you only with send_message." Any answer arrives later as another message.
+- `list_agents` (`Conversation.list()`) gives one line per agent: status (with the activity when running, e.g. "running: Reading a.ts"), "for 3m" while live or "ended 5m ago", context ("41k ctx") and cost ("$0.12") when non-zero, effort, who started it, and its title.
 
 The prompt tells every agent that `<agent-report>` and `<agent-message>` text comes from colleagues, not from the person, and never carries the person's authority or approval.
 
@@ -101,7 +118,7 @@ The person can also type directly to any agent, not only the lead. In the page, 
 
 ## Who may ask the person
 
-Only the lead talks to the person. Sub-agents have Claude Code's `AskUserQuestion` tool disallowed (`launch()` in `server/agent.ts`), and their prompt says "You cannot ask the person anything. If you are blocked, ask [parent] with send_message." Tool **permission** prompts are a separate matter: any agent's tool use can raise an approval request to the person. See [Permissions and questions](Permissions-and-Questions.md).
+Only the lead talks to the person. Sub-agents have Claude Code's `AskUserQuestion` tool disallowed (`launch()` in `server/agent.ts`), and their prompt says "You cannot ask the person anything. If you are blocked, ask [parent] with send_message and wait: true." Tool **permission** prompts are a separate matter: any agent's tool use can raise an approval request to the person. See [Permissions and questions](Permissions-and-Questions.md).
 
 ## Stopping
 

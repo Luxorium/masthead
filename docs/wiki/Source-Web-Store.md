@@ -84,7 +84,8 @@ When a socket closes, messages sent but not yet accepted go back into the compos
 
 - `fmtTokens(n)`: "850", "12k", "1.25M".
 - `shortPath(path, home)`: replaces the home folder with `~`.
-- `STATUS_LABEL`: the words shown for each status: Queued, Working, Waiting on its agents, Idle, Done, Failed, Stopped.
+- `STATUS_LABEL`: the words for each status: Queued, Working, Waiting, Idle, Done, Failed, Stopped. "Waiting" covers both agents it started and a command left running in the background.
+- `statusWords(agent)`: the one place a status becomes words for the panel and the map. It adds the sub-states: "Waiting for an answer from <Name>" when `waitingFor` is set, the activity while running, "Failed: <error>". A new sub-state is one line here.
 
 ## Related pages
 

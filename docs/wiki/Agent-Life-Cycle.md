@@ -18,7 +18,7 @@ This page follows one agent from creation to its end, names each **status** it c
 |---|---|
 | `queued` | Waiting for a free slot in its tier. |
 | `running` | A turn is in progress. |
-| `waiting` | Its turn ended, but agents it started are still live, so it is not finished. It keeps its slot and its process. |
+| `waiting` | Its turn ended, but agents it started are still live (or, for a sub-agent, commands it put in the background still run), so it is not finished. It keeps its slot and its process. |
 | `idle` | Lead only: nothing in progress. |
 | `done` | A sub-agent finished normally. Its process is closed and slot returned. |
 | `failed` | A sub-agent ended with an error, or its process was lost. |
@@ -100,8 +100,9 @@ Each SDK message is turned into app state:
 
 | SDK message | What `Agent.handle()` does |
 |---|---|
-| `system` / `init` | Records `session_id` as `sessionId` and drops the seed (it is now in the session). If the agent is `idle` or `waiting`, sets it `running`: the code comment says Claude Code also starts turns by itself, for instance when a background command finishes. (That this happens on an `init` message per turn is what the code assumes; it was not checked against Claude Code.) |
+| `system` / `init` | Records `session_id` as `sessionId` and drops the seed (it is now in the session). If the agent is `idle` or `waiting`, sets it `running`: the code comment says Claude Code also starts turns by itself, for instance when a background command finishes. (Seen once with a real Claude Code 2.1.331: the self-started turn begins with `init`; see 4a.) |
 | `system` / `status: compacting` | Activity line "Compacting its context". |
+| `system` / `background_tasks_changed` | Replaces the set of background tasks with the non-ambient ones listed (see 4a). |
 | `system` / `compact_boundary` | Adds an info notice: earlier context was summarized. |
 | `stream_event` | Updates usage (context size, output tokens) and the live **draft** (text or thinking being written). A new text or thinking block clears the activity line. |
 | `assistant` | Adds `text`, `thinking` and `tool` items. A tool call sets the activity line via `describeTool()`. |
@@ -119,9 +120,20 @@ Every message Masthead pushes into an agent's input gets a fresh id and is added
 
 If anything is still unanswered, more input arrived during the turn and Claude Code will run another turn for it, so the agent stays `running` (an error, if any, is shown as a notice). Only when nothing is unanswered does it call `host.turnEnded()` with the text, any error, and whether the turn was interrupted.
 
-**The text of a run.** A message that lands just as a turn ends makes Claude Code run one more turn, whose reply is often only "Noted". So the outcome's `text` is not the last turn's text but the final text of **every turn since the agent last took up work**, oldest first, joined by blank lines (`runTexts`; a turn whose text repeats the previous one is not added twice). The list is emptied when the outcome is sent, and by `end()`, `dispose()` and a lost process. `lastText`, used by `settle()`, holds the same joined text.
+**The text of a run.** A message that lands just as a turn ends makes Claude Code run one more turn, whose reply is often only "Noted". So the outcome's `text` is not the last turn's text but the final text of **every turn since the agent last took up work**, oldest first, joined by blank lines (`runTexts`; a turn whose text repeats the previous one is not added twice). The list is emptied when the outcome is sent (unless background work runs, see 4a), and by `end()`, `dispose()` and a lost process. `lastText`, used by `settle()`, holds the same joined text.
 
 This mechanism is what makes "the agent is finished" mean "it has answered everything it was sent", not just "a turn ended".
+
+### 4a. Background work
+
+Claude Code can run a command in the background (Bash with `run_in_background`). It reports the full set of running tasks in each `system`/`background_tasks_changed` message; the agent keeps the non-ambient ones (`hasBackgroundWork`). The set belongs to one process: it is emptied when a process starts or ends, and by `end()` and `dispose()`.
+
+- A turn that ends while background work runs still calls `host.turnEnded()`. The conversation keeps a sub-agent `waiting` instead of finishing it. `runTexts` is not emptied.
+- When the command ends, Claude Code starts a turn by itself: `init`, then a `result` that names no message (its `origin.kind` is `task-notification`). That result calls `turnEnded()` again, and its text includes the earlier turn's text.
+- If the set empties and no turn starts within `BACKGROUND_GRACE_MS` (3 s), the agent calls the optional `host.backgroundIdle(agent)`, so the normal ending happens.
+- If the process exits instead, the usual process-lost path runs (section 7).
+
+This sequence was checked once against a real Claude Code 2.1.331 with a throwaway script (Haiku, `sleep 20` in the background): the turn's result at 3.5 s, then the task updates, an empty `background_tasks_changed` and `init` at 22.8 s, then the self-started result. The grace timer, the idle path and the relaunch in section 10 were not run against the real Claude Code; only unit tests with a stand-in for `query` cover them (`test/agent.test.ts`).
 
 ### 5. What the conversation does: `Conversation.turnEnded()`
 
@@ -137,7 +149,7 @@ This mechanism is what makes "the agent is finished" mean "it has answered every
 `end(status, error)`:
 
 1. Cancels a queued slot request, if any.
-2. Increases the generation (so a start still waiting for a slot is dropped), marks `closing = true`, clears the backlog, `unanswered` and `runTexts`.
+2. Increases the generation (so a start still waiting for a slot is dropped), marks `closing = true`, clears the backlog, `unanswered`, `runTexts` and the background set.
 3. For `done`, closes the input stream so Claude Code finishes cleanly; for `stopped` or `failed`, closes the process at once (`q.close()`).
 4. Releases the slot and sets the status (which records `endedAt`).
 
@@ -160,6 +172,12 @@ Then `startFresh()` runs, once: it forgets the session id and seed, adds the not
 ### 9. Waking a finished agent
 
 A `done`, `failed` or `stopped` agent has no process, but it keeps its `sessionId`. `deliver()` puts the message in the backlog and calls `ensureProcess()`, which acquires a slot and launches with `resume`. If the agent never got a session (it was still queued when the app closed), its saved task (`seed`) is restored and sent first, so it still knows its job. When an agent wakes a finished sub-agent with `send_message`, the sub-agent owes its parent a fresh report (`owesReport = true` in `Conversation.message()`), whoever woke it, as long as the parent can still receive one (it is the lead or live). Agents cannot wake an agent the person stopped, and nobody can wake one whose tier is set to 0. See [Team rules](Team-Rules.md).
+
+### 10. Settings changed while an agent runs
+
+`applySettings(settings)` acts only on an agent with a live process; one without a process needs nothing, since `launch()` reads the settings. It caps the effort to a lowered ceiling (or sets the tier's fixed effort when automatic effort is off) through `setEffort()`, which uses `applyFlagSettings`. For the lead, a changed lead model goes through `Query.setModel()`; if that fails, the process is marked stale. A change of the automatic-effort switch marks the process stale, because the tools are built at launch.
+
+A stale process is relaunched only when the next message arrives between turns (nothing unanswered, no turn running, no background work): `deliver()` closes the old input and `ensureProcess()` resumes the same session in a new process, keeping the slot. It is never relaunched mid-turn; a message sent during a turn goes into the running process.
 
 ## Interrupt versus stop
 

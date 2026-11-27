@@ -1,6 +1,6 @@
 {
   "name": "masthead",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A local web app for running a tiered team of Claude agents through the Claude Code already installed on your machine.",
   "private": true,
   "type": "module",

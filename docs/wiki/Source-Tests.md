@@ -1,6 +1,6 @@
 # Tests
 
-Masthead 0.1.1 has three kinds of test in `test/`: six unit-test files, a live run and a browser test. Only the unit tests run without Claude Code. The other two spend real usage and are run by hand. `AGENTS.md` says when each one is expected.
+Masthead 0.1.2 has three kinds of test in `test/`: six unit-test files, a live run and a browser test. Only the unit tests run without Claude Code. The other two spend real usage and are run by hand. `AGENTS.md` says when each one is expected.
 
 | File | Command | Needs | What it covers |
 |---|---|---|---|
@@ -106,18 +106,50 @@ It refuses to run against port 7717, the installed app (message, exit code 2). I
 
 It drives the real page with **playwright-core**, a library that controls a browser from code, using Chromium (`CHROMIUM` variable, default `/usr/bin/chromium`) in a 1440×900 window. It runs in a dark colour scheme unless `SCHEME=light`. It saves numbered screenshots to the folder given. The file's comment says to point it at a test server whose settings use cheap models; `AGENTS.md` adds that the server should be started with its own `XDG_CONFIG_HOME` and `XDG_DATA_HOME`, never the installed one.
 
-It checks that:
+### Running it
 
-- the new-conversation screen renders, with "Team" in the panel;
-- the Opus stepper changes the limit: "More Opus 5.5 agents" changes the shown value and "Fewer" brings it back;
-- after a two-branch task is sent (with Allow clicked automatically every half second):
-  - the agents appear in the panel;
-  - the map shows at least four cards named Alpha, Bravo, Charlie and Delta;
-  - hovering a card shows its preview, with the task;
-  - opening a sub-agent from the map shows breadcrumbs and its task;
-  - reports reach the lead, and the final answer contains a Markdown table;
-- after a reload, the conversation comes back from disk and the sidebar lists it;
-- there were no page errors.
+The server's settings must make a Write ask for approval (`permissionMode: "default"`) and allow three Opus agents at once. Every tier on Haiku keeps it cheap. One way, from the project folder:
+
+```sh
+npm run build
+T=$(mktemp -d); mkdir -p $T/config/masthead $T/work $T/shots
+cat > $T/config/masthead/settings.json <<JSON
+{"tiers":{"lead":{"model":"claude-haiku-5-5","effort":"low","max":1},
+ "opus":{"model":"claude-haiku-5-5","effort":"low","max":3},
+ "sonnet":{"model":"claude-haiku-5-5","effort":"low","max":2},
+ "haiku":{"model":"claude-haiku-5-5","effort":"low","max":2}},
+ "permissionMode":"default","defaultCwd":"$T/work"}
+JSON
+XDG_CONFIG_HOME=$T/config XDG_DATA_HOME=$T/data node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED dist/server/main.js serve --port 7798 &
+XDG_DATA_HOME=$T/data node test/ui.e2e.mjs http://127.0.0.1:7798 $T/shots
+kill $(curl -s http://127.0.0.1:7798/api/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["pid"])')
+```
+
+A full run takes about half a minute. Never use port 7717 or the real `~/.config/masthead` and `~/.local/share/masthead`.
+
+### What it checks
+
+Before any agent runs:
+
+- **Sign-in**, each in a fresh browser context: with no key the page shows "…to sign this browser in" and no Try again button; with a wrong key (`?key=not-the-key`) it shows the same message with **Try again** after three refused attempts; with the right key the page loads and `key` is gone from the address bar.
+- The new-conversation screen renders, with "Team" in the panel.
+- The Opus stepper changes the limit: "More Opus 5.5 agents" changes the shown value and "Fewer" brings it back.
+- The **Usage** section renders: either "No usage reported yet" or at least one limit row.
+- **Settings popup:** Enter on the gear opens it; Escape closes it and focus returns to the gear. "Fold agent reports" is switched on and is still on after a reload. A click outside closes the popup.
+- **Composer restore:** a message of 400,001 characters is refused by the server ("too long"), and the text comes back into the box.
+
+Then one three-branch task is sent: a "shell job" Opus agent that starts a "helper job" Sonnet agent running `sleep 6; echo ready`; a "list job" that saves a list with the Write tool; and a "busy one" that runs `sleep 8` twelve times in the foreground. The test then checks that:
+
+- **Approval card:** the first card (the Write) names the asking agent, also in its accessible label; it takes focus, since nobody is typing; Allow removes it. After that, Allow is clicked automatically every half second.
+- The map shows at least four cards named Alpha, Bravo, Charlie and Delta, and hovering a card shows its preview with the task.
+- **Stop:** hovering the ■ on "busy one"'s map card shows the word "Stop", and pressing it makes the card read Stopped.
+- Opening a sub-agent from the map shows breadcrumbs and its task.
+- All three reports reach the lead, and a Markdown table is written after the last of them (interim tables do not count).
+- **Folded reports:** with the setting on, a report shows as one line (no body) and opens on click.
+- After a reload, the conversation comes back from disk and the sidebar lists it.
+- There were no page errors.
+
+Not tested: Try again actually reconnecting, a socket drop giving a message back, the 30 MB image cap, and the composer hint for an agent waiting for an answer (that needs an agent to ask its parent a question on cue).
 
 ## Related pages
 

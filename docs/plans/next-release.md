@@ -123,6 +123,6 @@ Seen by the lead and the three Opus agents during this run.
   asking for file-relative line numbers would have saved that.
 - **No signal about other writers.** Nothing told the team that another session was editing the same
   folder.
-- **Folder mismatch.** This conversation ran in `~/Office`, not the Masthead source the prompt called
+- **Folder mismatch.** This conversation ran in another folder, not the Masthead source the prompt called
   "this folder"; the lead had to find the project. The page could show the conversation's folder more
   plainly beside the composer.

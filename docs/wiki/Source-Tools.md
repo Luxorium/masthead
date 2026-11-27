@@ -15,7 +15,7 @@ Pre-approving them makes the SDK print a `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` warn
 The interface the tools call. `Conversation` implements it, and every method returns the text the agent sees.
 
 ```ts
-spawn(parent, title, task, effort?)   message(from, to, text)   list(viewer)
+spawn(parent, title, task, effort?)   message(from, to, text, wait?)   list(viewer)
 stop(caller, name)   setOwnEffort(agent, level, reason)   setAgentEffort(caller, name, level)
 autoEffort()   label(tier)
 ```
@@ -32,7 +32,7 @@ Builds the tool list for one agent. The list depends on the agent's tier and on 
 
 | Tool | Who gets it | Input | Calls |
 |---|---|---|---|
-| `send_message` | everyone | `to` (1–80 characters), `message` (1–20,000) | `team.message()` |
+| `send_message` | everyone | `to` (1–80 characters), `message` (1–20,000); for every agent but the lead also `wait?` (boolean) | `team.message()` |
 | `list_agents` | everyone | none | `team.list()` |
 | `spawn_agent` | lead, Opus, Sonnet (tiers that have a child tier) | `title` (1–60 characters, "a few words on its job, shown to the person"), `task` (1–60,000), `effort?` | `team.spawn()` |
 | `stop_agent` | lead, Opus, Sonnet | `name` (1–80) | `team.stop()` |
@@ -44,7 +44,7 @@ The input shapes are **zod** schemas. Zod is a library that describes and valida
 The tool descriptions are written for the model:
 
 - **`spawn_agent`** says the new agent gets the next name from the phonetic alphabet, and that the reply says which name.
-- **`send_message`** gives an example name ("charlie") and mentions the aliases "lead" and "parent".
+- **`send_message`** gives an example name ("charlie") and mentions the aliases "lead" and "parent". Its `wait` input (not offered to the lead) is described as: "You need the answer to continue: end your turn and you resume when it arrives. Parent or lead only".
 - **`stop_agent`** says it is only for work that is no longer wanted: a stopped agent sends no report, so it must never be used to wait for or collect a result.
 - **`set_effort`** says low is right for most work (the agent's actual level is in its system prompt) and depends on the tier. The lead is told it changes its own effort directly. Everyone else is told that raising needs approval, to keep working at the current level, and that an approved level applies by itself (no message follows).
 

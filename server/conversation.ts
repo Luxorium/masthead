@@ -36,6 +36,18 @@ export interface ConversationHost {
   cancelPermissions(agentId: string): void;
 }
 
+/** The error of an agent cut off by a shutdown or restart; `restartNote()` finds such agents by it. */
+const CLOSED_WHILE_WORKING = 'Masthead was closed while this agent was working.';
+/** What that error becomes once the lead has been told, so it is told only once. */
+const CLOSED_LEAD_TOLD = 'Masthead was closed while this agent was working. The lead was told.';
+
+/** An agent waiting for an answer from its parent or the lead (send_message with wait). */
+interface Wait {
+  to: string;
+  /** The recipient's turn already ended once without answering and it was reminded. */
+  reminded: boolean;
+}
+
 const MAX_AGENTS = 200;
 const MAX_AGENT_MESSAGES = 1000;
 const TASK_PREVIEW = 400;
@@ -43,6 +55,15 @@ const TASK_PREVIEW = 400;
 function slug(name: string): string {
   const s = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
   return s || 'agent';
+}
+
+/** "45s", "12m", "3h05m". */
+function duration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
 }
 
 function titleFrom(text: string): string {
@@ -66,6 +87,10 @@ export class Conversation implements AgentHost, TeamActions {
    * mark. Kept in memory only, so after a restart any agent can wake them again.
    */
   private stoppedByPerson = new Set<string>();
+  /** Waiting agent id -> whom it waits for. In memory only: a restart stops every waiting agent anyway. */
+  private waits = new Map<string, Wait>();
+  /** When each live agent last became live, for list(). */
+  private liveSince = new Map<string, number>();
 
   private constructor(
     readonly meta: ConversationMeta,
@@ -88,16 +113,30 @@ export class Conversation implements AgentHost, TeamActions {
   static restore(host: ConversationHost, stored: StoredConversation): Conversation {
     const conv = new Conversation(stored.meta, host);
     for (const a of stored.agents) {
-      const info = { ...a.info, title: a.info.title ?? '', activity: undefined, closing: undefined };
+      const info = { ...a.info, title: a.info.title ?? '', activity: undefined, waitingFor: undefined };
       if (info.status === 'queued' || info.status === 'running' || info.status === 'waiting') {
         // The app was closed while this agent was working.
         info.status = info.tier === 'lead' ? 'idle' : 'stopped';
-        if (info.tier !== 'lead') info.error = 'Masthead was closed while this agent was working.';
+        if (info.tier !== 'lead') info.error = CLOSED_WHILE_WORKING;
       }
       // Nobody is waiting for a report after a restart; a parent that messages the agent asks for one again.
       conv.agents.set(info.id, new Agent(info, conv, { sessionId: a.sessionId, owesReport: false, seed: a.sessionId ? null : (a.seed ?? null) }));
     }
+    const note = conv.restartNote();
+    // Deferred: the app only keeps items of a conversation it has registered, which happens after this returns.
+    if (note) queueMicrotask(() => conv.lead.addItem({ kind: 'notice', level: 'info', text: note.text }));
     return conv;
+  }
+
+  /**
+   * Agents cut off by a shutdown or restart that the lead has not been told about. Derived from the
+   * stored error text, so it survives being saved and further restarts until the lead is told.
+   */
+  private restartNote(): { text: string; agents: Agent[] } | null {
+    const agents = [...this.agents.values()].filter((a) => a.status === 'stopped' && a.info.error === CLOSED_WHILE_WORKING);
+    if (agents.length === 0) return null;
+    const names = agents.map((a) => `${a.name}${a.info.title ? ` (${a.info.title})` : ''}`).join(', ');
+    return { text: `Masthead was restarted; these agents were stopped while working: ${names}. Message one to resume it.`, agents };
   }
 
   toStored(): StoredConversation {
@@ -133,7 +172,7 @@ export class Conversation implements AgentHost, TeamActions {
 
   private addAgent(agent: Agent): void {
     this.agents.set(agent.id, agent);
-    this.host.agentChanged(this, agent);
+    this.agentChanged(agent);
   }
 
   private touch(): void {
@@ -180,7 +219,19 @@ export class Conversation implements AgentHost, TeamActions {
       return;
     }
     this.stoppedByPerson.delete(target.id);
-    target.deliver(Agent.imageContent(text, images));
+    // The person answering a waiting agent directly ends its wait.
+    this.clearWait(target.id);
+    let content = text;
+    const note = target === this.lead ? this.restartNote() : null;
+    if (note) {
+      // Told with the person's next message, so the lead spends no turn of its own on it.
+      content = `[${note.text}]\n\n${text}`;
+      for (const a of note.agents) {
+        a.info.error = CLOSED_LEAD_TOLD;
+        this.agentChanged(a);
+      }
+    }
+    target.deliver(Agent.imageContent(content, images));
     this.touch();
   }
 
@@ -209,34 +260,6 @@ export class Conversation implements AgentHost, TeamActions {
     else if (parent) this.settle(parent);
   }
 
-  /**
-   * The person asked for one agent to be shut down safely. The agent that started it is told to
-   * have it wrap up and report; nothing is cut off. `stopAgent` is the forceful way.
-   */
-  closeAgent(agentId: string): void {
-    const agent = this.agents.get(agentId);
-    if (!agent || agent.tier === 'lead' || !agent.live || agent.info.closing) return;
-    if (agent.status === 'queued') {
-      // It has not started, so there is nothing to finish.
-      this.stopAgent(agentId, 'Stopped by the person.');
-      return;
-    }
-    agent.info.closing = true;
-    agent.addItem({ kind: 'notice', level: 'info', text: 'The person asked for this agent to be shut down safely.' });
-    this.host.agentChanged(this, agent);
-    const owner = this.parent(agent);
-    const job = agent.info.title ? ` (${agent.info.title})` : '';
-    if (owner && (owner.tier === 'lead' || owner.live)) {
-      owner.addItem({ kind: 'notice', level: 'info', text: `The person asked for "${agent.name}" to be shut down safely.` });
-      owner.deliver(
-        `The person pressed the shut-down button on "${agent.name}"${job}. Have it shut down safely now: tell it with send_message to stop at a safe point, leave its work in a usable state and send its report; give it no new work. If it has nothing worth finishing, use stop_agent instead.`,
-      );
-    } else {
-      agent.deliver('The person asked for you to shut down safely. Stop at a safe point, leave your work in a usable state and send your report now. Start nothing new.');
-    }
-    this.touch();
-  }
-
   stopAll(): void {
     this.stopAgent(this.lead.id, 'Stopped by the person.');
     this.settle(this.lead);
@@ -257,14 +280,16 @@ export class Conversation implements AgentHost, TeamActions {
     if (!agent.live) return;
     this.host.cancelPermissions(agent.id);
     agent.owesReport = false;
+    this.clearWait(agent.id);
     agent.end('stopped', why);
     agent.addItem({ kind: 'notice', level: 'info', text: why });
+    this.releaseWaitsOn(agent);
   }
 
   /** Ends every process when the app shuts down. */
   shutdown(): void {
     for (const a of this.agents.values()) {
-      if (a.tier !== 'lead' && a.live) a.end('stopped', 'Masthead was closed while this agent was working.');
+      if (a.tier !== 'lead' && a.live) a.end('stopped', CLOSED_WHILE_WORKING);
       else a.dispose();
     }
     const lead = this.lead;
@@ -292,11 +317,8 @@ export class Conversation implements AgentHost, TeamActions {
     return teamTools(agent, this);
   }
   agentChanged(agent: Agent): void {
-    if (agent.info.closing && !agent.live) {
-      // The safe shutdown is over, however it ended. The person wanted it gone, so only they wake it.
-      agent.info.closing = undefined;
-      this.stoppedByPerson.add(agent.id);
-    }
+    if (!agent.live) this.liveSince.delete(agent.id);
+    else if (!this.liveSince.has(agent.id)) this.liveSince.set(agent.id, Date.now());
     this.host.agentChanged(this, agent);
   }
   itemChanged(agent: Agent, item: Item): void {
@@ -318,15 +340,95 @@ export class Conversation implements AgentHost, TeamActions {
     else if (outcome.error) agent.addItem({ kind: 'notice', level: 'error', text: outcome.error });
 
     if (agent.tier === 'lead') {
-      agent.setStatus(this.liveChildren(agent).length > 0 ? 'waiting' : 'idle');
+      agent.setStatus(this.mustWait(agent) ? 'waiting' : 'idle');
       void agent.refreshContext();
+      this.checkWaitsOn(agent, outcome.interrupted);
       return;
     }
-    if (this.liveChildren(agent).length > 0 && !outcome.error) {
+    if (!outcome.error && this.mustWait(agent)) {
+      // Waiting for agents it started, for an answer, or for its background commands: not finished.
       agent.setStatus('waiting');
+      this.checkWaitsOn(agent, outcome.interrupted);
       return;
     }
     this.finish(agent, outcome.error ? 'failed' : 'done', outcome.text, outcome.error);
+  }
+
+  /** Whether an agent whose turn ended still has something coming that will wake it. (The lead never waits for an answer.) */
+  private mustWait(agent: Agent): boolean {
+    return this.liveChildren(agent).length > 0 || this.waits.has(agent.id) || this.hasBackgroundWork(agent);
+  }
+
+  private hasBackgroundWork(agent: Agent): boolean {
+    return (agent as { hasBackgroundWork?: boolean }).hasBackgroundWork === true;
+  }
+
+  /** Background commands ended and no new turn followed: move the agent on if nothing else holds it. */
+  backgroundIdle(agent: Agent): void {
+    this.settle(agent);
+  }
+
+  /** Settings changed: running agents take what they can at once (effort ceiling, model of the lead, …). */
+  settingsChanged(): void {
+    const s = this.host.settings();
+    for (const a of this.agents.values()) (a as { applySettings?: (s: Settings) => void }).applySettings?.(s);
+  }
+
+  // ---- waiting for an answer ----
+
+  /**
+   * `r`'s turn ended. Agents waiting for its answer get one reminder sent to it. After that, a non-lead
+   * recipient's askers are told there is no answer, so nobody waits for ever; the lead's keep waiting,
+   * since the lead may be asking the person, who can also answer them directly. If the person
+   * interrupted the turn, the askers are told at once.
+   */
+  private checkWaitsOn(r: Agent, interrupted: boolean): void {
+    const remind: Agent[] = [];
+    for (const [id, w] of this.waits) {
+      if (w.to !== r.id) continue;
+      const waiter = this.agents.get(id);
+      if (!waiter?.live) this.clearWait(id);
+      else if (interrupted || (w.reminded && r.tier !== 'lead')) this.noAnswer(waiter, r);
+      else if (w.reminded) continue;
+      else {
+        w.reminded = true;
+        remind.push(waiter);
+      }
+    }
+    if (remind.length === 0) return;
+    const names = remind.map((a) => `"${a.name}"`).join(', ');
+    r.addItem({ kind: 'notice', level: 'info', text: `Reminded: ${names} still waiting for an answer.` });
+    const are = remind.length > 1 ? 'are' : 'is';
+    r.deliver(
+      r.tier === 'lead'
+        ? `${names} ${are} still waiting for your answer. Answer with send_message, or ask the person; it keeps waiting.`
+        : `${names} ${are} still waiting for your answer. Reply with send_message, even if only to say you cannot help.`,
+    );
+  }
+
+  private clearWait(id: string): void {
+    if (!this.waits.delete(id)) return;
+    const a = this.agents.get(id);
+    if (a && a.info.waitingFor !== undefined) {
+      a.info.waitingFor = undefined;
+      this.agentChanged(a);
+    }
+  }
+
+  /** `r` ended: nobody can wait for its answer any more. */
+  private releaseWaitsOn(r: Agent): void {
+    for (const [id, w] of this.waits) {
+      if (w.to !== r.id) continue;
+      const waiter = this.agents.get(id);
+      if (waiter?.live) this.noAnswer(waiter, r);
+      else this.clearWait(id);
+    }
+  }
+
+  private noAnswer(waiter: Agent, r: Agent): void {
+    this.clearWait(waiter.id);
+    waiter.addItem({ kind: 'notice', level: 'info', text: `No answer from "${r.name}".` });
+    waiter.deliver(`No answer from "${r.name}"; carry on with your best judgment or report what you have.`);
   }
 
   processLost(agent: Agent, message: string): void {
@@ -334,7 +436,8 @@ export class Conversation implements AgentHost, TeamActions {
     agent.addItem({ kind: 'notice', level: 'error', text: message });
     this.scheduler.release(agent.tier, agent.id);
     if (agent.tier === 'lead') {
-      agent.setStatus(this.liveChildren(agent).length > 0 ? 'waiting' : 'idle');
+      // Agents waiting for the lead's answer keep waiting: the person can still answer them.
+      agent.setStatus(this.mustWait(agent) ? 'waiting' : 'idle');
       return;
     }
     this.finish(agent, 'failed', '', message);
@@ -345,7 +448,9 @@ export class Conversation implements AgentHost, TeamActions {
     for (const c of this.liveChildren(agent)) this.stopTree(c, `"${agent.name}" ended before this agent finished.`);
     const owed = agent.owesReport;
     agent.owesReport = false;
+    this.clearWait(agent.id);
     agent.end(status, error);
+    this.releaseWaitsOn(agent);
     const parent = this.parent(agent);
     if (!parent) return;
     if (owed) this.report(parent, agent, status, status === 'failed' ? `The agent failed: ${error ?? 'unknown error'}${text ? `\n\nIts last message:\n${text}` : ''}` : text);
@@ -364,7 +469,8 @@ export class Conversation implements AgentHost, TeamActions {
    * only waiting on it, nothing else will wake it, so move it on.
    */
   private settle(agent: Agent): void {
-    if (agent.status !== 'waiting' || agent.busy || this.liveChildren(agent).length > 0) return;
+    if (agent.status !== 'waiting' || agent.busy) return;
+    if (this.mustWait(agent)) return;
     if (agent.tier === 'lead') agent.setStatus('idle');
     else this.finish(agent, 'done', agent.lastText);
   }
@@ -407,7 +513,7 @@ export class Conversation implements AgentHost, TeamActions {
     return `Started ${this.label(tier)} agent "${name}"${title ? ` (${title})` : ''} at ${startEffort} effort${willQueue ? ` (queued: ${cap} may run at once)` : ''}. Its report will arrive as a message when it finishes.`;
   }
 
-  message(from: Agent, to: string, text: string): string {
+  message(from: Agent, to: string, text: string, wait = false): string {
     const target = this.find(to, from);
     if (!target) return `Error: there is no agent named "${to}". Use list_agents to see the names.`;
     if (target === from) return 'Error: that is you.';
@@ -422,22 +528,52 @@ export class Conversation implements AgentHost, TeamActions {
     // one (as in report()). An agent that is already live keeps the debt it has, so nothing is reported twice.
     const reportsTo = !wasLive && parent && (parent.tier === 'lead' || parent.live) ? parent : null;
     if (reportsTo) target.owesReport = true;
+    // Any message from the agent someone waits on is its answer.
+    if (this.waits.get(target.id)?.to === from.id) this.clearWait(target.id);
+    // Only a sub-agent may wait, and only for its parent or the lead, who are bound to see the question.
+    const waits = wait && from.tier !== 'lead' && (target === this.parent(from) || target === this.lead);
+    if (waits) {
+      this.waits.set(from.id, { to: target.id, reminded: false });
+      from.info.waitingFor = target.name;
+      this.agentChanged(from);
+    }
     target.addItem({ kind: 'inbound', via: 'message', from: from.name, text });
+    if (waits && target === this.lead) {
+      target.addItem({ kind: 'notice', level: 'info', text: `"${from.name}" is waiting for an answer to this. You can also answer it yourself by messaging ${from.name} directly.` });
+    }
     // A message from the parent is answered by the report; anyone else needs send_message.
-    target.deliver(messageEnvelope(from.name, from.tier, text, parent !== from));
+    target.deliver(messageEnvelope(from.name, from.tier, text, waits ? 'wait' : parent !== from ? 'reply' : undefined));
     this.touch();
     const state = target.tier === 'lead' ? 'the lead' : wasLive ? statusBefore : `was ${statusBefore}, now resuming`;
     const where = reportsTo && reportsTo !== from ? ` Its report goes to "${reportsTo.name}"; it answers you only with send_message.` : '';
-    return `Delivered to "${target.name}" (${state}).${where}`;
+    const waitNote = waits
+      ? ' End your turn when you have nothing else to do; you resume when the answer arrives.'
+      : wait
+        ? ' (Not waiting: you can wait only for your parent or the lead.)'
+        : '';
+    return `Delivered to "${target.name}" (${state}).${where}${waitNote}`;
   }
 
   list(viewer: Agent): string {
+    const now = Date.now();
     const lines = [...this.agents.values()].map((a) => {
       const by = this.parent(a)?.name;
       const you = a === viewer ? ' (you)' : '';
       const job = a.info.title || a.info.task.replace(/\s+/g, ' ').slice(0, 120);
       const task = job ? ` — ${job}` : '';
-      return `- ${a.name}${you}: ${this.label(a.tier)}, ${a.status}, ${a.info.effort} effort${by ? `, started by ${by}` : ''}${task}`;
+      const w = a.live ? this.waits.get(a.id) : undefined;
+      let state: string = a.status;
+      if (w) state = w.to === viewer.id ? 'waiting for your answer' : `waiting for an answer from ${this.agents.get(w.to)?.name ?? '?'}`;
+      if (a.status === 'running' && a.info.activity) state += `: ${a.info.activity}`;
+      const facts = [state];
+      const since = this.liveSince.get(a.id);
+      if (a.live && since) facts.push(`for ${duration(now - since)}`);
+      else if (a.info.endedAt) facts.push(`ended ${duration(now - a.info.endedAt)} ago`);
+      if (a.info.usage.context > 0) facts.push(`${Math.round(a.info.usage.context / 1000)}k ctx`);
+      if (a.info.usage.costUsd > 0) facts.push(`$${a.info.usage.costUsd.toFixed(2)}`);
+      facts.push(`${a.info.effort} effort`);
+      if (by) facts.push(`started by ${by}`);
+      return `- ${a.name}${you}: ${this.label(a.tier)}, ${facts.join(', ')}${task}`;
     });
     return lines.join('\n');
   }

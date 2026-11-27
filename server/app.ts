@@ -286,9 +286,6 @@ export class App implements ConversationHost {
       case 'interrupt':
         void this.conv(msg.convId).interruptLead();
         return;
-      case 'close_agent':
-        this.conv(msg.convId).closeAgent(String(msg.agentId));
-        return;
       case 'stop_agent':
         this.conv(msg.convId).stopAgent(String(msg.agentId), 'Stopped by the person.');
         return;
@@ -337,6 +334,8 @@ export class App implements ConversationHost {
     this.currentSettings = next;
     this.safely('settings', () => saveSettings(next, this.settingsFile));
     this.scheduler.limitsChanged();
+    // Running agents take up what can change without restarting them.
+    for (const conv of this.conversations.values()) conv.settingsChanged();
     this.broadcast({ t: 'settings', settings: next });
   }
 

@@ -291,7 +291,7 @@ test('regression: envelope bodies cannot close or open an envelope', () => {
   assert.match(messageEnvelope('a"b> c', 'opus', 'x'), /^<agent-message from="a_b_c" tier="opus">/);
   assert.match(reportEnvelope('x', 'opus', 'done" evil="1', 'y'), /status="done_evil=_1"/);
   assert.doesNotMatch(messageEnvelope('bravo', 'opus', 'hi'), /send_message/);
-  assert.match(messageEnvelope('bravo', 'opus', 'hi', true), /To answer, use send_message to "bravo"\.$/);
+  assert.match(messageEnvelope('bravo', 'opus', 'hi', 'reply'), /To answer, use send_message to "bravo"\.$/);
 });
 
 test('prompts: real starting effort, a/an, file-relative line numbers', () => {
@@ -308,35 +308,230 @@ test('prompts: real starting effort, a/an, file-relative line numbers', () => {
   assert.equal(withArticle('Haiku 5.5'), 'a Haiku 5.5');
 });
 
-test('safe shutdown: the owner is asked, a second request does nothing more, and force ends it', async () => {
-  const { conv, block, byName, items } = setup();
+// ---- 0.1.2: list_agents, waiting for an answer, restart note, background work ----
+
+/** Ends a turn by hand, as Agent would after a result: a real turn needs Claude Code. */
+function endTurn(conv: Conversation, agent: Agent, opts: { text?: string; interrupted?: boolean } = {}) {
+  agent.setStatus('running');
+  conv.turnEnded(agent, { text: opts.text ?? 'turn text', interrupted: opts.interrupted ?? false });
+}
+
+const notices = (items: Array<{ agent: string; item: Item }>, agent: string, re: RegExp) =>
+  items.filter((x) => x.agent === agent && x.item.kind === 'notice' && re.test(x.item.text));
+
+test('list_agents: activity, time, context and cost in one line', async () => {
+  const { conv, block, byName } = setup();
   block('opus');
   conv.spawn(conv.lead, 'Job', 'task', undefined);
+  conv.spawn(conv.lead, 'Other', 'task', undefined);
   const bravo = byName('bravo');
-  // A queued agent has nothing to finish, so it is simply stopped.
-  conv.closeAgent(bravo.id);
-  assert.equal(bravo.status, 'stopped');
-  assert.equal(bravo.info.closing, undefined);
+  bravo.setStatus('running');
+  bravo.info.activity = 'Reading a.ts';
+  bravo.info.usage.context = 41_234;
+  bravo.info.usage.costUsd = 0.123;
+  const line = conv.list(conv.lead).split('\n').find((l) => l.startsWith('- bravo'))!;
+  assert.match(line, /^- bravo: Opus 5\.5, running: Reading a\.ts, for \d+s, 41k ctx, \$0\.12, low effort, started by alpha — Job$/);
+  conv.stop(conv.lead, 'charlie');
+  const charlie = conv.list(conv.lead).split('\n').find((l) => l.startsWith('- charlie'))!;
+  assert.match(charlie, /stopped, ended \d+s ago, low effort/);
+  assert.doesNotMatch(charlie, /ctx|\$/, 'zero context and cost are left out');
+  assert.match(conv.list(bravo), /- bravo \(you\)/);
+});
 
-  conv.spawn(conv.lead, 'Job two', 'task', undefined);
+test('wait: a question to the parent is not a report; the answer resumes the asker', () => {
+  const { conv, block, byName, reports, inbound } = setup();
+  block('opus');
+  block('sonnet');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  conv.spawn(bravo, 'S', 'task', undefined);
   const charlie = byName('charlie');
-  charlie.info.status = 'running'; // set by hand: a really running agent needs Claude Code
-  const before = items.length;
-  conv.closeAgent(charlie.id);
-  assert.equal(charlie.info.closing, true);
-  assert.equal(charlie.status, 'running', 'nothing is cut off');
-  const asked = items.slice(before).filter((x) => x.agent === 'alpha' && x.item.kind === 'notice' && /"charlie" to be shut down safely/.test(x.item.text));
-  assert.equal(asked.length, 1, 'the owner is told');
-  const count = items.length;
-  conv.closeAgent(charlie.id);
-  assert.equal(items.filter((x) => x.agent === 'alpha').length, items.slice(0, count).filter((x) => x.agent === 'alpha').length, 'asking twice sends nothing more');
+  assert.match(conv.message(charlie, 'parent', 'Which file?', true), /you resume when the answer arrives/);
+  assert.equal(charlie.info.waitingFor, 'bravo');
+  assert.equal(inbound('bravo', 'message').length, 1);
+  endTurn(conv, charlie, { text: 'Which file?' });
+  assert.equal(charlie.status, 'waiting', 'asking is not finishing');
+  assert.equal(charlie.owesReport, true);
+  assert.equal(reports('bravo', 'charlie').length, 0);
+  assert.match(conv.list(bravo), /- charlie: .*waiting for your answer/);
+  assert.match(conv.list(conv.lead), /- charlie: .*waiting for an answer from bravo/);
 
-  conv.stopAgent(charlie.id, 'Stopped by the person.');
-  assert.equal(charlie.status, 'stopped');
-  assert.equal(charlie.info.closing, undefined);
+  conv.message(bravo, 'charlie', 'a.ts');
+  assert.doesNotMatch(conv.list(bravo), /waiting for your answer/, 'any message from the recipient ends the wait');
+  assert.equal(charlie.info.waitingFor, undefined);
+  endTurn(conv, charlie, { text: 'Done with a.ts' });
+  assert.equal(charlie.status, 'done');
+  assert.equal(reports('bravo', 'charlie').length, 1);
+});
+
+test('wait: an unanswered question gets one reminder, then the asker is told to carry on', () => {
+  const { conv, block, byName, items, reports } = setup();
+  block('opus');
+  block('sonnet');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  conv.spawn(bravo, 'S', 'task', undefined);
+  const charlie = byName('charlie');
+  conv.message(charlie, 'bravo', 'Which file?', true);
+  endTurn(conv, charlie);
+  endTurn(conv, bravo); // bravo's turn ends without answering
+  assert.equal(bravo.status, 'waiting', 'still waiting for its child');
+  assert.equal(notices(items, 'bravo', /Reminded: "charlie"/).length, 1);
+  assert.equal(notices(items, 'charlie', /No answer/).length, 0);
+  endTurn(conv, bravo); // and again
+  assert.equal(notices(items, 'bravo', /Reminded/).length, 1, 'only one reminder');
+  assert.equal(notices(items, 'charlie', /No answer from "bravo"/).length, 1);
+  assert.doesNotMatch(conv.list(bravo), /waiting for your answer/);
+  endTurn(conv, charlie, { text: 'Best guess' });
+  assert.equal(charlie.status, 'done');
+  assert.equal(reports('bravo', 'charlie').length, 1);
+});
+
+test('wait: an interrupted recipient releases the asker at once', () => {
+  const { conv, block, byName, items } = setup();
+  block('opus');
+  block('sonnet');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  conv.spawn(bravo, 'S', 'task', undefined);
+  conv.message(byName('charlie'), 'bravo', 'q', true);
+  endTurn(conv, bravo, { interrupted: true });
+  assert.equal(notices(items, 'bravo', /Reminded/).length, 0);
+  assert.equal(notices(items, 'charlie', /No answer from "bravo"/).length, 1);
+});
+
+test('wait: a question to the lead is plain to the person, and the asker keeps waiting for it', async () => {
+  const { conv, block, byName, items } = setup();
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  conv.message(bravo, 'lead', 'Deploy now?', true);
+  assert.equal(bravo.info.waitingFor, 'alpha');
+  assert.equal(notices(items, 'alpha', /"bravo" is waiting for an answer to this.*messaging bravo directly/).length, 1);
+  await tick(); // the lead cannot start here (no Claude Code); the person can still answer, so bravo waits
+  endTurn(conv, bravo);
+  assert.equal(bravo.status, 'waiting');
+  endTurn(conv, conv.lead); // the lead's turn ends without answering: one reminder
+  assert.equal(notices(items, 'alpha', /Reminded: "bravo"/).length, 1);
   await tick();
-  assert.match(conv.message(conv.lead, 'charlie', 'wake up'), /only they can wake it/);
-  // The lead is never shut down this way.
-  conv.closeAgent(conv.lead.id);
-  assert.equal(conv.lead.info.closing, undefined);
+  endTurn(conv, conv.lead); // again (it asked the person, say): bravo keeps waiting, no second reminder
+  await tick();
+  assert.equal(notices(items, 'alpha', /Reminded/).length, 1);
+  assert.equal(notices(items, 'bravo', /No answer/).length, 0);
+  assert.equal(bravo.info.waitingFor, 'alpha');
+  endTurn(conv, conv.lead, { interrupted: true }); // the person interrupted the lead: carry on
+  assert.equal(notices(items, 'bravo', /No answer from "alpha"/).length, 1);
+  assert.equal(bravo.info.waitingFor, undefined);
+});
+
+test('wait: stopping everything leaves nobody waiting for the lead', () => {
+  const { conv, block, byName } = setup();
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  conv.message(bravo, 'lead', 'q', true);
+  conv.stopAll();
+  assert.equal(bravo.status, 'stopped');
+  assert.equal(bravo.info.waitingFor, undefined);
+  assert.doesNotMatch(conv.list(conv.lead), /waiting for/);
+});
+
+test('wait: only toward the parent or the lead; the person can answer directly', () => {
+  const { conv, block, byName } = setup();
+  block('opus');
+  block('sonnet');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  conv.spawn(conv.lead, 'B', 'task', undefined);
+  const bravo = byName('bravo');
+  assert.match(conv.message(bravo, 'charlie', 'q', true), /Not waiting: you can wait only for your parent or the lead/);
+  assert.doesNotMatch(conv.list(conv.lead), /waiting for/);
+  assert.match(conv.message(conv.lead, 'bravo', 'q', true), /Not waiting/, 'the lead never waits');
+  conv.message(bravo, 'lead', 'q', true);
+  assert.match(conv.list(conv.lead), /waiting for your answer/);
+  conv.userSend('Answer from the person', undefined, bravo.id);
+  assert.doesNotMatch(conv.list(conv.lead), /waiting for/);
+  endTurn(conv, bravo);
+  assert.equal(bravo.status, 'done');
+});
+
+test('wait: stopping the asker or its recipient leaves nobody waiting', () => {
+  const { conv, block, byName, items } = setup();
+  block('opus');
+  block('sonnet');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  conv.spawn(bravo, 'S', 'task', undefined);
+  conv.message(byName('charlie'), 'bravo', 'q', true);
+  conv.stop(conv.lead, 'bravo'); // stops charlie first, then bravo
+  assert.equal(byName('charlie').status, 'stopped');
+  assert.doesNotMatch(conv.list(conv.lead), /waiting for/);
+  assert.equal(notices(items, 'charlie', /No answer/).length, 0, 'a stopped asker is not woken');
+});
+
+test('wait: the envelope tells the recipient the sender is waiting', () => {
+  assert.match(messageEnvelope('charlie', 'sonnet', 'q', 'wait'), /<\/agent-message>\n"charlie" is waiting for your answer: reply with send_message to "charlie"\.$/);
+  const settings = defaultSettings();
+  assert.match(systemAppend({ tier: 'sonnet', name: 'c', parentName: 'b', settings }), /ask "b" with send_message and wait: true/);
+});
+
+test('restart: the lead is told which agents were cut off, once, with the person\'s next message', async () => {
+  const { conv, host, block } = setup();
+  block('opus');
+  conv.spawn(conv.lead, 'Audit', 'task', undefined);
+  conv.lead.setStatus('waiting');
+  const stored = JSON.parse(JSON.stringify(conv.toStored()));
+  const items: Array<{ agent: string; item: Item }> = [];
+  const host2: ConversationHost = { ...host, itemChanged: (_c, a, item) => void items.push({ agent: a.name, item }) };
+  const again = Conversation.restore(host2, stored);
+  await tick();
+  const note = 'Masthead was restarted; these agents were stopped while working: bravo (Audit). Message one to resume it.';
+  assert.deepEqual(notices(items, 'alpha', /restarted/).map((x) => (x.item as { text: string }).text), [note]);
+
+  // Saved again before the person speaks: the note survives.
+  const twice = Conversation.restore(host2, JSON.parse(JSON.stringify(again.toStored())));
+  await tick();
+  assert.equal(notices(items, 'alpha', /restarted/).length, 2);
+
+  const sent: unknown[] = [];
+  twice.lead.deliver = (c) => void sent.push(c);
+  twice.userSend('hello', undefined);
+  assert.equal(sent[0], `[${note}]\n\nhello`);
+  assert.ok(items.some((x) => x.agent === 'alpha' && x.item.kind === 'user' && x.item.text === 'hello'), 'the transcript shows only what the person typed');
+  twice.userSend('again', undefined);
+  assert.equal(sent[1], 'again', 'told once');
+  const thrice = Conversation.restore(host2, JSON.parse(JSON.stringify(twice.toStored())));
+  await tick();
+  assert.equal(notices(items, 'alpha', /restarted/).length, 2, 'not repeated after the next restart');
+  assert.ok(thrice);
+});
+
+test('background work: a turn that leaves commands running is not finished', async () => {
+  const { conv, host, reports } = setup();
+  conv.spawn(conv.lead, 'Build', 'task', undefined);
+  await tick(); // fails at once without Claude Code; restored below so it has no start pending
+  const again = Conversation.restore(host, JSON.parse(JSON.stringify(conv.toStored())));
+  const bravo = [...again.agents.values()].find((a) => a.name === 'bravo')!;
+  let background = true;
+  Object.defineProperty(bravo, 'hasBackgroundWork', { get: () => background, configurable: true });
+  bravo.owesReport = true;
+  endTurn(again, bravo, { text: 'Build started' });
+  assert.equal(bravo.status, 'waiting');
+  assert.equal(reports('alpha', 'bravo').length, 1, 'only the earlier failure report, none new');
+  background = false;
+  again.backgroundIdle(bravo);
+  assert.equal(bravo.status, 'done');
+  assert.equal(reports('alpha', 'bravo').length, 2);
+
+  // The lead with background work waits instead of going idle.
+  Object.defineProperty(again.lead, 'hasBackgroundWork', { get: () => true, configurable: true });
+  endTurn(again, again.lead);
+  assert.equal(again.lead.status, 'waiting');
+});
+
+test('settingsChanged: every agent gets the new settings', () => {
+  const { conv, settings } = setup();
+  const got: unknown[] = [];
+  (conv.lead as unknown as { applySettings: (s: unknown) => void }).applySettings = (s) => void got.push(s);
+  conv.settingsChanged();
+  assert.deepEqual(got, [settings]);
 });

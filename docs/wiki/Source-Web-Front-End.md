@@ -2,7 +2,7 @@
 
 The page you use in the browser. It is a **Svelte 5** app in `web/`, built by Vite into `dist/web/` and served by the Masthead server. **Svelte** is a framework that compiles components (`.svelte` files holding markup, script and style together) into plain JavaScript. Svelte 5 uses **runes** to mark reactive state: `$state` (a value the page redraws when it changes), `$derived` (a value computed from others) and `$effect` (code that reruns when what it reads changes).
 
-The page holds no authority. Everything it shows comes from the server over one WebSocket, and everything it does is a protocol message ([Browser/server protocol](Browser-Server-Protocol.md)). This page describes version 0.1.1.
+The page holds no authority. Everything it shows comes from the server over one WebSocket, and everything it does is a protocol message ([Browser/server protocol](Browser-Server-Protocol.md)). This page describes version 0.1.2.
 
 ## Signing in
 
@@ -20,7 +20,7 @@ The page itself holds no secret and is served to anyone who may reach the server
 | `web/src/App.svelte` | The layout and header (below). |
 | `web/src/app.css` | Global styles: colour tokens for light and dark (switching on `prefers-color-scheme`), a colour per tier (`--tier-opus` etc.), status dots, buttons, Markdown styles. |
 | `web/src/lib/store.svelte.ts` | The single store: connection, all state, every protocol message. See [Web store](Source-Web-Store.md). |
-| `web/src/lib/Sidebar.svelte`, `Transcript.svelte`, `Composer.svelte`, `FolderPicker.svelte`, `PermissionCard.svelte`, `TeamPanel.svelte`, `TeamMap.svelte`, `SettingsMenu.svelte` | The components. See [Web components](Source-Web-Components.md). |
+| `web/src/lib/Sidebar.svelte`, `Transcript.svelte`, `Composer.svelte`, `FolderPicker.svelte`, `PermissionCard.svelte`, `TeamPanel.svelte`, `TeamMap.svelte`, `SettingsMenu.svelte`, `StopControl.svelte` | The components. See [Web components](Source-Web-Components.md). |
 | `web/src/lib/markdown.ts` | Safe Markdown rendering (below). |
 | `web/src/lib/tools.ts` | Re-exports `toolLine` from `shared/toolline.ts`. |
 | `web/public/favicon.svg` | The tab icon, copied as-is into the build. |

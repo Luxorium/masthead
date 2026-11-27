@@ -1,6 +1,6 @@
 // Types shared by the server and the browser. Nothing in here may import Node or DOM APIs.
 
-export const VERSION = '0.1.1';
+export const VERSION = '0.1.2';
 
 /** The four levels of the team. `lead` is the agent the person talks to. */
 export type Tier = 'lead' | 'opus' | 'sonnet' | 'haiku';
@@ -146,8 +146,8 @@ export interface AgentInfo {
   /** One line on what it is doing right now, e.g. the tool it is running. */
   activity?: string;
   error?: string;
-  /** The person asked for this agent to be shut down safely and it has not ended yet. */
-  closing?: boolean;
+  /** The agent it asked a question of and is waiting to hear from, by name. */
+  waitingFor?: string;
 }
 
 interface ItemBase {
@@ -268,8 +268,6 @@ export type ClientMsg =
     }
   | { t: 'interrupt'; convId: string }
   | { t: 'stop_agent'; convId: string; agentId: string }
-  /** Ask the agent that started this one to have it finish safely. `stop_agent` is the forceful one. */
-  | { t: 'close_agent'; convId: string; agentId: string }
   | { t: 'stop_all'; convId: string }
   | {
       t: 'permission';

@@ -33,7 +33,7 @@ The chat for the agent being viewed (`store.viewItems`). How each item kind is d
 Below the items:
 
 - the live draft: text as Markdown while it streams, or "Thinking… <last 140 characters>";
-- otherwise a status line: the activity (only while no tool item is still running, since a running tool line already says what the agent is doing), "Waiting for a free slot…", or "Waiting on N agent(s)";
+- otherwise a status line: the activity (only while no tool item is still running, since a running tool line already says what the agent is doing), "Waiting for a free slot…", "Waiting for an answer from Alpha" (`waitingFor`), "Waiting on N agents", or plain "Waiting" (for example a command still running in the background);
 - "Starting…" while a new conversation is being created.
 
 The view follows new output only while the reader is near the bottom (within 80 px). When the reader has scrolled up, a ↓ button jumps back down. On the new-conversation screen it shows "What are we working on?".
@@ -43,6 +43,7 @@ The view follows new output only while the reader is near the bottom (within 80 
 The message box. It has:
 
 - **Text:** Enter sends, Shift+Enter adds a new line. The box grows up to 260 px.
+- **Waiting hint:** when the open sub-agent is waiting for an answer (`status: 'waiting'` with `waitingFor`), a quiet line above the box says so and that what you send there answers it.
 - **Placeholder** text that says where the message goes:
   - "Ask for anything" on a new conversation;
   - "Message Bravo directly" when a sub-agent's chat is open;
@@ -87,8 +88,8 @@ The right column: the tier limits, usage, and an overview of the open conversati
 - **Context:** a bar showing the lead's context use (`usage.context / usage.contextMax`) and the total output of all agents.
 - **Agents:** the lead and an indented tree of every agent, each with:
   - a status dot, its name, a short model badge and its title;
-  - its activity or status;
-  - a ■ stop button while live (`{t:'stop_agent'}`).
+  - its activity or status, from `statusWords()`;
+  - the shared stop button while live (see StopControl below).
 
   Clicking an agent opens its chat. "Open map" switches to the team map.
 - **Folder:** the conversation's working folder.
@@ -108,16 +109,20 @@ The ⚙ button at the top right of the header and the popup it opens. It holds t
 
 Enter or Space on the gear opens it and moves focus to the first control; Escape closes it and returns focus to the gear; a click outside closes it. Changes go through `store.updateSettings()`.
 
+## StopControl.svelte
+
+The ■ that stops a live sub-agent and everything under it (`{t:'stop_agent'}`), used by both the team panel's agent rows and the team map's cards so the two cannot drift. Props: `agent`, and `placement` (`'row'` sits in the flex row; `'map'` sits in the card's bottom-right corner). The square is in the normal text colour (not muted) and a little larger than in 0.1.1; on hover or keyboard focus it turns red and shows the word **Stop** beside it, on an opaque background so it does not cover the card's text. Title "Stop this agent and everything under it"; accessible name "Stop <Name>".
+
 ## TeamMap.svelte
 
 The "Team map" tab: the whole team as a tree, built recursively with a Svelte snippet from `store.lead` and `childrenOf()`. Each agent is a card showing:
 
 - its status dot, its name ("Bravo") and a model badge;
 - its title (for the lead, "The one you talk to");
-- what it is doing: the activity line while running, "Failed: …" with the error, or the status words;
+- what it is doing, from `statusWords()`: the activity line while running, "Waiting for an answer from …", "Failed: …" with the error, or the status words;
 - its effort, context size and, for sub-agents, the time since it started (ticking every second while live).
 
-Live sub-agents have a ■ stop button. Clicking a card opens that agent's chat.
+Live sub-agents have the shared stop button in the card's corner. Clicking a card opens that agent's chat.
 
 **Hover preview:** resting on a card for 220 ms (or focusing it with the keyboard) loads that agent's transcript if needed. A transcript fetched only for a preview is dropped again when the preview closes, unless that agent's chat is the one open. It then shows a tooltip with:
 
