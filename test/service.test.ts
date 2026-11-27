@@ -78,7 +78,7 @@ WantedBy=default.target
 });
 
 test('systemd: install.sh writes the same OOM policy and stop marker lines as the unit', () => {
-  const sh = readFileSync(new URL('../scripts/install.sh', import.meta.url), 'utf8');
+  const sh = readFileSync(new URL('../scripts/install.sh', import.meta.url), 'utf8').replace(/\r\n/g, '\n'); // a Windows checkout may have CRLF
   assert.ok(sh.includes(`stop_post='${STOP_POST}'`), 'install.sh stop_post matches STOP_POST');
   assert.ok(sh.includes(`oom_policy='${OOM_POLICY}'`), 'install.sh oom_policy matches OOM_POLICY');
   assert.match(sh, /^\$stop_post\n\$oom_policy\nRestart=on-failure$/m, 'both lines are in the heredoc, before Restart=');
