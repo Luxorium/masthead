@@ -19,7 +19,7 @@ import {
 import type { Agent } from '../runtime/agent.js';
 import { HOME, SETTINGS_FILE } from '../paths.js';
 import { findClaude, type ClaudeInfo } from '../backends/claude/env.js';
-import { loadSettings, sanitizeSettings, saveSettings, tierLimit, withBuiltInProfiles } from '../settings/settings.js';
+import { loadSettings, resetProfile, sanitizeSettings, saveSettings, tierLimit, withBuiltInProfiles } from '../settings/settings.js';
 import { findTier } from '../../shared/protocol.js';
 import { Conversation, type ConversationHost } from '../core/conversation.js';
 import { Scheduler } from '../core/scheduler.js';
@@ -359,6 +359,13 @@ export class App implements ConversationHost {
       case 'device_role': {
         const m = msg as { nodeId?: unknown; role?: unknown };
         this.requireRemote().setRole(String(m.nodeId ?? ''), m.role);
+        return true;
+      }
+      case 'reset_profile': {
+        // A built-in team back to how Masthead ships it (Claude's, or one generated for a backend).
+        const id = String(msg.profileId ?? '');
+        if (!this.currentSettings.profiles.some((p) => p.id === id && p.builtIn)) throw new ClientError('not_found', 'Only a built-in team can be reset.');
+        this.updateSettings(resetProfile(this.currentSettings, id, this.registry.generatedProfiles()));
         return true;
       }
       case 'check_backends':

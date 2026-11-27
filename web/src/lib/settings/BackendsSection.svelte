@@ -25,7 +25,7 @@
     return b.error ?? ST.backends.install(b.label);
   }
 
-  function state(b: BackendEntry): string {
+  function stateOf(b: BackendEntry): string {
     if (b.available) return ST.backends.found;
     return b.path ? ST.backends.notReady : ST.backends.notFound;
   }
@@ -42,7 +42,7 @@
       <li class="entry" class:ready={b.available}>
         <div class="row">
           <span class="name">{b.label}</span>
-          <span class="state" class:ok={b.available} class:bad={!b.available}>{state(b)}</span>
+          <span class="state" class:ok={b.available} class:bad={!b.available}>{stateOf(b)}</span>
         </div>
         {#if b.version || b.available}
           <div class="meta muted">

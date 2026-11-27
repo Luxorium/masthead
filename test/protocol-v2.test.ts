@@ -365,3 +365,37 @@ test('review: a remote device sending a plain v1 hello gets a protocol error, ne
   app.handle(fresh, { t: 'hello' });
   assert.deepEqual(got.map((m) => [m.t, m.code]), [['error', 'protocol']]);
 });
+
+test('reset_profile: a built-in team goes back to how it ships; others and lower roles are refused', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { App } = await import('../server/app/app.ts');
+  const { defaultSettings } = await import('../server/settings/settings.ts');
+  const { Store } = await import('../server/storage/store.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'mh-reset-'));
+  const settings = defaultSettings();
+  const claude = settings.profiles[0]!;
+  const shipped = claude.tiers[1]!.max;
+  claude.tiers[1]!.max = shipped === 1 ? 2 : 1;
+  const app = new App({ store: new Store(join(dir, 'c')), settingsFile: join(dir, 's.json'), settings, claude: { path: null, version: null } });
+  const got: Array<Record<string, unknown>> = [];
+  const local: Client = { send: (m) => void got.push(m as Record<string, unknown>) };
+  app.connect(local);
+  got.length = 0;
+  app.handle(local, { t: 'reset_profile', profileId: claude.id });
+  const s = got.find((m) => m.t === 'settings') as { settings: { profiles: Array<{ id: string; tiers: Array<{ max: number }> }> } };
+  assert.equal(s.settings.profiles.find((p) => p.id === claude.id)!.tiers[1]!.max, shipped);
+  got.length = 0;
+  app.handle(local, { t: 'reset_profile', profileId: 'nope' });
+  assert.equal(got[0]!.t, 'error');
+  for (const role of ['approve', 'read'] as const) {
+    const out: Array<Record<string, unknown>> = [];
+    const device: Client = { send: (m) => void out.push(m as Record<string, unknown>), role };
+    app.connect(device);
+    app.handle(device, { t: 'hello', protocol: 2 });
+    out.length = 0;
+    app.handle(device, { t: 'reset_profile', profileId: claude.id });
+    assert.equal(out[0]!.code, 'refused', role);
+  }
+});

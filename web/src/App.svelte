@@ -4,6 +4,9 @@
   import FirstRun from './lib/FirstRun.svelte';
   import PermissionCard from './lib/PermissionCard.svelte';
   import SettingsView from './lib/SettingsView.svelte';
+  import DeviceRequestCard from './lib/remote/DeviceRequestCard.svelte';
+  import RemoteSignIn from './lib/remote/RemoteSignIn.svelte';
+  import type { RemoteState } from './lib/remote/types.ts';
   import Sidebar from './lib/Sidebar.svelte';
   import TeamMap from './lib/TeamMap.svelte';
   import TeamPanel from './lib/TeamPanel.svelte';
@@ -46,6 +49,9 @@
     }
     renaming = false;
   }
+
+  /** Devices asking to be let in (local page only): their cards sit above the message box. */
+  const remoteRequests = $derived(((store.remote as RemoteState | null)?.requests ?? []) as RemoteState['requests']);
 
   /** Helpers exist in the open chat: only then is there a team to show. */
   const hasTeam = $derived(store.agentList.some((a) => a.tier !== 'lead'));
@@ -102,7 +108,10 @@
   {#each text.split('`') as part, i (i)}{#if i % 2}<code>{part}</code>{:else}{part}{/if}{/each}
 {/snippet}
 
-{#if store.signedOut}
+{#if store.signedOut === 'device' || store.signedOut === 'withdrawn'}
+  <!-- A remote device without an approved token: golf's pairing screen (web/src/lib/remote). -->
+  <RemoteSignIn withdrawn={store.signedOut === 'withdrawn'} onapproved={(token) => store.deviceApproved(token)} />
+{:else if store.signedOut}
   <div class="signed-out">
     <div class="signed-out-box">
       <h1>Masthead</h1>
@@ -197,6 +206,9 @@
       <Transcript />
       <div class="dock">
         <div class="column">
+          {#each remoteRequests as request (request.id)}
+            <DeviceRequestCard {request} />
+          {/each}
           {#each store.convPending as request (request.id)}
             <PermissionCard {request} />
           {/each}

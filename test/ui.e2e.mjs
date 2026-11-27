@@ -140,7 +140,7 @@ try {
   await page.keyboard.press('Enter');
   const menu = page.getByRole('dialog', { name: 'Settings' });
   await menu.waitFor();
-  check('the settings popup opens from the gear', await menu.isVisible());
+  check('the settings view opens from the gear', await menu.isVisible());
   await page.keyboard.press('Escape');
   await menu.waitFor({ state: 'detached' });
   check('Escape closes it and focus returns to the gear', await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Settings'));
@@ -158,7 +158,12 @@ try {
   check('"Show helper reports as one line" persists across a reload', await menu.getByLabel(/Show helper reports as one line/).isChecked());
   check('"Longest a helper may work" persists across a reload', (await menu.getByLabel(/Longest a helper may work/).inputValue()) === '30');
   check('"Show team controls" persists across a reload (per device)', await menu.getByLabel(/Show team controls/).isChecked());
-  await page.mouse.click(700, 300);
+  // Remote access (golf): a test server has no Tailscale, so the section says so in its status line.
+  if (await page.getByRole('heading', { name: 'Remote access' }).count()) {
+    check('the remote access section renders', (await page.getByRole('status').filter({ hasText: /Tailscale|Off/ }).count()) >= 1);
+  } else log('no remote access section (the server sent no state.remote)');
+  await axeCheck(page, 'settings view');
+  await menu.getByRole('button', { name: 'Close settings' }).click();
   await menu.waitFor({ state: 'detached' });
 
   // Composer restore: the server refuses a message over 400,000 characters; the text must come back.

@@ -7,6 +7,7 @@
   import { shortPath, store } from './store.svelte.ts';
   import { T } from './text.ts';
   import { ui, type Theme } from './ui.svelte.ts';
+  import RemoteSection from './remote/RemoteSection.svelte';
 
   /** Choices for the longest a helper may work, in minutes; 0 is no limit. */
   const RUN_LIMITS = [0, 15, 30, 60, 120, 240];
@@ -27,7 +28,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<section class="settings" role="dialog" aria-modal="false" aria-label={T.settings.title} bind:this={view} onkeydown={onKey}>
+<div class="settings" role="dialog" tabindex="-1" aria-modal="false" aria-label={T.settings.title} bind:this={view} onkeydown={onKey}>
   <div class="inner">
     <div class="top">
       <h1>{T.settings.title}</h1>
@@ -76,6 +77,13 @@
         {/if}
       </section>
 
+      {#if store.remote}
+        <!-- Remote access (golf, web/src/lib/remote): only on this computer's own page. -->
+        <section class="group plug">
+          <RemoteSection />
+        </section>
+      {/if}
+
       <section class="group" aria-labelledby="set-look">
         <h2 id="set-look">{T.settings.theme}</h2>
         <label class="mode">
@@ -102,7 +110,7 @@
       </section>
     {/if}
   </div>
-</section>
+</div>
 
 <style>
   .settings {
