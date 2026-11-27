@@ -1,0 +1,439 @@
+import { randomUUID } from 'node:crypto';
+import type { CanUseTool, McpSdkServerConfigWithInstance, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import {
+  CHILD_TIER,
+  modelLabel,
+  agentName,
+  capEffort,
+  effortRank,
+  type AgentInfo,
+  type ConversationMeta,
+  type Draft,
+  type Effort,
+  type ImageAttachment,
+  type Item,
+  type RateLimitNotice,
+  type Settings,
+  type Tier,
+} from '../shared/protocol.js';
+import { Agent, clip, type AgentHost, type TurnOutcome } from './agent.js';
+import { messageEnvelope, reportEnvelope } from './prompts.js';
+import type { Scheduler } from './scheduler.js';
+import type { StoredConversation } from './store.js';
+import { teamTools, type TeamActions } from './tools.js';
+
+/** What a conversation needs from the app around it. */
+export interface ConversationHost {
+  readonly scheduler: Scheduler;
+  settings(): Settings;
+  claudePath(): string | null;
+  agentChanged(conv: Conversation, agent: Agent): void;
+  itemChanged(conv: Conversation, agent: Agent, item: Item): void;
+  draftChanged(conv: Conversation, agent: Agent, draft: Draft | null): void;
+  metaChanged(conv: Conversation): void;
+  rateLimit(notice: RateLimitNotice): void;
+  askPermission(conv: Conversation, agent: Agent, toolName: string, input: Record<string, unknown>, opts: Parameters<CanUseTool>[2]): Promise<PermissionResult>;
+  cancelPermissions(agentId: string): void;
+}
+
+const MAX_AGENTS = 200;
+const MAX_AGENT_MESSAGES = 1000;
+const TASK_PREVIEW = 400;
+
+function slug(name: string): string {
+  const s = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  return s || 'agent';
+}
+
+function titleFrom(text: string): string {
+  const line = text.trim().split('\n').find((l) => l.trim()) ?? 'New conversation';
+  const clean = line.replace(/\s+/g, ' ').trim();
+  return clean.length > 60 ? `${clean.slice(0, 57)}…` : clean;
+}
+
+/**
+ * One conversation: the lead the person talks to and every agent started under it.
+ *
+ * The conversation owns the rules of the team. Agents can only start the tier directly below them,
+ * reports travel up to whoever started an agent, messages can go to anyone, and effort changes go
+ * through the agent above.
+ */
+export class Conversation implements AgentHost, TeamActions {
+  readonly agents = new Map<string, Agent>();
+  private agentMessages = 0;
+
+  private constructor(
+    readonly meta: ConversationMeta,
+    private host: ConversationHost,
+  ) {}
+
+  static create(host: ConversationHost, cwd: string): Conversation {
+    const id = randomUUID();
+    const leadId = randomUUID();
+    const now = Date.now();
+    const conv = new Conversation({ id, title: 'New conversation', cwd, createdAt: now, updatedAt: now, leadId }, host);
+    const s = host.settings();
+    conv.addAgent(
+      new Agent(conv.newInfo({ id: leadId, name: agentName(0), tier: 'lead', parentId: null, title: '', task: '', status: 'idle', effort: s.autoEffort ? 'low' : s.tiers.lead.effort }), conv),
+    );
+    return conv;
+  }
+
+  /** Rebuilds a conversation saved by an earlier run. Nothing is running afterwards. */
+  static restore(host: ConversationHost, stored: StoredConversation): Conversation {
+    const conv = new Conversation(stored.meta, host);
+    for (const a of stored.agents) {
+      const info = { ...a.info, title: a.info.title ?? '', activity: undefined };
+      if (info.status === 'queued' || info.status === 'running' || info.status === 'waiting') {
+        // The app was closed while this agent was working.
+        info.status = info.tier === 'lead' ? 'idle' : 'stopped';
+        if (info.tier !== 'lead') info.error = 'Masthead was closed while this agent was working.';
+      }
+      // Nobody is waiting for a report after a restart; a parent that messages the agent asks for one again.
+      conv.agents.set(info.id, new Agent(info, conv, { sessionId: a.sessionId, owesReport: false, seed: a.sessionId ? null : (a.seed ?? null) }));
+    }
+    return conv;
+  }
+
+  toStored(): StoredConversation {
+    return {
+      meta: { ...this.meta, busy: undefined },
+      agents: [...this.agents.values()].map((a) => ({ info: a.info, sessionId: a.sessionId, owesReport: a.owesReport, ...(a.pendingSeed ? { seed: a.pendingSeed } : {}) })),
+    };
+  }
+
+  get lead(): Agent {
+    return this.agents.get(this.meta.leadId)!;
+  }
+
+  /** True while any agent in the conversation is working. */
+  busy(): boolean {
+    for (const a of this.agents.values()) if (a.live) return true;
+    return false;
+  }
+
+  infos(): AgentInfo[] {
+    return [...this.agents.values()].map((a) => a.info);
+  }
+
+  private newInfo(p: { id: string; name: string; tier: Tier; parentId: string | null; title: string; task: string; status: AgentInfo['status']; effort: Effort }): AgentInfo {
+    return {
+      ...p,
+      convId: this.meta.id,
+      model: this.host.settings().tiers[p.tier].model,
+      createdAt: Date.now(),
+      usage: { context: 0, contextMax: 1_000_000, output: 0, costUsd: 0, turns: 0 },
+    };
+  }
+
+  private addAgent(agent: Agent): void {
+    this.agents.set(agent.id, agent);
+    this.host.agentChanged(this, agent);
+  }
+
+  private touch(): void {
+    this.meta.updatedAt = Date.now();
+    this.host.metaChanged(this);
+  }
+
+  private children(agent: Agent): Agent[] {
+    return [...this.agents.values()].filter((a) => a.info.parentId === agent.id);
+  }
+
+  private liveChildren(agent: Agent): Agent[] {
+    return this.children(agent).filter((a) => a.live);
+  }
+
+  private parent(agent: Agent): Agent | null {
+    return agent.info.parentId ? (this.agents.get(agent.info.parentId) ?? null) : null;
+  }
+
+  private isAncestor(ancestor: Agent, agent: Agent): boolean {
+    for (let p = this.parent(agent); p; p = this.parent(p)) if (p === ancestor) return true;
+    return false;
+  }
+
+  private find(name: string, relativeTo?: Agent): Agent | null {
+    const key = name.trim().toLowerCase();
+    if (relativeTo && key === 'parent') return this.parent(relativeTo);
+    if (key === 'lead') return this.lead;
+    for (const a of this.agents.values()) if (a.name === key) return a;
+    const s = slug(name);
+    for (const a of this.agents.values()) if (a.name === s) return a;
+    return null;
+  }
+
+  // ---- the person ----
+
+  /** A message typed by the person, to the lead or straight to another agent. */
+  userSend(text: string, images: ImageAttachment[] | undefined, agentId?: string): void {
+    const target = (agentId && this.agents.get(agentId)) || this.lead;
+    if (this.meta.title === 'New conversation' && target === this.lead && text.trim()) this.meta.title = titleFrom(text);
+    target.addItem({ kind: 'user', text, ...(images?.length ? { images: images.length } : {}) });
+    target.deliver(Agent.imageContent(text, images));
+    this.touch();
+  }
+
+  /** Stops the lead's current turn. Agents it started keep working. */
+  async interruptLead(): Promise<void> {
+    await this.lead.interrupt();
+  }
+
+  /** Stops one agent and everything under it. */
+  stopAgent(agentId: string, why: string): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+    if (agent.tier === 'lead') {
+      for (const c of this.children(agent)) this.stopTree(c, why);
+      void agent.interrupt();
+      // If the lead was only waiting on those agents, nothing else would wake it.
+      this.settle(agent);
+      return;
+    }
+    const parent = this.parent(agent);
+    const wasLive = agent.live;
+    const owed = agent.owesReport;
+    this.stopTree(agent, why);
+    if (wasLive && owed && parent) this.report(parent, agent, 'stopped', why);
+    else if (parent) this.settle(parent);
+  }
+
+  stopAll(): void {
+    this.stopAgent(this.lead.id, 'Stopped by the person.');
+    this.settle(this.lead);
+  }
+
+  private stopTree(agent: Agent, why: string): void {
+    for (const c of this.children(agent)) this.stopTree(c, why);
+    if (!agent.live) return;
+    this.host.cancelPermissions(agent.id);
+    agent.owesReport = false;
+    agent.end('stopped', why);
+    agent.addItem({ kind: 'notice', level: 'info', text: why });
+  }
+
+  /** Ends every process when the app shuts down. */
+  shutdown(): void {
+    for (const a of this.agents.values()) {
+      if (a.tier !== 'lead' && a.live) a.end('stopped', 'Masthead was closed while this agent was working.');
+      else a.dispose();
+    }
+    const lead = this.lead;
+    if (lead.status !== 'idle') lead.setStatus('idle');
+  }
+
+  // ---- AgentHost ----
+
+  get cwd(): string {
+    return this.meta.cwd;
+  }
+  get scheduler(): Scheduler {
+    return this.host.scheduler;
+  }
+  settings(): Settings {
+    return this.host.settings();
+  }
+  claudePath(): string | null {
+    return this.host.claudePath();
+  }
+  parentName(agent: Agent): string | null {
+    return this.parent(agent)?.name ?? null;
+  }
+  tools(agent: Agent): McpSdkServerConfigWithInstance {
+    return teamTools(agent, this);
+  }
+  agentChanged(agent: Agent): void {
+    this.host.agentChanged(this, agent);
+  }
+  itemChanged(agent: Agent, item: Item): void {
+    this.host.itemChanged(this, agent, item);
+  }
+  draftChanged(agent: Agent, draft: Draft | null): void {
+    this.host.draftChanged(this, agent, draft);
+  }
+  rateLimit(notice: RateLimitNotice): void {
+    this.host.rateLimit(notice);
+  }
+  askPermission(agent: Agent, toolName: string, input: Record<string, unknown>, opts: Parameters<CanUseTool>[2]): Promise<PermissionResult> {
+    return this.host.askPermission(this, agent, toolName, input, opts);
+  }
+
+  turnEnded(agent: Agent, outcome: TurnOutcome): void {
+    this.touch();
+    if (outcome.interrupted) agent.addItem({ kind: 'notice', level: 'info', text: 'Stopped.' });
+    else if (outcome.error) agent.addItem({ kind: 'notice', level: 'error', text: outcome.error });
+
+    if (agent.tier === 'lead') {
+      agent.setStatus(this.liveChildren(agent).length > 0 ? 'waiting' : 'idle');
+      void agent.refreshContext();
+      return;
+    }
+    if (this.liveChildren(agent).length > 0 && !outcome.error) {
+      agent.setStatus('waiting');
+      return;
+    }
+    this.finish(agent, outcome.error ? 'failed' : 'done', outcome.text, outcome.error);
+  }
+
+  processLost(agent: Agent, message: string): void {
+    this.host.cancelPermissions(agent.id);
+    agent.addItem({ kind: 'notice', level: 'error', text: message });
+    this.scheduler.release(agent.tier, agent.id);
+    if (agent.tier === 'lead') {
+      agent.setStatus(this.liveChildren(agent).length > 0 ? 'waiting' : 'idle');
+      return;
+    }
+    this.finish(agent, 'failed', '', message);
+  }
+
+  /** A sub-agent is finished: close it, tell whoever is waiting for it. */
+  private finish(agent: Agent, status: 'done' | 'failed', text: string, error?: string): void {
+    for (const c of this.liveChildren(agent)) this.stopTree(c, `"${agent.name}" ended before this agent finished.`);
+    const owed = agent.owesReport;
+    agent.owesReport = false;
+    agent.end(status, error);
+    const parent = this.parent(agent);
+    if (!parent) return;
+    if (owed) this.report(parent, agent, status, status === 'failed' ? `The agent failed: ${error ?? 'unknown error'}${text ? `\n\nIts last message:\n${text}` : ''}` : text);
+    else this.settle(parent);
+  }
+
+  private report(parent: Agent, child: Agent, status: string, text: string): void {
+    const canReceive = parent.tier === 'lead' || parent.live;
+    if (!canReceive) return;
+    parent.addItem({ kind: 'inbound', via: 'report', from: child.name, text: text.trim() || '(no report text)', status: child.status });
+    parent.deliver(reportEnvelope(child.name, child.tier, status, text));
+  }
+
+  /**
+   * Called when an agent under `agent` stopped being live without sending a report. If `agent` was
+   * only waiting on it, nothing else will wake it, so move it on.
+   */
+  private settle(agent: Agent): void {
+    if (agent.status !== 'waiting' || agent.busy || this.liveChildren(agent).length > 0) return;
+    if (agent.tier === 'lead') agent.setStatus('idle');
+    else this.finish(agent, 'done', agent.lastText);
+  }
+
+  // ---- TeamActions: what the agents' tools do ----
+
+  autoEffort(): boolean {
+    return this.host.settings().autoEffort;
+  }
+
+  /** The name of the model a tier is set to, as agents and people read it. */
+  label(tier: Tier): string {
+    return modelLabel(this.host.settings().tiers[tier].model);
+  }
+
+  spawn(parent: Agent, rawTitle: string, task: string, effort: Effort | undefined): string {
+    const tier = CHILD_TIER[parent.tier];
+    if (!tier) return 'Error: Haiku agents cannot start other agents.';
+    const s = this.host.settings();
+    const cap = s.tiers[tier].max;
+    if (cap <= 0) return `Error: ${this.label(tier)} agents are switched off in the settings. Do this work yourself.`;
+    if (this.agents.size >= MAX_AGENTS) return `Error: this conversation already has ${MAX_AGENTS} agents. Reuse one with send_message.`;
+    if (!task.trim()) return 'Error: the task is empty.';
+
+    // Names are handed out in order, so the person can call any agent by a name they can say.
+    let index = this.agents.size;
+    let name = agentName(index);
+    while (this.find(name)) name = agentName(++index);
+    const title = rawTitle.replace(/\s+/g, ' ').trim().slice(0, 60);
+
+    const ceiling = s.tiers[tier].effort;
+    const startEffort = s.autoEffort ? capEffort(effort ?? 'low', ceiling) : ceiling;
+    const info = this.newInfo({ id: randomUUID(), name, tier, parentId: parent.id, title, task: clip(task.trim(), TASK_PREVIEW), status: 'queued', effort: startEffort });
+    const agent = new Agent(info, this, { owesReport: true, seed: task });
+    const willQueue = this.scheduler.running(tier) >= cap || this.scheduler.queued(tier) > 0;
+    this.addAgent(agent);
+    agent.addItem({ kind: 'inbound', via: 'task', from: parent.name, text: task });
+    agent.start();
+    this.touch();
+    return `Started ${this.label(tier)} agent "${name}"${title ? ` (${title})` : ''} at ${startEffort} effort${willQueue ? ` (queued: ${cap} may run at once)` : ''}. Its report will arrive as a message when it finishes.`;
+  }
+
+  message(from: Agent, to: string, text: string): string {
+    const target = this.find(to, from);
+    if (!target) return `Error: there is no agent named "${to}". Use list_agents to see the names.`;
+    if (target === from) return 'Error: that is you.';
+    if (this.agentMessages >= MAX_AGENT_MESSAGES) return 'Error: this conversation has reached its limit of messages between agents.';
+    this.agentMessages++;
+    const wasLive = target.live;
+    const statusBefore = target.status;
+    // A finished agent woken by the one that started it owes that agent a fresh report.
+    if (!wasLive && target.tier !== 'lead' && this.parent(target) === from) target.owesReport = true;
+    target.addItem({ kind: 'inbound', via: 'message', from: from.name, text });
+    target.deliver(messageEnvelope(from.name, from.tier, text));
+    this.touch();
+    const state = target.tier === 'lead' ? 'the lead' : wasLive ? statusBefore : `was ${statusBefore}, now resuming`;
+    return `Delivered to "${target.name}" (${state}).`;
+  }
+
+  list(viewer: Agent): string {
+    const lines = [...this.agents.values()].map((a) => {
+      const by = this.parent(a)?.name;
+      const you = a === viewer ? ' (you)' : '';
+      const job = a.info.title || a.info.task.replace(/\s+/g, ' ').slice(0, 120);
+      const task = job ? ` — ${job}` : '';
+      return `- ${a.name}${you}: ${this.label(a.tier)}, ${a.status}, ${a.info.effort} effort${by ? `, started by ${by}` : ''}${task}`;
+    });
+    return lines.join('\n');
+  }
+
+  stop(caller: Agent, name: string): string {
+    const target = this.find(name, caller);
+    if (!target) return `Error: there is no agent named "${name}".`;
+    if (!this.isAncestor(caller, target)) return `Error: you can only stop agents started by you or below you.`;
+    if (!target.live) return `"${target.name}" is not running (${target.status}).`;
+    // The caller asked for this, so it does not need a report about it.
+    target.owesReport = false;
+    this.stopTree(target, `Stopped by "${caller.name}".`);
+    const parent = this.parent(target);
+    if (parent && parent !== caller) this.settle(parent);
+    return `Stopped "${target.name}" and everything under it.`;
+  }
+
+  setOwnEffort(agent: Agent, level: Effort, reason: string): string {
+    const s = this.host.settings();
+    if (!s.autoEffort) return 'Error: automatic effort is switched off in the settings.';
+    const ceiling = s.tiers[agent.tier].effort;
+    const current = agent.info.effort;
+    if (level === current) return `You are already at ${current} effort.`;
+    if (effortRank(level) > effortRank(ceiling)) return `Error: ${this.label(agent.tier)} agents may go up to ${ceiling} effort. The person sets that limit.`;
+    const lowering = effortRank(level) < effortRank(current);
+    const parent = this.parent(agent);
+    if (lowering || !parent) {
+      agent.setEffort(level);
+      agent.addItem({ kind: 'notice', level: 'info', text: `Effort ${lowering ? 'lowered' : 'raised'} to ${level}: ${reason}` });
+      return `Your effort is now ${level}, from your next step on.`;
+    }
+    if (!(parent.tier === 'lead' || parent.live)) {
+      return `Error: "${parent.name}" is no longer running, so nobody can approve this. Stay at ${current}.`;
+    }
+    const text = `Effort request: "${agent.name}" asks to go from ${current} to ${level} effort.\nReason: ${reason}\nApprove with set_agent_effort (name "${agent.name}", level "${level}"), choose another level, or decline with send_message.`;
+    this.agentMessages++;
+    parent.addItem({ kind: 'inbound', via: 'message', from: agent.name, text });
+    parent.deliver(messageEnvelope(agent.name, agent.tier, text));
+    agent.addItem({ kind: 'notice', level: 'info', text: `Asked "${parent.name}" for ${level} effort: ${reason}` });
+    return `Request sent to "${parent.name}". Keep working at ${current} effort; you will get a message with the outcome.`;
+  }
+
+  setAgentEffort(caller: Agent, name: string, level: Effort): string {
+    const s = this.host.settings();
+    if (!s.autoEffort) return 'Error: automatic effort is switched off in the settings.';
+    const target = this.find(name, caller);
+    if (!target) return `Error: there is no agent named "${name}".`;
+    if (!this.isAncestor(caller, target)) return 'Error: you can only set the effort of agents started by you or below you.';
+    const ceiling = s.tiers[target.tier].effort;
+    if (effortRank(level) > effortRank(ceiling)) return `Error: ${this.label(target.tier)} agents may go up to ${ceiling} effort. The person sets that limit.`;
+    const before = target.info.effort;
+    if (before === level) return `"${target.name}" is already at ${level} effort.`;
+    target.setEffort(level);
+    const note = `"${caller.name}" set your thinking effort to ${level} (it was ${before}). It applies from your next step.`;
+    target.addItem({ kind: 'notice', level: 'info', text: `Effort set to ${level} by "${caller.name}".` });
+    // Only tell an agent that is mid-turn; there is no reason to wake a waiting or finished one for this.
+    if (target.status === 'running') target.deliver(messageEnvelope(caller.name, caller.tier, note));
+    return `"${target.name}" is now at ${level} effort.`;
+  }
+}

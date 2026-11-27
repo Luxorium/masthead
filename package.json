@@ -1,0 +1,42 @@
+{
+  "name": "masthead",
+  "version": "0.1.0",
+  "description": "A local web app for running a tiered team of Claude agents through the Claude Code already installed on your machine.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "masthead": "dist/server/main.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:web": "vite build",
+    "dev:web": "vite",
+    "check": "tsc -p tsconfig.server.json --noEmit && svelte-check --tsconfig ./tsconfig.web.json",
+    "test": "node --import tsx --test test/*.test.ts",
+    "start": "node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED dist/server/main.js serve",
+    "test:live": "node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED --import tsx test/live.e2e.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.332",
+    "dompurify": "^3.5.0",
+    "highlight.js": "^11.12.0",
+    "marked": "^18.3.0",
+    "ws": "^8.23.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.2",
+    "@types/node": "^26.6.11",
+    "@types/ws": "^8.18.2",
+    "playwright-core": "^1.65.1",
+    "svelte": "^5.59.2",
+    "svelte-check": "^4.7.8",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vite": "^8.4.0"
+  }
+}
