@@ -1,17 +1,22 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { defaultSettings } from '../server/settings/settings.ts';
+import { defaultSettings, sanitizeSettings } from '../server/settings/settings.ts';
 import { Conversation, type ConversationHost } from '../server/core/conversation.ts';
 import type { Agent } from '../server/runtime/agent.ts';
 import { messageEnvelope, reportEnvelope, systemAppend, withArticle } from '../server/core/prompts.ts';
 import { Scheduler, TierOff } from '../server/core/scheduler.ts';
-import type { Item, Tier } from '../shared/protocol.ts';
+import type { Item, Settings, Tier } from '../shared/protocol.ts';
 
 // These tests run Conversation without Claude Code: claudePath() returns null, so an agent that gets a
 // slot fails at once with "Claude Code was not found". To keep an agent live (queued), a test first
 // fills its tier's slots with a dummy holder.
 
 const tick = () => new Promise((r) => setImmediate(r));
+
+/** Changes one Claude tier in place, the way the app does (through validation; profiles are the source of truth). */
+function setTier(settings: Settings, id: string, patch: Record<string, unknown>) {
+  Object.assign(settings, sanitizeSettings({ tiers: { [id]: patch } }, settings));
+}
 
 function setup() {
   const settings = defaultSettings();
@@ -61,17 +66,17 @@ test('conversation: spawn follows the tiers and names agents in order', () => {
   assert.equal(byName('delta').tier, 'sonnet');
   block('haiku');
   conv.spawn(byName('delta'), 'H', 'task h', undefined);
-  assert.match(conv.spawn(byName('echo'), 'X', 'task', undefined), /^Error: Haiku agents cannot start/);
+  assert.match(conv.spawn(byName('echo'), 'X', 'task', undefined), /^Error: Haiku 5\.5 agents cannot start other agents\./);
   assert.match(conv.spawn(conv.lead, 'E', '   ', undefined), /^Error: the task is empty/);
 });
 
 test('conversation: spawn refuses a tier that is off, and caps the starting effort', () => {
   const { conv, settings, block } = setup();
-  settings.tiers.opus.max = 0;
+  setTier(settings, 'opus', { max: 0 });
   assert.match(conv.spawn(conv.lead, 'A', 'task', undefined), /^Error: Opus 5\.5 agents are switched off/);
   assert.equal(conv.agents.size, 1);
-  settings.tiers.opus.max = 2;
-  settings.tiers.opus.effort = 'medium';
+  setTier(settings, 'opus', { max: 2 });
+  setTier(settings, 'opus', { effort: 'medium' });
   block('opus');
   assert.match(conv.spawn(conv.lead, 'A', 'task', 'xhigh'), /at medium effort/);
   assert.match(conv.spawn(conv.lead, 'B', 'task', undefined), /at low effort/);
@@ -124,7 +129,7 @@ test('conversation: a failed agent reports to its parent; the lead gets it', asy
   assert.equal(bravo.owesReport, false);
   const r = reports('alpha', 'bravo');
   assert.equal(r.length, 1);
-  assert.match((r[0]!.item as { text: string }).text, /Claude Code was not found/);
+  assert.match((r[0]!.item as { text: string }).text, /was not found/);
 });
 
 test('conversation: a child ending without a report moves on a waiting parent (settle)', async () => {
@@ -155,7 +160,7 @@ test('conversation: effort changes, approval and ceilings', () => {
   const { conv, settings, block, byName, inbound, items } = setup();
   block('opus');
   block('sonnet');
-  settings.tiers.opus.effort = 'high';
+  setTier(settings, 'opus', { effort: 'high' });
   conv.spawn(conv.lead, 'A', 'task', undefined);
   conv.spawn(conv.lead, 'B', 'task', undefined);
   const bravo = byName('bravo');
@@ -209,7 +214,7 @@ test('regression: switching a tier off fails its queued agents and reports to th
   conv.spawn(conv.lead, 'A', 'task', undefined);
   const bravo = byName('bravo');
   assert.equal(bravo.status, 'queued');
-  settings.tiers.opus.max = 0;
+  setTier(settings, 'opus', { max: 0 });
   host.scheduler.limitsChanged();
   await tick();
   assert.equal(bravo.status, 'failed');
@@ -919,3 +924,28 @@ function agentLimitTurn(conv: Conversation, agent: Agent, usageLimit: { resetsAt
   agent.setStatus('running');
   conv.turnEnded(agent, { text: '', error: 'usage limit', interrupted: false, usageLimit } as Outcome);
 }
+
+test('sleep: time the machine was asleep does not count as running time', () => {
+  const { conv, host, settings, block, byName } = setup();
+  let wall = Date.now();
+  let awake = 1_000_000;
+  let fn: (() => void) | null = null;
+  host.clock = { now: () => wall, active: () => awake, every: (_ms, f) => ((fn = f), () => void (fn = null)) };
+  setTier(settings, 'opus', { max: 3 });
+  Object.assign(settings, { maxRunMinutes: 10 });
+  block('opus');
+  conv.spawn(conv.lead, 'A', 'task', undefined);
+  const bravo = byName('bravo');
+  bravo.setStatus('running');
+  wall += 7 * 3600_000; // the laptop slept for seven hours…
+  awake += 60_000; // …and was awake for one minute
+  (fn as unknown as () => void)();
+  assert.equal(bravo.live, true);
+  assert.match(conv.list(conv.lead), /- bravo: .*running, for 1m,/);
+});
+
+test('prompts: a backend without background tracking gets one line about it', () => {
+  const settings = defaultSettings();
+  assert.match(systemAppend({ tier: 'opus', name: 'b', parentName: 'a', settings, background: false }), /will not wake you when it ends/);
+  assert.doesNotMatch(systemAppend({ tier: 'opus', name: 'b', parentName: 'a', settings }), /will not wake you/);
+});

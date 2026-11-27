@@ -14,6 +14,67 @@ export const CHILD_TIER: Record<Tier, Tier | null> = {
   haiku: null,
 };
 
+/**
+ * A tier as data (0.2.0 team profiles). Ids are unique across all profiles: the built-in Claude profile
+ * keeps `lead`/`opus`/`sonnet`/`haiku` (so 0.1.x conversations load unchanged); other profiles use
+ * `<profileId>:<index>`. `Tier` above stays the Claude union as a compatibility shape for the page
+ * until it reads profiles (web W7); then `Tier` becomes `TierId`.
+ */
+export type TierId = string;
+
+/** Colour slots for tiers; the page owns the actual light and dark values. */
+export const PALETTE = ['amber', 'violet', 'blue', 'teal', 'rose', 'green', 'slate', 'orange'] as const;
+export type PaletteColour = (typeof PALETTE)[number];
+
+export interface TierSpec {
+  id: TierId;
+  /** Shown to people and agents; made from the model id when not set. */
+  label: string;
+  backend: string;
+  model: string;
+  /** With automatic effort, the ceiling; without, the fixed level. */
+  effort: Effort;
+  /** Agents of this tier running at once, app-wide. Ignored for the first tier (the lead). */
+  max: number;
+  /** Skip the person's own MCP servers. */
+  lean: boolean;
+  colour: PaletteColour;
+}
+
+export interface TeamProfile {
+  id: string;
+  label: string;
+  builtIn: boolean;
+  /** Index 0 is the lead; tier i starts tier i+1; the last starts nothing. 1 to MAX_TIERS tiers. */
+  tiers: TierSpec[];
+}
+
+export const MAX_TIERS = 5;
+export const CLAUDE_PROFILE = 'claude';
+
+/** The profile a tier belongs to. */
+export function profileOfTier(s: Pick<Settings, 'profiles'>, tier: TierId): TeamProfile | undefined {
+  return s.profiles.find((p) => p.tiers.some((t) => t.id === tier));
+}
+
+export function findTier(s: Pick<Settings, 'profiles'>, tier: TierId): TierSpec | undefined {
+  for (const p of s.profiles) for (const t of p.tiers) if (t.id === tier) return t;
+  return undefined;
+}
+
+/** The tier an agent of `tier` may start, or null (the last tier, or an unknown one). */
+export function childTierOf(s: Pick<Settings, 'profiles'>, tier: TierId): TierId | null {
+  const p = profileOfTier(s, tier);
+  if (!p) return null;
+  const i = p.tiers.findIndex((t) => t.id === tier);
+  return p.tiers[i + 1]?.id ?? null;
+}
+
+/** Whether `tier` is the first tier (the lead) of its profile. */
+export function isLeadTier(s: Pick<Settings, 'profiles'>, tier: TierId): boolean {
+  return profileOfTier(s, tier)?.tiers[0]?.id === tier;
+}
+
 export const TIER_LABEL: Record<Tier, string> = {
   lead: 'Fable 5.2',
   opus: 'Opus 5.5',
@@ -100,6 +161,16 @@ export const PERMISSION_CHOICES: readonly PermissionChoice[] = [
 ];
 
 export interface Settings {
+  /** Settings format: 2 since 0.2.0 (team profiles). Files without it are 0.1.x and are migrated. */
+  version: 2;
+  /** Team profiles; the built-in `claude` profile is always present. The source of truth for tiers. */
+  profiles: TeamProfile[];
+  /** The profile a new conversation uses unless the person picks another. */
+  defaultProfile: string;
+  /**
+   * Compatibility view of the `claude` profile for the page until web W7 (and for patches the page
+   * sends): kept equal to it by the server. Changing it changes the profile.
+   */
   tiers: Record<Tier, TierSettings>;
   permissionMode: PermissionChoice;
   /**
@@ -107,9 +178,9 @@ export interface Settings {
    * others with the approval of the agent that started them.
    */
   autoEffort: boolean;
-  /** Sonnet and Haiku agents skip the person's external MCP servers, which keeps their context small. */
+  /** Compatibility view (claude profile): Sonnet and Haiku agents skip the person's external MCP servers. */
   leanSubagents: boolean;
-  /** Opus agents skip the person's external MCP servers too. */
+  /** Compatibility view (claude profile): Opus agents skip the person's external MCP servers too. */
   leanOpus: boolean;
   /** Reports from agents are shown folded shut in a transcript until the person opens them. */
   collapseReports: boolean;
@@ -174,7 +245,7 @@ interface ItemBase {
 
 /** One entry in an agent's transcript as the app shows it. */
 export type Item =
-  | (ItemBase & { kind: 'user'; text: string; images?: number })
+  | (ItemBase & { kind: 'user'; text: string; /** 0.1.x: a count; 0.2.0: the stored images. */ images?: number | BlobRef[] })
   | (ItemBase & { kind: 'text'; text: string })
   | (ItemBase & { kind: 'thinking'; text: string })
   | (ItemBase & {
@@ -184,6 +255,7 @@ export type Item =
       result?: string;
       isError?: boolean;
       done: boolean;
+      images?: BlobRef[];
     })
   | (ItemBase & {
       kind: 'inbound';
@@ -210,6 +282,8 @@ export interface ConversationMeta {
   createdAt: number;
   updatedAt: number;
   leadId: string;
+  /** The team profile it runs on (0.2.0); missing in 0.1.x files, which means `claude`. */
+  profileId?: string;
   /** True while any agent in it is working. Filled in when the list is sent; not stored. */
   busy?: boolean;
 }
@@ -241,6 +315,15 @@ export interface PermissionRequest {
   ts: number;
 }
 
+/** An image stored on the server (per conversation, content-addressed). */
+export interface BlobRef {
+  blob: string;
+  mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  w: number;
+  h: number;
+  bytes: number;
+}
+
 export interface ImageAttachment {
   mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
   /** Base64 without the data: prefix. */
@@ -255,7 +338,7 @@ export interface RateLimitNotice {
 }
 
 /** A change to the settings: only the fields that changed. The server merges it over the current ones. */
-export type SettingsPatch = Partial<Omit<Settings, 'tiers'>> & { tiers?: Partial<Record<Tier, Partial<TierSettings>>> };
+export type SettingsPatch = Partial<Omit<Settings, 'tiers' | 'version'>> & { tiers?: Partial<Record<Tier, Partial<TierSettings>>> };
 
 export interface AppState {
   version: string;
@@ -267,13 +350,15 @@ export interface AppState {
   pending: PermissionRequest[];
   /** The latest usage notice of each limit type Claude Code has reported since Masthead started. */
   usage: RateLimitNotice[];
+  /** Per socket: images load from `/blob/<convId>/<hash>?t=<blobToken>`. */
+  blobToken?: string;
 }
 
 // ---- browser -> server ----
 export type ClientMsg =
   | { t: 'hello' }
   | { t: 'open'; convId: string }
-  | { t: 'items'; convId: string; agentId: string }
+  | { t: 'items'; convId: string; agentId: string; /** Paging: without `limit` the whole transcript comes back. */ before?: number | null; limit?: number }
   | {
       t: 'send';
       /** null starts a new conversation. */
@@ -285,6 +370,10 @@ export type ClientMsg =
       agentId?: string;
       /** Echoed back in `created`, or in `error` if the message is refused, so the browser can match its request. */
       ref?: string;
+      /** Images already uploaded with POST /blob?conv=. */
+      blobs?: BlobRef[];
+      /** For a new conversation: the team profile to use (default: settings.defaultProfile). */
+      profile?: string;
     }
   | { t: 'interrupt'; convId: string }
   | { t: 'stop_agent'; convId: string; agentId: string }
@@ -309,7 +398,7 @@ export type ServerMsg =
   | { t: 'conversation'; conv: ConversationMeta; agents: AgentInfo[]; pending: PermissionRequest[] }
   | { t: 'created'; convId: string; ref?: string }
   | { t: 'deleted'; convId: string }
-  | { t: 'items'; convId: string; agentId: string; items: Item[]; draft: Draft | null }
+  | { t: 'items'; convId: string; agentId: string; items: Item[]; draft: Draft | null; cursor?: number | null; more?: boolean }
   | { t: 'agent'; agent: AgentInfo }
   | { t: 'item'; convId: string; agentId: string; item: Item }
   | { t: 'draft'; convId: string; agentId: string; draft: Draft | null }
@@ -318,4 +407,4 @@ export type ServerMsg =
   | { t: 'settings'; settings: Settings }
   | { t: 'rate_limit'; notice: RateLimitNotice }
   | { t: 'dirs'; path: string; parent: string | null; entries: string[]; error?: string }
-  | { t: 'error'; message: string; /** The `ref` of the refused `send`, if it had one. */ ref?: string };
+  | { t: 'error'; message: string; code?: 'too_large' | 'invalid' | 'not_found' | 'refused' | 'protocol'; /** The `ref` of the refused `send`, if it had one. */ ref?: string };

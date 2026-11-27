@@ -8,6 +8,12 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' && v ? v : undefined;
 }
 
+/** Effort levels in the page's words (thinking time). */
+function thinking(level: string | undefined): string | undefined {
+  const words: Record<string, string> = { low: 'short', medium: 'medium', high: 'long', xhigh: 'longest' };
+  return level ? (words[level] ?? level) : undefined;
+}
+
 function oneLine(s: string | undefined, max = 120): string | undefined {
   if (!s) return undefined;
   const flat = s.replace(/\s+/g, ' ').trim();
@@ -50,17 +56,17 @@ export function toolLine(name: string, input: unknown, live = false): ToolLine {
     case 'AskUserQuestion':
       return { verb: v('Asked you a question', 'Asking you a question') };
     case 'mcp__masthead__spawn_agent':
-      return { verb: v('Started an agent:', 'Starting an agent:'), target: str(i.title) ?? str(i.name) };
+      return { verb: v('Started a helper:', 'Starting a helper:'), target: str(i.title) ?? str(i.name) };
     case 'mcp__masthead__send_message':
       return { verb: v('Messaged', 'Messaging'), target: str(i.to) };
     case 'mcp__masthead__list_agents':
       return { verb: v('Checked the team', 'Checking the team') };
     case 'mcp__masthead__stop_agent':
-      return { verb: v('Stopped agent', 'Stopping agent'), target: str(i.name) };
+      return { verb: v('Stopped helper', 'Stopping helper'), target: str(i.name) };
     case 'mcp__masthead__set_effort':
-      return { verb: v('Asked for effort', 'Asking for effort'), target: str(i.level) };
+      return { verb: v('Asked for more thinking time:', 'Asking for more thinking time:'), target: thinking(str(i.level)) };
     case 'mcp__masthead__set_agent_effort':
-      return { verb: v(`Set ${str(i.name) ?? 'an agent'} to`, `Setting ${str(i.name) ?? 'an agent'} to`), target: `${str(i.level) ?? '?'} effort` };
+      return { verb: v(`Set ${str(i.name) ?? 'a helper'}'s thinking time to`, `Setting ${str(i.name) ?? 'a helper'}'s thinking time to`), target: thinking(str(i.level)) ?? '?' };
   }
   if (name.startsWith('mcp__')) {
     const [, server, ...rest] = name.split('__');

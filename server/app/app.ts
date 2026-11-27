@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import type { CanUseTool, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import type { Backend, PermissionAnswer, PermissionAsk } from '../backends/types.js';
+import { FakeBackend, fakeBackendSelected } from '../backends/fake/index.js';
+import { ClaudeBackend } from '../backends/claude/session.js';
 import {
   VERSION,
   type AppState,
@@ -10,7 +12,6 @@ import {
   type ImageAttachment,
   type Item,
   type PermissionRequest,
-  type Question,
   type RateLimitNotice,
   type ServerMsg,
   type Settings,
@@ -21,18 +22,16 @@ import { findClaude, type ClaudeInfo } from '../backends/claude/env.js';
 import { loadSettings, sanitizeSettings, saveSettings } from '../settings/settings.js';
 import { Conversation, type ConversationHost } from '../core/conversation.js';
 import { Scheduler } from '../core/scheduler.js';
+import type { BlobRef } from '../storage/blobs.js';
 import { Store } from '../storage/store.js';
+import { Hub, type Client } from './clients.js';
 
 /** A browser tab connected to the server. */
-export interface Client {
-  send(msg: ServerMsg): void;
-}
+export type { Client } from './clients.js';
 
 interface PendingPermission {
   request: PermissionRequest;
-  input: Record<string, unknown>;
-  suggestions: Parameters<CanUseTool>[2]['suggestions'];
-  resolve(result: PermissionResult): void;
+  resolve(answer: PermissionAnswer): void;
 }
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -54,7 +53,6 @@ export class App implements ConversationHost {
   private claude: ClaudeInfo;
   private store: Store;
   private conversations = new Map<string, Conversation>();
-  private clients = new Set<Client>();
   private pending = new Map<string, PendingPermission>();
   private dirty = new Map<string, NodeJS.Timeout>();
   private busy = new Map<string, boolean>();
@@ -62,6 +60,9 @@ export class App implements ConversationHost {
   private usage = new Map<string, RateLimitNotice>();
   /** Disk writes that are failing; each is logged once until it works again. */
   private failing = new Set<string>();
+  /** The fake backend when the environment selects it (see the constructor); otherwise null. */
+  private fake: FakeBackend | null;
+  private claudeBackend: ClaudeBackend | undefined;
 
   /**
    * `settingsFile` is where changes to the settings are written. Tests pass their own file so they
@@ -70,16 +71,31 @@ export class App implements ConversationHost {
   constructor(opts: { store?: Store; claude?: ClaudeInfo; settings?: Settings; settingsFile?: string } = {}) {
     this.settingsFile = opts.settingsFile ?? SETTINGS_FILE;
     this.currentSettings = opts.settings ?? loadSettings(this.settingsFile);
-    this.claude = opts.claude ?? findClaude();
+    // The scripted fake backend, for the browser test and CI only: it needs both variables, and the
+    // page can never choose it.
+    if (process.env.MASTHEAD_BACKEND === 'fake' && !fakeBackendSelected(process.env)) {
+      throw new Error('MASTHEAD_BACKEND=fake is for tests only and also needs MASTHEAD_ALLOW_FAKE=1.');
+    }
+    this.fake = fakeBackendSelected(process.env) ? new FakeBackend({ stepMs: Number(process.env.MASTHEAD_FAKE_STEP_MS) || 20 }) : null;
+    this.claude = this.fake ? { path: null, version: 'fake backend (tests only)' } : (opts.claude ?? findClaude());
     this.store = opts.store ?? new Store();
     this.scheduler = new Scheduler((tier) => this.currentSettings.tiers[tier].max);
     for (const stored of this.store.loadAll()) {
       const conv = Conversation.restore(this, stored);
       this.conversations.set(conv.meta.id, conv);
+      // Images no transcript refers to any more (a conversation saved by an older run, a failed send).
+      this.safely('images', () => void this.store.collectBlobs(conv.meta.id));
     }
   }
 
   // ---- ConversationHost ----
+
+  backend(): Backend | undefined {
+    if (this.fake) return this.fake;
+    if (!this.claude.path) return undefined;
+    this.claudeBackend ??= new ClaudeBackend({ path: this.claude.path });
+    return this.claudeBackend;
+  }
 
   settings(): Settings {
     return this.currentSettings;
@@ -120,41 +136,39 @@ export class App implements ConversationHost {
     this.broadcast({ t: 'rate_limit', notice });
   }
 
-  askPermission(conv: Conversation, agent: Agent, toolName: string, input: Record<string, unknown>, opts: Parameters<CanUseTool>[2]): Promise<PermissionResult> {
-    // Masthead's own tools are checked by the conversation, not by the person.
-    if (toolName.startsWith('mcp__masthead__')) return Promise.resolve({ behavior: 'allow', updatedInput: input });
-    const isQuestion = toolName === 'AskUserQuestion';
+  askPermission(conv: Conversation, agent: Agent, ask: PermissionAsk): Promise<PermissionAnswer> {
+    const isQuestion = ask.kind === 'question';
     const request: PermissionRequest = {
       id: randomUUID(),
       convId: conv.meta.id,
       agentId: agent.id,
       agentName: agent.name,
       kind: isQuestion ? 'question' : 'permission',
-      toolName,
-      title: opts.title,
-      description: opts.description ?? opts.decisionReason,
-      input,
-      canAlways: !isQuestion && (opts.suggestions?.length ?? 0) > 0,
-      questions: isQuestion && Array.isArray(input.questions) ? (input.questions as Question[]) : undefined,
+      toolName: ask.toolName,
+      title: ask.title,
+      description: ask.description,
+      input: ask.input,
+      canAlways: !isQuestion && ask.canAlways,
+      questions: isQuestion ? ask.questions : undefined,
       ts: Date.now(),
     };
-    return new Promise<PermissionResult>((resolvePermission) => {
-      const settle = (result: PermissionResult) => {
+    return new Promise<PermissionAnswer>((resolvePermission) => {
+      const settle = (answer: PermissionAnswer) => {
         if (!this.pending.delete(request.id)) return;
-        opts.signal.removeEventListener('abort', onAbort);
+        ask.signal.removeEventListener('abort', onAbort);
         this.broadcast({ t: 'permission_resolved', requestId: request.id });
-        resolvePermission(result);
+        resolvePermission(answer);
       };
-      const onAbort = () => settle({ behavior: 'deny', message: 'The request was cancelled.' });
-      this.pending.set(request.id, { request, input, suggestions: opts.suggestions, resolve: settle });
-      opts.signal.addEventListener('abort', onAbort, { once: true });
+      const onAbort = () => settle({ decision: 'deny', message: 'The request was cancelled.' });
+      this.pending.set(request.id, { request, resolve: settle });
+      ask.signal.addEventListener('abort', onAbort, { once: true });
       this.broadcast({ t: 'permission_request', request });
     });
   }
 
   cancelPermissions(agentId: string): void {
     for (const p of [...this.pending.values()]) {
-      if (p.request.agentId === agentId) p.resolve({ behavior: 'deny', message: 'The agent was stopped.' });
+      if (p.request.agentId === agentId) p.resolve({ decision: 'deny', message: 'The agent was stopped.' });
     }
   }
 
@@ -202,7 +216,7 @@ export class App implements ConversationHost {
 
   /** Stops every agent and writes everything to disk. */
   shutdown(): void {
-    for (const p of [...this.pending.values()]) p.resolve({ behavior: 'deny', message: 'Masthead is shutting down.' });
+    for (const p of [...this.pending.values()]) p.resolve({ decision: 'deny', message: 'Masthead is shutting down.' });
     for (const conv of this.conversations.values()) conv.shutdown();
     this.flush();
   }
@@ -213,30 +227,77 @@ export class App implements ConversationHost {
     return [...this.conversations.values()].map((c) => ({ ...c.meta, busy: c.busy() })).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  private state(): AppState {
-    return { version: VERSION, settings: this.currentSettings, conversations: this.metas(), claude: this.claude, home: HOME, pending: [...this.pending.values()].map((p) => p.request), usage: [...this.usage.values()] };
+  /** The image store, for the transport's /blob routes. */
+  get blobs() {
+    return this.store.blobs;
   }
 
+  hasConversation(convId: string): boolean {
+    return this.conversations.has(convId);
+  }
+
+  /** Stores an image for a conversation (tool results, first-message attachments). Never throws. */
+  storeImage(convId: string, data: string, mediaType: string): { ref: BlobRef } | { error: string } {
+    try {
+      return { ref: this.store.blobs.put(convId, Buffer.from(data, 'base64'), mediaType) };
+    } catch (e) {
+      return { error: (e as Error).message };
+    }
+  }
+
+  private state(client?: Client): AppState {
+    return { ...(client?.blobToken ? { blobToken: client.blobToken } : {}), version: VERSION, settings: this.currentSettings, conversations: this.metas(), claude: this.claude, home: HOME, pending: [...this.pending.values()].map((p) => p.request), usage: [...this.usage.values()] };
+  }
+
+  /** Every tab, in the protocol version it speaks; see clients.ts. */
+  private hub: Hub = new Hub({
+    snapshot: (convId) => {
+      const conv = this.conversations.get(convId);
+      if (!conv) return null;
+      const lastItemIds: Record<string, string> = {};
+      for (const a of conv.infos()) {
+        const last = this.store.readItems(convId, a.id, { limit: 1 }).items[0];
+        if (last) lastItemIds[a.id] = last.id;
+      }
+      return { conv: conv.meta, agents: conv.infos(), pending: [...this.pending.values()].filter((p) => p.request.convId === convId).map((p) => p.request), lastItemIds };
+    },
+    fullItem: (convId, agentId, itemId) => {
+      if (!this.conversations.get(convId)?.agents.has(agentId)) return null;
+      return this.store.loadItems(convId, agentId).find((i) => i.id === itemId) ?? null;
+    },
+    state: (client) => this.state(client),
+  });
+
   private broadcast(msg: ServerMsg): void {
-    for (const c of this.clients) c.send(msg);
+    this.hub.publish(msg);
   }
 
   connect(client: Client): void {
-    this.clients.add(client);
-    client.send({ t: 'state', state: this.state() });
+    this.hub.add(client);
+    // A version 2 page says hello and gets its own `state`; this one is what a 0.1.x page expects.
+    client.send({ t: 'state', state: this.state(client) });
   }
 
   disconnect(client: Client): void {
-    this.clients.delete(client);
+    this.hub.remove(client);
   }
 
   /** Handles one message from a browser tab. Anything malformed is answered with an error, never thrown. */
   handle(client: Client, raw: unknown): void {
     try {
+      const msg = raw as Record<string, unknown> | null;
+      if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') throw new Error('Malformed message.');
+      // The one gate for what a tab may send (a remote device's role).
+      this.hub.admit(client, msg.t);
+      if (this.hub.intercept(client, msg)) return;
+      if (msg.t === 'hello' && this.hub.isV2(client)) {
+        client.send(this.hub.stateV2(client));
+        return;
+      }
       this.dispatch(client, raw as ClientMsg);
     } catch (e) {
       const ref = (raw as { ref?: unknown } | null)?.ref;
-      client.send({ t: 'error', message: (e as Error).message, ...(typeof ref === 'string' ? { ref: ref.slice(0, 80) } : {}) });
+      this.hub.error(client, e, typeof ref === 'string' ? ref.slice(0, 80) : undefined);
     }
   }
 
@@ -266,7 +327,16 @@ export class App implements ConversationHost {
         const conv = this.conv(msg.convId);
         const agent = conv.agents.get(String(msg.agentId));
         if (!agent) throw new Error('That agent no longer exists.');
-        client.send({ t: 'items', convId: conv.meta.id, agentId: agent.id, items: this.store.loadItems(conv.meta.id, agent.id), draft: agent.currentDraft() });
+        const paging = msg as { before?: unknown; limit?: unknown };
+        if (typeof paging.limit === 'number') {
+          // Newest page first; `cursor` asks for the next older page.
+          const limit = Math.max(1, Math.min(500, Math.trunc(paging.limit)));
+          const before = typeof paging.before === 'number' && paging.before >= 0 ? paging.before : null;
+          const page = this.store.readItems(conv.meta.id, agent.id, { before, limit });
+          client.send({ t: 'items', convId: conv.meta.id, agentId: agent.id, items: page.items, draft: agent.currentDraft(), cursor: page.cursor, more: page.more } as ServerMsg);
+        } else {
+          client.send({ t: 'items', convId: conv.meta.id, agentId: agent.id, items: this.store.loadItems(conv.meta.id, agent.id), draft: agent.currentDraft() });
+        }
         return;
       }
       case 'send': {
@@ -275,17 +345,26 @@ export class App implements ConversationHost {
         if (!text.trim() && images.length === 0) throw new Error('The message is empty.');
         if (text.length > MAX_TEXT) throw new Error('The message is too long.');
         let conv: Conversation;
+        let firstRefs: BlobRef[] | undefined;
         if (msg.convId === null || msg.convId === undefined) {
-          if (!this.claude.path) throw new Error(this.claude.error ?? 'Claude Code was not found.');
+          if (!this.claude.path && !this.fake) throw new Error(this.claude.error ?? 'Claude Code was not found.');
           const cwd = this.checkDir(typeof msg.cwd === 'string' && msg.cwd ? msg.cwd : this.currentSettings.defaultCwd);
           conv = Conversation.create(this, cwd);
           this.conversations.set(conv.meta.id, conv);
           if (cwd !== this.currentSettings.defaultCwd) this.updateSettings({ ...this.currentSettings, defaultCwd: cwd });
           client.send({ t: 'created', convId: conv.meta.id, ref: msg.ref });
+          // The first message has no conversation to upload into beforehand: its images become files now.
+          const refs: BlobRef[] = [];
+          for (const img of images) {
+            const stored = this.storeImage(conv.meta.id, img.data, img.mediaType);
+            if ('ref' in stored) refs.push(stored.ref);
+          }
+          firstRefs = refs;
         } else {
           conv = this.conv(msg.convId);
         }
-        conv.userSend(text, images, typeof msg.agentId === 'string' ? msg.agentId : undefined);
+        // The stored refs go on the person's item (Conversation.userSend's fourth argument, once it takes one).
+        (conv.userSend as (t: string, i: typeof images, a?: string, refs?: BlobRef[]) => void).call(conv, text, images, typeof msg.agentId === 'string' ? msg.agentId : undefined, firstRefs);
         return;
       }
       case 'interrupt':
@@ -348,15 +427,15 @@ export class App implements ConversationHost {
     const p = this.pending.get(String(msg.requestId));
     if (!p) return; // already answered, perhaps from another tab
     if (msg.decision === 'deny') {
-      p.resolve({ behavior: 'deny', message: (typeof msg.message === 'string' && msg.message.trim()) || 'The person declined this.' });
+      p.resolve({ decision: 'deny', message: (typeof msg.message === 'string' && msg.message.trim()) || 'The person declined this.' });
     } else if (p.request.kind === 'question') {
       const answers: Record<string, string> = {};
       for (const [k, v] of Object.entries(msg.answers ?? {})) if (typeof v === 'string') answers[k] = v;
-      p.resolve({ behavior: 'allow', updatedInput: { ...p.input, answers } });
-    } else if (msg.decision === 'always' && p.suggestions?.length) {
-      p.resolve({ behavior: 'allow', updatedInput: p.input, updatedPermissions: p.suggestions });
+      p.resolve({ decision: 'allow', answers });
+    } else if (msg.decision === 'always' && p.request.canAlways) {
+      p.resolve({ decision: 'always' });
     } else {
-      p.resolve({ behavior: 'allow', updatedInput: p.input });
+      p.resolve({ decision: 'allow' });
     }
   }
 
@@ -377,7 +456,7 @@ export class App implements ConversationHost {
   }
 
   private checkDir(path: string): string {
-    const full = resolve(path.replace(/^~(?=$|\/)/, HOME));
+    const full = resolve(expandHome(path, HOME));
     let ok = false;
     try {
       ok = statSync(full).isDirectory();
@@ -390,8 +469,10 @@ export class App implements ConversationHost {
 
   /** Folders inside `path`, for the folder picker. Hidden folders are left out. */
   private listDirs(path: string): ServerMsg {
-    const full = resolve((path || HOME).replace(/^~(?=$|\/)/, HOME));
-    const parent = dirname(full) === full ? null : dirname(full);
+    if (process.platform === 'win32' && path === DRIVES) return { t: 'dirs', path: DRIVES, parent: null, entries: windowsDrives(existsSync) };
+    const full = resolve(expandHome(path || HOME, HOME));
+    // Above a Windows drive root comes the list of drives, so another drive can be reached.
+    const parent = dirname(full) === full ? (process.platform === 'win32' ? DRIVES : null) : dirname(full);
     try {
       const entries = readdirSync(full, { withFileTypes: true })
         .filter((e) => !e.name.startsWith('.') && (e.isDirectory() || (e.isSymbolicLink() && this.isDir(join(full, e.name)))))
@@ -410,4 +491,22 @@ export class App implements ConversationHost {
       return false;
     }
   }
+}
+
+/** The folder picker's name for "the list of drives" on Windows (not a path any folder can have). */
+export const DRIVES = 'drives:';
+
+/** Expands a leading `~` to the home folder; on Windows `~\\` works as well as `~/`. */
+export function expandHome(path: string, home: string, platform: NodeJS.Platform = process.platform): string {
+  return path.replace(platform === 'win32' ? /^~(?=$|[\\/])/ : /^~(?=$|\/)/, home);
+}
+
+/** The drive roots that exist on Windows, e.g. ['C:\\', 'D:\\']. */
+export function windowsDrives(exists: (p: string) => boolean): string[] {
+  const out: string[] = [];
+  for (let c = 65; c <= 90; c++) {
+    const root = `${String.fromCharCode(c)}:\\`;
+    if (exists(root)) out.push(root);
+  }
+  return out;
 }

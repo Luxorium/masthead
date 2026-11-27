@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { T } from '../text.ts';
   import type { Item } from '../../../../shared/protocol.ts';
   import { renderMarkdown } from '../markdown.ts';
 
@@ -6,7 +7,7 @@
 </script>
 
 <details class="thinking">
-  <summary>Thought</summary>
+  <summary>{T.transcript.thought}</summary>
   <div class="md">{@html renderMarkdown(item.text)}</div>
 </details>
 

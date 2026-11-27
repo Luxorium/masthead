@@ -1,0 +1,263 @@
+// Every word the page shows, in one place: plain language for anybody, no team jargon on first sight.
+// No translations yet; keeping the text here makes wording reviews (and a later translation) one file.
+// Functions take what varies (names, counts, times); everything else is a plain string.
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+export const T = {
+  app: {
+    name: 'Masthead',
+  },
+
+  signIn: {
+    open: 'Open Masthead with the `masthead` command (or its launcher entry) to sign this browser in.',
+    refused: "Masthead did not accept this browser's key. Open it with the `masthead` command to sign in again.",
+    tryAgain: 'Try again',
+  },
+
+  firstRun: {
+    title: 'Masthead needs Claude Code to work',
+    body: 'Masthead runs the Claude Code already installed on this computer, signed in with your own account. It could not find it.',
+    install: 'Install Claude Code, sign in once by running `claude` in a terminal, then restart Masthead.',
+    detail: 'What Masthead saw',
+    reload: 'Reload this page',
+  },
+
+  shell: {
+    showChats: 'Show chats',
+    hideChats: 'Hide chats',
+    newChat: 'New chat',
+    newChatTitle: 'New chat',
+    chats: 'Chats',
+    noChats: 'Your chats appear here.',
+    deleteChat: 'Delete chat',
+    confirmDelete: 'Delete?',
+    rename: 'Rename',
+    working: 'Working',
+    needsAnswer: 'Needs your answer',
+    disconnected: 'Not connected',
+    reconnecting: 'Lost the connection to Masthead. Reconnecting…',
+    team: (working: number) => (working > 0 ? `Team · ${working} working` : 'Team'),
+    teamShort: (working: number) => (working > 0 ? `Team · ${working}` : 'Team'),
+    skip: 'Skip to the message box',
+    replied: (name: string) => `${name} replied.`,
+    closePanel: 'Close the panel',
+    teamTitle: 'Show the team',
+    breadcrumb: 'Helper',
+    backTo: (name: string) => `Back to ${name}`,
+  },
+
+  banner: {
+    limitReached: "You've reached your Claude usage limit.",
+    limitNear: 'You are close to your Claude usage limit.',
+    resets: (when: string) => `It resets ${when}.`,
+    dismiss: 'Dismiss',
+  },
+
+  empty: {
+    heading: 'What are we working on?',
+    intro: 'Ask in your own words. Masthead brings in helpers when the work calls for it.',
+    examplesLabel: 'Examples',
+    examples: [
+      'Look through this folder and tell me what this project does.',
+      'Find and fix the failing tests, then explain what was wrong.',
+      'Write a short README for this project.',
+    ],
+    nothingYet: 'Nothing here yet.',
+  },
+
+  composer: {
+    label: 'Message',
+    labelTo: (name: string) => `Message to ${name}`,
+    askAnything: 'Ask for anything',
+    reply: (lead: string) => `Reply to ${lead}`,
+    addTo: (lead: string) => `Add to what ${lead} is doing`,
+    direct: (name: string, lead: string) => `Message ${name} directly, not ${lead}`,
+    to: 'To',
+    send: 'Send',
+    sendTitle: 'Send (Enter)',
+    stop: 'Stop',
+    stopTitle: 'Stop this reply',
+    stopAll: 'Stop all',
+    attach: 'Attach pictures',
+    removeImage: 'Remove picture',
+    folder: 'Folder',
+    folderTitle: 'The folder the agents work in',
+    folderFirst: 'Agents can read and change files in this folder.',
+    waiting: (name: string, from: string) => `${name} is waiting for an answer from ${from}. What you send here answers it.`,
+    starting: 'Starting…',
+    notImage: (name: string) => `Only pictures can be attached (PNG, JPEG, GIF, WebP). For ${name}, put it in the folder and mention it.`,
+    tooBig: (name: string) => `${name} is larger than 5 MB.`,
+    tooMuch: (name: string) => `${name} would take this message over 30 MB of pictures. Send it in another message.`,
+    tooMany: (max: number) => `At most ${max} pictures per message.`,
+    unreadable: (name: string) => `${name} could not be read.`,
+    thatFile: 'that file',
+    thatImage: 'That picture',
+  },
+
+  transcript: {
+    jump: 'Jump to latest',
+    askedBy: 'Asked by',
+    finished: (name: string) => `${name} finished`,
+    says: (name: string) => `${name} says`,
+    show: 'Show',
+    hide: 'Hide',
+    showReport: 'Show the report',
+    thought: 'Thought',
+    thinking: 'Thinking…',
+    working: 'Working…',
+    waitingTurn: 'Waiting its turn…',
+    waitingOn: (n: number) => `Waiting for ${plural(n, 'helper', 'helpers')}`,
+    images: (n: number) => `${plural(n, 'picture', 'pictures')} attached`,
+    input: 'Input',
+    result: 'Result',
+    empty: '(empty)',
+    failed: 'failed',
+  },
+
+  status: {
+    queued: 'Waiting its turn',
+    running: 'Working',
+    waiting: 'Waiting',
+    idle: 'Idle',
+    done: 'Done',
+    failed: 'Failed',
+    stopped: 'Stopped',
+    waitingFor: (name: string) => `Waiting for an answer from ${name}`,
+    paused: (time: string) => `Paused until ${time} · usage limit`,
+    failedWith: (reason: string) => `Failed: ${reason}`,
+    stoppedWith: (reason: string) => `Stopped · ${reason}`,
+  },
+
+  team: {
+    title: 'Team',
+    close: 'Close the team',
+    showMap: 'Show as a map',
+    showChat: 'Back to the chat',
+    mainAssistant: 'Main assistant',
+    memory: (pct: number) => `Memory used: ${pct}%`,
+    memoryDetail: (used: string, max: string, out: string) => `${used} of ${max} tokens. All agents have written ${out}.`,
+    folder: 'Folder',
+    stop: (name: string) => `Stop ${name}`,
+    stopTitle: 'Stop this helper and everything under it',
+    stopWord: 'Stop',
+    levels: 'Levels',
+    levelsHelp: 'Each level can start helpers on the level below it.',
+    startedBy: (name: string) => `Started by ${name}`,
+    theOne: 'The one you talk to',
+    atATime: 'Helpers at a time',
+    working: (n: number) => `${n} working`,
+    queued: (n: number) => `${n} waiting`,
+    off: 'Off',
+    fewer: (model: string) => `Fewer ${model} helpers`,
+    more: (model: string) => `More ${model} helpers`,
+    thinking: 'Thinking time',
+    thinkingUpTo: 'Thinking time up to',
+    openChat: (name: string) => `Open ${name}'s chat`,
+    clickToOpen: 'Click to open the chat',
+    task: 'Task',
+    loading: 'Loading…',
+    nothingYet: 'Nothing yet.',
+    you: 'You',
+  },
+
+  usage: {
+    title: 'Usage',
+    none: 'No usage reported yet; it appears once an agent has run.',
+    used: (pct: number) => `${pct}% used`,
+    reached: 'limit reached',
+    resets: (when: string) => `Resets ${when}`,
+    names: {
+      five_hour: 'This session (5 hours)',
+      seven_day: 'This week, all models',
+      seven_day_opus: 'This week, Opus',
+      seven_day_sonnet: 'This week, Sonnet',
+      seven_day_overage_included: 'This week, with extra usage',
+      overage: 'Extra usage',
+    } as Record<string, string>,
+    other: 'Usage limit',
+  },
+
+  settings: {
+    title: 'Settings',
+    close: 'Close settings',
+    theme: 'Appearance',
+    themeSystem: 'Same as this device',
+    themeLight: 'Light',
+    themeDark: 'Dark',
+    advanced: 'Show team controls',
+    advancedHelp: 'Levels, helpers at a time and thinking time in the team panel. Off keeps things simple.',
+    ask: 'When to ask you',
+    askChoices: {
+      inherit: 'As set in Claude Code',
+      default: 'Always ask',
+      acceptEdits: 'Ask, except for file edits',
+      auto: 'Decide automatically',
+      bypassPermissions: 'Never ask (risky)',
+    } as Record<string, string>,
+    askShort: {
+      inherit: 'Claude Code settings',
+      default: 'Always ask',
+      acceptEdits: 'Ask except edits',
+      auto: 'Automatic',
+      bypassPermissions: 'Never ask',
+    } as Record<string, string>,
+    bypassWarning: 'Every agent can run any command and change any file without asking.',
+    autoEffort: 'Let them decide how long to think',
+    autoEffortHelp: 'Everyone starts with short thinking time; the main assistant raises its own, helpers ask the one above them.',
+    leanOpus: 'Keep Opus helpers light',
+    leanOpusHelp: 'They skip your connected services too.',
+    leanSub: 'Keep Sonnet and Haiku helpers light',
+    leanSubHelp: 'They skip your connected services, which keeps their memory small.',
+    fold: 'Show helper reports as one line',
+    foldHelp: 'Reports from helpers stay folded in a chat until you open them.',
+    runLimit: 'Longest a helper may work',
+    runLimitHelp: 'A helper still working after this long is stopped, and the one that started it is told.',
+    noLimit: 'No limit',
+    minutes: (m: number) => (m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`),
+    claude: (v: string) => `Claude Code ${v}`,
+    claudeMissing: 'Claude Code not found',
+  },
+
+  effort: {
+    low: 'Short',
+    medium: 'Medium',
+    high: 'Long',
+    xhigh: 'Longest',
+  } as Record<string, string>,
+
+  card: {
+    question: (name: string) => `Question from ${name}`,
+    permission: (name: string) => `Permission request from ${name}`,
+    asks: 'asks',
+    other: 'Something else…',
+    answer: 'Answer',
+    skip: "Don't answer",
+    deny: 'Deny',
+    allow: 'Allow',
+    always: 'Allow for this session',
+    alwaysTitle: 'Allow, and stop asking for this in this session',
+    showDetails: 'Show details',
+    hideDetails: 'Hide details',
+  },
+
+  errors: {
+    notConnected: "Masthead isn't answering. Check that it is running, then try again.",
+  },
+} as const;
+
+/**
+ * Server messages rewritten into plain words with one next action. Anything not listed is shown as
+ * the server wrote it.
+ */
+export function friendlyError(message: string): string {
+  const known: [RegExp, string][] = [
+    [/^The message is too long\.?$/, 'That message is too long to send (over 400,000 characters). Put the text in a file in the folder and mention its name.'],
+    [/^That conversation no longer exists\.?$/, 'This chat was deleted in another window. Pick another chat or start a new one.'],
+    [/^The message is empty\.?$/, 'Type a message first.'],
+    [/^Unsupported image\.?$/, 'That picture could not be used. Only PNG, JPEG, GIF and WebP pictures can be attached.'],
+    [/is not a folder\.?$/, `${message.replace(/\.$/, '')}. Choose another folder under the message box.`],
+  ];
+  for (const [re, text] of known) if (re.test(message)) return text;
+  return message;
+}

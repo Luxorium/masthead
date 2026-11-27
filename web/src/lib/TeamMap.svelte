@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { EFFORT_LABEL, displayName, modelLabel, type AgentInfo, type Item } from '../../../shared/protocol.ts';
+  import { displayName, modelLabel, type AgentInfo, type Item } from '../../../shared/protocol.ts';
+  import { T } from './text.ts';
   import StopControl from './StopControl.svelte';
   import { fmtTokens, statusWords, store } from './store.svelte.ts';
   import { toolLine } from './tools.ts';
@@ -68,7 +69,7 @@
     if (!items) return null;
     const lines: Line[] = [];
     for (const item of items.slice(-14)) {
-      if (item.kind === 'user') lines.push({ id: item.id, who: 'You', text: flat(item.text, 160), kind: item.kind });
+      if (item.kind === 'user') lines.push({ id: item.id, who: T.team.you, text: flat(item.text, 160), kind: item.kind });
       else if (item.kind === 'text') lines.push({ id: item.id, who: displayName(a.name), text: flat(item.text, 220), kind: item.kind });
       else if (item.kind === 'tool') {
         const l = toolLine(item.name, item.input, !item.done);
@@ -95,16 +96,16 @@
       onmouseenter={() => enter(a.id)}
       onmouseleave={leave}
     >
-      <button class="open" onclick={() => store.viewOf(a.id)} onfocus={() => enter(a.id)} onblur={leave} aria-label="Open {displayName(a.name)}'s chat">
+      <button class="open" onclick={() => store.viewOf(a.id)} onfocus={() => enter(a.id)} onblur={leave} aria-label={T.team.openChat(displayName(a.name))}>
         <span class="top">
           <span class="dot {a.status}"></span>
           <span class="name">{displayName(a.name)}</span>
           <span class="tier-badge tier-{a.tier}">{modelLabel(a.model)}</span>
         </span>
-        {#if a.title}<span class="title">{a.title}</span>{:else if a.tier === 'lead'}<span class="title lead">The one you talk to</span>{/if}
+        {#if a.title}<span class="title">{a.title}</span>{:else if a.tier === 'lead'}<span class="title lead">{T.team.mainAssistant}</span>{/if}
         <span class="doing" class:bad={a.status === 'failed'}>{doing(a)}</span>
         <span class="meta">
-          {EFFORT_LABEL[a.effort]} effort · {fmtTokens(a.usage.context)} context{#if a.tier !== 'lead'} · {elapsed(a)}{/if}
+          {T.effort[a.effort]} thinking · {fmtTokens(a.usage.context)} memory{#if a.tier !== 'lead'} · {elapsed(a)}{/if}
         </span>
       </button>
       {#if isLive(a) && a.tier !== 'lead'}
@@ -114,11 +115,11 @@
         {@const lines = previewLines(a)}
         {@const draft = store.drafts[a.id]}
         <div class="preview" role="tooltip">
-          {#if a.task}<div class="p-task"><b>Task</b> {flat(a.task, 260)}</div>{/if}
+          {#if a.task}<div class="p-task"><b>{T.team.task}</b> {flat(a.task, 260)}</div>{/if}
           {#if lines === null}
-            <div class="p-empty">Loading…</div>
+            <div class="p-empty">{T.team.loading}</div>
           {:else if lines.length === 0 && !draft}
-            <div class="p-empty">Nothing yet.</div>
+            <div class="p-empty">{T.team.nothingYet}</div>
           {:else}
             {#each lines as l (l.id)}
               <div class="p-line {l.kind}">{#if l.who}<b>{l.who}</b> {/if}{l.text}</div>
@@ -131,7 +132,7 @@
               {/if}
             {/if}
           {/if}
-          <div class="p-foot">Click to open the chat</div>
+          <div class="p-foot">{T.team.clickToOpen}</div>
         </div>
       {/if}
     </div>
@@ -151,7 +152,7 @@
       {@render node(store.lead)}
     </ul>
     {#if store.agentList.length === 1}
-      <p class="muted hint">Only {displayName(store.lead.name)} so far. Agents it starts appear under it here, with what each one is doing.</p>
+      <p class="muted hint">Only {displayName(store.lead.name)} so far. Helpers it starts appear under it here, with what each one is doing.</p>
     {/if}
   {/if}
 </div>

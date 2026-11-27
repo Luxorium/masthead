@@ -223,6 +223,13 @@ test('http: paths cannot leave the web folder', async () => {
     '/../web2/secret.txt',
     '/%2e%2e%2fweb2%2fsecret.txt',
     `/${'..%2f'.repeat(12)}etc%2fpasswd`,
+    // Backslashes are separators on Windows; on POSIX they are plain characters (a missing file).
+    '/..%5coutside.txt',
+    '/%2e%2e%5c%2e%2e%5coutside.txt',
+    '/assets/..%5c..%5coutside.txt',
+    '/C:%5cWindows%5cwin.ini',
+    '/%5c%5cserver%5cshare%5cx',
+    '/index.html::$DATA',
   ];
   for (const path of attempts) {
     const r = await get(path);

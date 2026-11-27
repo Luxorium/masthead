@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { CanUseTool, McpSdkServerConfigWithInstance, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import type { Backend, PermissionAnswer, PermissionAsk, ToolDef } from '../backends/types.js';
 import {
-  CHILD_TIER,
+  CLAUDE_PROFILE,
+  childTierOf,
+  findTier,
   modelLabel,
   agentName,
   capEffort,
@@ -15,12 +17,13 @@ import {
   type RateLimitNotice,
   type Settings,
   type Tier,
+  type TierSpec,
 } from '../../shared/protocol.js';
 import { Agent, clip, type AgentHost, type TurnOutcome } from '../runtime/agent.js';
 import { messageEnvelope, reportEnvelope } from './prompts.js';
 import type { Scheduler } from './scheduler.js';
 import type { StoredConversation } from '../storage/store.js';
-import { teamTools, type TeamActions } from './tools.js';
+import { teamToolDefs, type TeamActions } from './tools.js';
 
 /** What a conversation needs from the app around it. */
 export interface ConversationHost {
@@ -32,21 +35,54 @@ export interface ConversationHost {
   draftChanged(conv: Conversation, agent: Agent, draft: Draft | null): void;
   metaChanged(conv: Conversation): void;
   rateLimit(notice: RateLimitNotice): void;
-  askPermission(conv: Conversation, agent: Agent, toolName: string, input: Record<string, unknown>, opts: Parameters<CanUseTool>[2]): Promise<PermissionResult>;
+  askPermission(conv: Conversation, agent: Agent, ask: PermissionAsk): Promise<PermissionAnswer>;
   cancelPermissions(agentId: string): void;
+  /** The backend agents run on, when not the default Claude Code (the fake, in tests and CI). */
+  backend?(): Backend | undefined;
+  /** Stores an image from a tool result as a blob of this conversation. */
+  storeImage?(convId: string, data: string, mediaType: string): { ref: unknown } | { error: string };
   /** Tests replace the clock; the app uses the real one. */
   clock?: Clock;
 }
 
 /** Time and a repeating timer, so tests can run the pause and run-time rules without sleeping. */
 export interface Clock {
+  /** Wall-clock time (ms since 1970): deadlines such as a usage limit's reset time. */
   now(): number;
+  /**
+   * Time the machine was awake, for durations (run-time limit, background cap, "running for 3m"):
+   * a suspend or sleep must not count. Defaults to `now`.
+   */
+  active?(): number;
   /** Calls `fn` every `ms` until the returned function is called. */
   every(ms: number, fn: () => void): () => void;
 }
 
+/**
+ * An awake-time clock: it advances with the wall clock but by at most ACTIVE_STEP_MS per reading, and
+ * an unref'd timer reads it every 15 s, so a sleep shows up as one capped gap. (performance.now() is
+ * not used: whether it pauses during suspend differs between systems.)
+ */
+const ACTIVE_STEP_MS = 60_000;
+let activeBase = Date.now();
+let activeLastWall = activeBase;
+function activeNow(): number {
+  const wall = Date.now();
+  activeBase += Math.min(Math.max(0, wall - activeLastWall), ACTIVE_STEP_MS);
+  activeLastWall = wall;
+  return activeBase;
+}
+let activeTimer: NodeJS.Timeout | null = null;
+
 const REAL_CLOCK: Clock = {
   now: () => Date.now(),
+  active() {
+    if (!activeTimer) {
+      activeTimer = setInterval(activeNow, 15_000);
+      activeTimer.unref?.();
+    }
+    return activeNow();
+  },
   every(ms, fn) {
     const h = setInterval(fn, ms);
     h.unref?.();
@@ -150,14 +186,18 @@ export class Conversation implements AgentHost, TeamActions {
     private host: ConversationHost,
   ) {}
 
-  static create(host: ConversationHost, cwd: string): Conversation {
+  /** A new conversation on team profile `profileId` (default: the settings' default profile). */
+  static create(host: ConversationHost, cwd: string, profileId?: string): Conversation {
     const id = randomUUID();
     const leadId = randomUUID();
     const now = Date.now();
-    const conv = new Conversation({ id, title: 'New conversation', cwd, createdAt: now, updatedAt: now, leadId }, host);
     const s = host.settings();
+    const profile = s.profiles.find((p) => p.id === profileId) ?? s.profiles.find((p) => p.id === s.defaultProfile) ?? s.profiles.find((p) => p.id === CLAUDE_PROFILE)!;
+    const leadTier = profile.tiers[0]!;
+    const conv = new Conversation({ id, title: 'New conversation', cwd, createdAt: now, updatedAt: now, leadId, profileId: profile.id }, host);
     conv.addAgent(
-      new Agent(conv.newInfo({ id: leadId, name: agentName(0), tier: 'lead', parentId: null, title: '', task: '', status: 'idle', effort: s.autoEffort ? 'low' : s.tiers.lead.effort }), conv),
+      // `as Tier`: AgentInfo.tier keeps the Claude union for the page until web W7; profile tier ids are strings.
+      new Agent(conv.newInfo({ id: leadId, name: agentName(0), tier: leadTier.id as Tier, parentId: null, title: '', task: '', status: 'idle', effort: s.autoEffort ? 'low' : leadTier.effort }), conv),
     );
     return conv;
   }
@@ -169,8 +209,8 @@ export class Conversation implements AgentHost, TeamActions {
       const info = { ...a.info, title: a.info.title ?? '', activity: undefined, waitingFor: undefined, pausedUntil: undefined };
       if (info.status === 'queued' || info.status === 'running' || info.status === 'waiting') {
         // The app was closed while this agent was working.
-        info.status = info.tier === 'lead' ? 'idle' : 'stopped';
-        if (info.tier !== 'lead') info.error = CLOSED_WHILE_WORKING;
+        info.status = info.parentId === null ? 'idle' : 'stopped';
+        if (info.parentId !== null) info.error = CLOSED_WHILE_WORKING;
       }
       // Nobody is waiting for a report after a restart; a parent that messages the agent asks for one again.
       conv.agents.set(info.id, new Agent(info, conv, { sessionId: a.sessionId, owesReport: false, seed: a.sessionId ? null : (a.seed ?? null) }));
@@ -223,7 +263,7 @@ export class Conversation implements AgentHost, TeamActions {
     return {
       ...p,
       convId: this.meta.id,
-      model: this.host.settings().tiers[p.tier].model,
+      model: this.spec(p.tier).model,
       createdAt: Date.now(),
       usage: { context: 0, contextMax: 1_000_000, output: 0, costUsd: 0, turns: 0 },
     };
@@ -249,6 +289,19 @@ export class Conversation implements AgentHost, TeamActions {
 
   private parent(agent: Agent): Agent | null {
     return agent.info.parentId ? (this.agents.get(agent.info.parentId) ?? null) : null;
+  }
+
+  /** The lead is the agent nobody started (with profiles its tier id is not always `lead`). */
+  private isLead(agent: Agent): boolean {
+    return agent.info.parentId === null;
+  }
+
+  /**
+   * A tier's settings from its profile. A tier whose profile was deleted reads as switched off, keeping
+   * its name, so its agents still show and can be stopped but no new ones start.
+   */
+  private spec(tier: string): TierSpec {
+    return findTier(this.host.settings(), tier) ?? { id: tier, label: tier, backend: 'claude-code', model: '', effort: 'low', max: 0, lean: true, colour: 'slate' };
   }
 
   private isAncestor(ancestor: Agent, agent: Agent): boolean {
@@ -306,7 +359,7 @@ export class Conversation implements AgentHost, TeamActions {
     const agent = this.agents.get(agentId);
     if (!agent) return;
     this.markStoppedByPerson(agent);
-    if (agent.tier === 'lead') {
+    if (this.isLead(agent)) {
       for (const c of this.children(agent)) this.stopTree(c, why);
       this.clearPause(agent, false);
       this.dropHeld(agent);
@@ -330,7 +383,7 @@ export class Conversation implements AgentHost, TeamActions {
 
   private markStoppedByPerson(agent: Agent): void {
     // Only agents cut off while working: a finished helper stays reusable by the lead.
-    if (agent.tier !== 'lead' && agent.live) this.stoppedByPerson.add(agent.id);
+    if (!this.isLead(agent) && agent.live) this.stoppedByPerson.add(agent.id);
     for (const c of this.children(agent)) this.markStoppedByPerson(c);
     // Saved with the conversation; this also covers agents whose status did not change.
     this.host.metaChanged(this);
@@ -338,7 +391,7 @@ export class Conversation implements AgentHost, TeamActions {
 
   /** A sub-agent that is not running and whose tier is off: it could only queue for ever. */
   private tierOff(agent: Agent): boolean {
-    return agent.tier !== 'lead' && !agent.live && this.host.settings().tiers[agent.tier].max <= 0;
+    return !this.isLead(agent) && !agent.live && this.spec(agent.tier).max <= 0;
   }
 
   private stopTree(agent: Agent, why: string): void {
@@ -358,7 +411,7 @@ export class Conversation implements AgentHost, TeamActions {
     this.stopTimer?.();
     this.stopTimer = null;
     for (const a of this.agents.values()) {
-      if (a.tier !== 'lead' && a.live) a.end('stopped', CLOSED_WHILE_WORKING);
+      if (!this.isLead(a) && a.live) a.end('stopped', CLOSED_WHILE_WORKING);
       else a.dispose();
     }
     const lead = this.lead;
@@ -376,14 +429,20 @@ export class Conversation implements AgentHost, TeamActions {
   settings(): Settings {
     return this.host.settings();
   }
+  backend(_agent: Agent): Backend | undefined {
+    return this.host.backend?.();
+  }
+  storeImage(_agent: Agent, data: string, mediaType: string): { ref: unknown } | { error: string } {
+    return this.host.storeImage ? this.host.storeImage(this.meta.id, data, mediaType) : { error: 'images are not stored here' };
+  }
   claudePath(): string | null {
     return this.host.claudePath();
   }
   parentName(agent: Agent): string | null {
     return this.parent(agent)?.name ?? null;
   }
-  tools(agent: Agent): McpSdkServerConfigWithInstance {
-    return teamTools(agent, this);
+  tools(agent: Agent): ToolDef[] {
+    return teamToolDefs(agent, this);
   }
   agentChanged(agent: Agent): void {
     const id = agent.id;
@@ -399,7 +458,7 @@ export class Conversation implements AgentHost, TeamActions {
       this.bgSince.delete(id);
       agent.info.pausedUntil = undefined;
     } else if (!this.liveSince.has(id)) {
-      this.liveSince.set(id, this.now());
+      this.liveSince.set(id, this.active());
     }
     if (agent.status === 'running') this.bgSince.delete(id); // a new turn: not waiting on background work alone
     this.runClock(agent);
@@ -412,17 +471,17 @@ export class Conversation implements AgentHost, TeamActions {
     const on = agent.live && agent.status === 'running' && !this.openCards.get(id);
     const start = this.runStart.get(id);
     if (on && start === undefined) {
-      this.runStart.set(id, this.now());
-      if (!this.stopTimer && agent.tier !== 'lead' && this.host.settings().maxRunMinutes > 0) this.ensureTimer();
+      this.runStart.set(id, this.active());
+      if (!this.stopTimer && !this.isLead(agent) && this.host.settings().maxRunMinutes > 0) this.ensureTimer();
     } else if (!on && start !== undefined) {
-      this.runMs.set(id, (this.runMs.get(id) ?? 0) + (this.now() - start));
+      this.runMs.set(id, (this.runMs.get(id) ?? 0) + (this.active() - start));
       this.runStart.delete(id);
     }
   }
 
   private ranMs(agent: Agent): number {
     const start = this.runStart.get(agent.id);
-    return (this.runMs.get(agent.id) ?? 0) + (start === undefined ? 0 : this.now() - start);
+    return (this.runMs.get(agent.id) ?? 0) + (start === undefined ? 0 : this.active() - start);
   }
   itemChanged(agent: Agent, item: Item): void {
     this.host.itemChanged(this, agent, item);
@@ -433,7 +492,7 @@ export class Conversation implements AgentHost, TeamActions {
   rateLimit(notice: RateLimitNotice): void {
     this.host.rateLimit(notice);
   }
-  askPermission(agent: Agent, toolName: string, input: Record<string, unknown>, opts: Parameters<CanUseTool>[2]): Promise<PermissionResult> {
+  askPermission(agent: Agent, ask: PermissionAsk): Promise<PermissionAnswer> {
     // Time spent waiting for the person's approval does not count toward the run-time limit.
     this.openCards.set(agent.id, (this.openCards.get(agent.id) ?? 0) + 1);
     this.runClock(agent);
@@ -443,7 +502,7 @@ export class Conversation implements AgentHost, TeamActions {
       else this.openCards.delete(agent.id);
       this.runClock(agent);
     };
-    const p = this.host.askPermission(this, agent, toolName, input, opts);
+    const p = this.host.askPermission(this, agent, ask);
     p.then(done, done);
     return p;
   }
@@ -461,7 +520,7 @@ export class Conversation implements AgentHost, TeamActions {
       this.clearPause(agent, true);
     }
 
-    if (agent.tier === 'lead') {
+    if (this.isLead(agent)) {
       const wait = this.mustWait(agent);
       agent.setStatus(wait ? 'waiting' : 'idle');
       // A piece of work is over: back to low effort for the next one.
@@ -474,7 +533,7 @@ export class Conversation implements AgentHost, TeamActions {
       // Waiting for agents it started, for an answer, or for its background commands: not finished.
       agent.setStatus('waiting');
       if (this.backgroundOnly(agent) && !this.bgSince.has(agent.id)) {
-        this.bgSince.set(agent.id, this.now());
+        this.bgSince.set(agent.id, this.active());
         this.ensureTimer();
       }
       this.checkWaitsOn(agent, outcome.interrupted);
@@ -497,7 +556,7 @@ export class Conversation implements AgentHost, TeamActions {
   /** A sub-agent waiting only on background commands: no children, no answer, no pause. */
   private backgroundOnly(agent: Agent): boolean {
     return (
-      agent.tier !== 'lead' &&
+      !this.isLead(agent) &&
       agent.status === 'waiting' &&
       this.hasBackgroundWork(agent) &&
       this.liveChildren(agent).length === 0 &&
@@ -526,6 +585,12 @@ export class Conversation implements AgentHost, TeamActions {
     return (this.host.clock ?? REAL_CLOCK).now();
   }
 
+  /** Awake time, for durations (see Clock.active). */
+  private active(): number {
+    const c = this.host.clock ?? REAL_CLOCK;
+    return c.active ? c.active() : c.now();
+  }
+
   /**
    * The agent stopped at a usage limit. Unless it has already paused MAX_PAUSES times in a row, it
    * stays live as 'waiting' until the limit resets, then is resumed by tick(). Returns false when it
@@ -543,7 +608,7 @@ export class Conversation implements AgentHost, TeamActions {
       const n = (this.pauseCount.get(agent.id) ?? 0) + 1;
       if (n > MAX_PAUSES) {
         this.pauseCount.delete(agent.id);
-        this.clearPause(agent, agent.tier === 'lead');
+        this.clearPause(agent, this.isLead(agent));
         return false;
       }
       this.pauseCount.set(agent.id, n);
@@ -568,14 +633,14 @@ export class Conversation implements AgentHost, TeamActions {
       this.agentChanged(agent);
     }
     if (flush && agent.live) for (const m of held) agent.deliver(m);
-    else if (flush && agent.tier === 'lead') for (const m of held) agent.deliver(m);
+    else if (flush && this.isLead(agent)) for (const m of held) agent.deliver(m);
   }
 
   private needsTimer(): boolean {
     const runLimit = this.host.settings().maxRunMinutes > 0;
     for (const a of this.agents.values()) {
       if (a.info.pausedUntil !== undefined || this.bgSince.has(a.id)) return true;
-      if (runLimit && a.live && a.tier !== 'lead') return true;
+      if (runLimit && a.live && !this.isLead(a)) return true;
     }
     return false;
   }
@@ -595,7 +660,7 @@ export class Conversation implements AgentHost, TeamActions {
       const inTurn = a.status === 'running' && a.busy;
       const bg = this.bgStopped.delete(a.id);
       this.clearPause(a, true);
-      if (!inTurn && (a.live || a.tier === 'lead')) {
+      if (!inTurn && (a.live || this.isLead(a))) {
         a.addItem({ kind: 'notice', level: 'info', text: 'The usage limit has reset; resumed.' });
         a.deliver(`The usage limit has reset. Carry on from where you stopped.${bg ? ' Background commands you had running were stopped.' : ''}`);
       }
@@ -604,7 +669,7 @@ export class Conversation implements AgentHost, TeamActions {
       const since = this.bgSince.get(a.id);
       if (since === undefined) continue;
       if (!a.live || !this.backgroundOnly(a)) this.bgSince.delete(a.id);
-      else if (now - since >= BACKGROUND_WAIT_MS) {
+      else if (this.active() - since >= BACKGROUND_WAIT_MS) {
         this.bgSince.delete(a.id);
         a.addItem({ kind: 'notice', level: 'info', text: BACKGROUND_CLOSED });
         this.finish(a, 'done', `${a.lastText}${a.lastText ? '\n\n' : ''}${BACKGROUND_CLOSED}`);
@@ -613,7 +678,7 @@ export class Conversation implements AgentHost, TeamActions {
     const max = this.host.settings().maxRunMinutes;
     if (max > 0) {
       for (const a of [...this.agents.values()]) {
-        if (a.tier === 'lead' || !a.live || this.ranMs(a) <= max * 60_000) continue;
+        if (this.isLead(a) || !a.live || this.ranMs(a) <= max * 60_000) continue;
         const why = `Stopped after ${max} minutes: the run-time limit set by the person.`;
         const parent = this.parent(a);
         const owed = a.owesReport;
@@ -659,7 +724,7 @@ export class Conversation implements AgentHost, TeamActions {
       if (w.to !== r.id) continue;
       const waiter = this.agents.get(id);
       if (!waiter?.live) this.clearWait(id);
-      else if (interrupted || (w.reminded && r.tier !== 'lead')) this.noAnswer(waiter, r);
+      else if (interrupted || (w.reminded && !this.isLead(r))) this.noAnswer(waiter, r);
       else if (w.reminded) continue;
       else {
         w.reminded = true;
@@ -672,7 +737,7 @@ export class Conversation implements AgentHost, TeamActions {
     const are = remind.length > 1 ? 'are' : 'is';
     this.send(
       r,
-      r.tier === 'lead'
+      this.isLead(r)
         ? `${names} ${are} still waiting for your answer. Answer with send_message, or ask the person; it keeps waiting.`
         : `${names} ${are} still waiting for your answer. Reply with send_message, even if only to say you cannot help.`,
     );
@@ -713,7 +778,7 @@ export class Conversation implements AgentHost, TeamActions {
       this.pauseCount.delete(agent.id);
       this.clearPause(agent, true);
     }
-    if (agent.tier === 'lead') {
+    if (this.isLead(agent)) {
       // Agents waiting for the lead's answer keep waiting: the person can still answer them.
       agent.setStatus(this.mustWait(agent) ? 'waiting' : 'idle');
       return;
@@ -738,7 +803,7 @@ export class Conversation implements AgentHost, TeamActions {
   }
 
   private report(parent: Agent, child: Agent, status: string, text: string): void {
-    const canReceive = parent.tier === 'lead' || parent.live;
+    const canReceive = this.isLead(parent) || parent.live;
     if (!canReceive) return;
     parent.addItem({ kind: 'inbound', via: 'report', from: child.name, text: text.trim() || '(no report text)', status: child.status });
     this.send(parent, reportEnvelope(child.name, child.tier, status, text));
@@ -751,7 +816,7 @@ export class Conversation implements AgentHost, TeamActions {
   private settle(agent: Agent): void {
     if (agent.status !== 'waiting' || agent.busy) return;
     if (this.mustWait(agent)) return;
-    if (agent.tier === 'lead') agent.setStatus('idle');
+    if (this.isLead(agent)) agent.setStatus('idle');
     else this.finish(agent, 'done', agent.lastText);
   }
 
@@ -761,16 +826,20 @@ export class Conversation implements AgentHost, TeamActions {
     return this.host.settings().autoEffort;
   }
 
+  childTier(tier: Tier): Tier | null {
+    return childTierOf(this.host.settings(), tier) as Tier | null;
+  }
+
   /** The name of the model a tier is set to, as agents and people read it. */
   label(tier: Tier): string {
-    return modelLabel(this.host.settings().tiers[tier].model);
+    return this.spec(tier).label || modelLabel(this.spec(tier).model);
   }
 
   spawn(parent: Agent, rawTitle: string, task: string, effort: Effort | undefined): string {
-    const tier = CHILD_TIER[parent.tier];
-    if (!tier) return 'Error: Haiku agents cannot start other agents.';
+    const tier = childTierOf(this.host.settings(), parent.tier) as Tier | null;
+    if (!tier) return `Error: ${this.label(parent.tier)} agents cannot start other agents.`;
     const s = this.host.settings();
-    const cap = s.tiers[tier].max;
+    const cap = this.spec(tier).max;
     if (cap <= 0) return `Error: ${this.label(tier)} agents are switched off in the settings. Do this work yourself.`;
     if (this.agents.size >= MAX_AGENTS) return `Error: this conversation already has ${MAX_AGENTS} agents. Reuse one with send_message.`;
     if (!task.trim()) return 'Error: the task is empty.';
@@ -781,7 +850,7 @@ export class Conversation implements AgentHost, TeamActions {
     while (this.find(name)) name = agentName(++index);
     const title = rawTitle.replace(/\s+/g, ' ').trim().slice(0, 60);
 
-    const ceiling = s.tiers[tier].effort;
+    const ceiling = this.spec(tier).effort;
     const startEffort = s.autoEffort ? capEffort(effort ?? 'low', ceiling) : ceiling;
     const info = this.newInfo({ id: randomUUID(), name, tier, parentId: parent.id, title, task: clip(task.trim(), TASK_PREVIEW), status: 'queued', effort: startEffort });
     const agent = new Agent(info, this, { owesReport: true, seed: task });
@@ -806,12 +875,12 @@ export class Conversation implements AgentHost, TeamActions {
     const parent = this.parent(target);
     // A woken sub-agent owes its parent a fresh report, whoever woke it, if the parent can still receive
     // one (as in report()). An agent that is already live keeps the debt it has, so nothing is reported twice.
-    const reportsTo = !wasLive && parent && (parent.tier === 'lead' || parent.live) ? parent : null;
+    const reportsTo = !wasLive && parent && (this.isLead(parent) || parent.live) ? parent : null;
     if (reportsTo) target.owesReport = true;
     // Any message from the agent someone waits on is its answer.
     if (this.waits.get(target.id)?.to === from.id) this.clearWait(target.id);
     // Only a sub-agent may wait, and only for its parent or the lead, who are bound to see the question.
-    const waits = wait && from.tier !== 'lead' && (target === this.parent(from) || target === this.lead);
+    const waits = wait && !this.isLead(from) && (target === this.parent(from) || target === this.lead);
     if (waits) {
       this.waits.set(from.id, { to: target.id, reminded: false });
       from.info.waitingFor = target.name;
@@ -824,7 +893,7 @@ export class Conversation implements AgentHost, TeamActions {
     // A message from the parent is answered by the report; anyone else needs send_message.
     this.send(target, messageEnvelope(from.name, from.tier, text, waits ? 'wait' : parent !== from ? 'reply' : undefined));
     this.touch();
-    const state = target.tier === 'lead' ? 'the lead' : wasLive ? statusBefore : `was ${statusBefore}, now resuming`;
+    const state = this.isLead(target) ? 'the lead' : wasLive ? statusBefore : `was ${statusBefore}, now resuming`;
     const where = reportsTo && reportsTo !== from ? ` Its report goes to "${reportsTo.name}"; it answers you only with send_message.` : '';
     const waitNote = waits
       ? ' End your turn when you have nothing else to do; you resume when the answer arrives.'
@@ -836,6 +905,7 @@ export class Conversation implements AgentHost, TeamActions {
 
   list(viewer: Agent): string {
     const now = this.now();
+    const awake = this.active();
     const lines = [...this.agents.values()].map((a) => {
       const by = this.parent(a)?.name;
       const you = a === viewer ? ' (you)' : '';
@@ -846,11 +916,11 @@ export class Conversation implements AgentHost, TeamActions {
       if (w) state = w.to === viewer.id ? 'waiting for your answer' : `waiting for an answer from ${this.agents.get(w.to)?.name ?? '?'}`;
       if (a.info.pausedUntil !== undefined) state = `paused until ${clockTime(a.info.pausedUntil)} (usage limit)`;
       const bg = this.bgSince.get(a.id);
-      if (bg !== undefined) state = `waiting on a background command for ${duration(now - bg)}`;
+      if (bg !== undefined) state = `waiting on a background command for ${duration(awake - bg)}`;
       if (a.status === 'running' && a.info.activity) state += `: ${a.info.activity}`;
       const facts = [state];
       const since = this.liveSince.get(a.id);
-      if (a.live && since) facts.push(`for ${duration(now - since)}`);
+      if (a.live && since) facts.push(`for ${duration(awake - since)}`);
       else if (a.info.endedAt) facts.push(`ended ${duration(now - a.info.endedAt)} ago`);
       if (a.info.usage.context > 0) facts.push(`${Math.round(a.info.usage.context / 1000)}k ctx`);
       if (a.info.usage.costUsd > 0) facts.push(`$${a.info.usage.costUsd.toFixed(2)}`);
@@ -877,7 +947,7 @@ export class Conversation implements AgentHost, TeamActions {
   setOwnEffort(agent: Agent, level: Effort, reason: string): string {
     const s = this.host.settings();
     if (!s.autoEffort) return 'Error: automatic effort is switched off in the settings.';
-    const ceiling = s.tiers[agent.tier].effort;
+    const ceiling = this.spec(agent.tier).effort;
     const current = agent.info.effort;
     if (level === current) return `You are already at ${current} effort.`;
     if (effortRank(level) > effortRank(ceiling)) return `Error: ${this.label(agent.tier)} agents may go up to ${ceiling} effort; you are at ${current}. The person sets that limit.`;
@@ -888,7 +958,7 @@ export class Conversation implements AgentHost, TeamActions {
       agent.addItem({ kind: 'notice', level: 'info', text: `Effort ${lowering ? 'lowered' : 'raised'} to ${level}: ${reason}` });
       return `Effort ${lowering ? 'lowered' : 'raised'} from ${current} to ${level}, from your next step on.`;
     }
-    if (!(parent.tier === 'lead' || parent.live)) {
+    if (!(this.isLead(parent) || parent.live)) {
       return `Error: "${parent.name}" is no longer running, so nobody can approve this. Stay at ${current}.`;
     }
     if (this.agentMessages >= MAX_AGENT_MESSAGES) return 'Error: this conversation has reached its limit of messages between agents.';
@@ -907,7 +977,7 @@ export class Conversation implements AgentHost, TeamActions {
     const target = this.find(name, caller);
     if (!target) return `Error: there is no agent named "${name}".`;
     if (!this.isAncestor(caller, target)) return 'Error: you can only set the effort of agents started by you or below you.';
-    const ceiling = s.tiers[target.tier].effort;
+    const ceiling = this.spec(target.tier).effort;
     if (effortRank(level) > effortRank(ceiling)) return `Error: ${this.label(target.tier)} agents may go up to ${ceiling} effort. The person sets that limit.`;
     const before = target.info.effort;
     if (before === level) return `"${target.name}" is already at ${level} effort.`;

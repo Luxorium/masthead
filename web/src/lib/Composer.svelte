@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { EFFORT_LABEL, displayName, modelLabel, type ImageAttachment } from '../../../shared/protocol.ts';
+  import { displayName, modelLabel, type ImageAttachment } from '../../../shared/protocol.ts';
   import FolderPicker from './FolderPicker.svelte';
   import { shortPath, store } from './store.svelte.ts';
+  import { T } from './text.ts';
+  import { ui } from './ui.svelte.ts';
 
   const MAX_IMAGES = 8;
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -24,22 +26,18 @@
   const leadBusy = $derived(store.lead?.status === 'running');
   const anyLive = $derived(store.liveCount > 0);
   const canSend = $derived((draft.text.trim().length > 0 || draft.images.length > 0) && store.connected && !store.creating && !!store.app?.claude.path);
+  const leadName = $derived(displayName(store.lead?.name ?? 'alpha'));
   const placeholder = $derived(
     isNew
-      ? 'Ask for anything'
+      ? T.composer.askAnything
       : direct
-        ? `Message ${displayName(agent?.name ?? '')} directly, not ${displayName(store.lead?.name ?? 'the lead')}`
+        ? T.composer.direct(displayName(agent?.name ?? ''), leadName)
         : leadBusy
-          ? `Add to what ${displayName(store.lead?.name ?? 'the lead')} is doing`
-          : `Reply to ${displayName(store.lead?.name ?? 'the lead')}`,
+          ? T.composer.addTo(leadName)
+          : T.composer.reply(leadName),
   );
-  const modeLabel: Record<string, string> = {
-    inherit: 'Claude settings',
-    default: 'Ask first',
-    acceptEdits: 'Accept edits',
-    auto: 'Auto',
-    bypassPermissions: 'Bypass',
-  };
+  /** The very first chat: say once what the folder means. */
+  const firstChat = $derived(isNew && store.conversations.length === 0);
 
   function resize() {
     if (!area) return;
@@ -74,19 +72,19 @@
   async function addFiles(files: Iterable<File>) {
     for (const file of files) {
       if (!TYPES.includes(file.type)) {
-        store.fail(`${file.name || 'That file'} is not a PNG, JPEG, GIF or WebP image. For other files, give the lead the path.`);
+        store.fail(T.composer.notImage(file.name || T.composer.thatFile));
         continue;
       }
       if (file.size > MAX_IMAGE_BYTES) {
-        store.fail(`${file.name || 'That image'} is larger than 5 MB.`);
+        store.fail(T.composer.tooBig(file.name || T.composer.thatImage));
         continue;
       }
       if (draft.images.length >= MAX_IMAGES) {
-        store.fail(`At most ${MAX_IMAGES} images per message.`);
+        store.fail(T.composer.tooMany(MAX_IMAGES));
         break;
       }
       if (totalBytes() + file.size > MAX_TOTAL_BYTES) {
-        store.fail(`${file.name || 'That image'} would take this message over 30 MB of images. Send it in another message.`);
+        store.fail(T.composer.tooMuch(file.name || T.composer.thatImage));
         continue;
       }
       let data: string;
@@ -98,16 +96,16 @@
           r.readAsDataURL(file);
         });
       } catch {
-        store.fail(`${file.name || 'That image'} could not be read.`);
+        store.fail(T.composer.unreadable(file.name || T.composer.thatImage));
         continue;
       }
       // Checked again: another paste or drop may have added images while this one was read.
       if (draft.images.length >= MAX_IMAGES) {
-        store.fail(`At most ${MAX_IMAGES} images per message.`);
+        store.fail(T.composer.tooMany(MAX_IMAGES));
         break;
       }
       if (totalBytes() + file.size > MAX_TOTAL_BYTES) {
-        store.fail(`${file.name || 'That image'} would take this message over 30 MB of images. Send it in another message.`);
+        store.fail(T.composer.tooMuch(file.name || T.composer.thatImage));
         continue;
       }
       draft.images.push({ mediaType: file.type as ImageAttachment['mediaType'], data, url: URL.createObjectURL(file), name: file.name || 'image', size: file.size });
@@ -134,14 +132,14 @@
 </script>
 
 {#if direct && agent?.status === 'waiting' && agent.waitingFor}
-  <p class="hint">{displayName(agent.name)} is waiting for an answer from {displayName(agent.waitingFor)}. What you send here reaches it as that answer.</p>
+  <p class="hint">{T.composer.waiting(displayName(agent.name), displayName(agent.waitingFor))}</p>
 {/if}
 {#if direct && agent}
   <!-- Says plainly who the box is pointed at, so nobody types to a sub-agent thinking it is the lead. -->
   <div class="addressee tier-{agent.tier}">
-    <span class="to">To <b>{displayName(agent.name)}</b> · {modelLabel(agent.model).split(' ')[0]}</span>
+    <span class="to">{T.composer.to} <b>{displayName(agent.name)}</b> · {modelLabel(agent.model)}</span>
     {#if store.lead}
-      <button class="back" onclick={() => store.lead && store.viewOf(store.lead.id)}>Back to {displayName(store.lead.name)}</button>
+      <button class="back" onclick={() => store.lead && store.viewOf(store.lead.id)}>{T.shell.backTo(displayName(store.lead.name))}</button>
     {/if}
   </div>
 {/if}
@@ -149,7 +147,7 @@
   class="composer {direct && agent ? `direct tier-${agent.tier}` : ''}"
   class:dragging
   role="group"
-  aria-label={direct && agent ? `Message to ${displayName(agent.name)}` : 'Message'}
+  aria-label={direct && agent ? T.composer.labelTo(displayName(agent.name)) : T.composer.label}
   ondragover={(e) => {
     e.preventDefault();
     dragging = true;
@@ -162,22 +160,22 @@
       {#each draft.images as img, i (img.url)}
         <div class="thumb">
           <img src={img.url} alt={img.name} />
-          <button onclick={() => removeImage(i)} aria-label="Remove image">×</button>
+          <button onclick={() => removeImage(i)} aria-label={T.composer.removeImage}>×</button>
         </div>
       {/each}
     </div>
   {/if}
   <div class="row">
-    <button class="round" onclick={() => picker?.click()} title="Attach images" aria-label="Attach images">+</button>
+    <button class="round" onclick={() => picker?.click()} title={T.composer.attach} aria-label={T.composer.attach}>+</button>
     <input bind:this={picker} type="file" accept={TYPES.join(',')} multiple hidden onchange={(e) => {
       void addFiles(e.currentTarget.files ?? []);
       e.currentTarget.value = '';
     }} />
-    <textarea bind:this={area} bind:value={draft.text} rows="1" {placeholder} onkeydown={onKey} onpaste={onPaste}></textarea>
+    <textarea id="message" bind:this={area} bind:value={draft.text} rows="1" {placeholder} onkeydown={onKey} onpaste={onPaste}></textarea>
     {#if leadBusy && !direct && !draft.text.trim() && draft.images.length === 0}
-      <button class="round stop" onclick={() => store.convId && store.send({ t: 'interrupt', convId: store.convId })} title="Stop this turn" aria-label="Stop this turn">■</button>
+      <button class="round stop" onclick={() => store.convId && store.send({ t: 'interrupt', convId: store.convId })} title={T.composer.stopTitle} aria-label={T.composer.stop}>■</button>
     {:else}
-      <button class="round send" disabled={!canSend} onclick={submit} title="Send (Enter)" aria-label="Send">↑</button>
+      <button class="round send" disabled={!canSend} onclick={submit} title={T.composer.sendTitle} aria-label={T.composer.send}>↑</button>
     {/if}
   </div>
 </div>
@@ -185,35 +183,37 @@
 <div class="under">
   {#if isNew}
     <div class="folder">
-      <button class="chip" onclick={() => (choosingFolder = !choosingFolder)} title="Folder the agents work in">
-        <span class="muted">Folder</span>
+      <button class="chip" onclick={() => (choosingFolder = !choosingFolder)} title={T.composer.folderTitle} aria-expanded={choosingFolder}>
+        <span class="muted">{T.composer.folder}</span>
         <span class="mono">{shortPath(store.newCwd, store.app?.home)}</span>
       </button>
       {#if choosingFolder}
         <FolderPicker onclose={() => (choosingFolder = false)} />
       {/if}
     </div>
+    {#if firstChat}<span class="first">{T.composer.folderFirst}</span>{/if}
   {:else}
     {#if store.conv}
-      <span class="chip static" title="Folder the agents work in: {store.conv.cwd}">
-        <span class="muted">Folder</span>
+      <span class="chip static" title="{T.composer.folderTitle}: {store.conv.cwd}">
+        <span class="muted">{T.composer.folder}</span>
         <span class="mono">{shortPath(store.conv.cwd, store.app?.home)}</span>
       </span>
     {/if}
     {#if anyLive}
-      <button class="chip danger" onclick={() => store.convId && store.send({ t: 'stop_all', convId: store.convId })}>Stop everything</button>
+      <button class="chip danger" onclick={() => store.convId && store.send({ t: 'stop_all', convId: store.convId })}>{T.composer.stopAll}</button>
     {/if}
   {/if}
   <span class="spacer"></span>
-  {#if store.settings}
+  {#if store.settings && ui.advanced}
+    <!-- Advanced only: which model answers, its thinking time and when it asks. -->
     <span class="meta">
       {#if direct && agent}
-        <b>{modelLabel(agent.model)}</b> {EFFORT_LABEL[agent.effort]}
+        <b>{modelLabel(agent.model)}</b> {T.effort[agent.effort]}
       {:else}
-        <b>{modelLabel(store.settings.tiers.lead.model)}</b> {EFFORT_LABEL[store.lead?.effort ?? (store.settings.autoEffort ? 'low' : store.settings.tiers.lead.effort)]}{store.settings.autoEffort ? ' · auto' : ''}
+        <b>{modelLabel(store.settings.tiers.lead.model)}</b> {T.effort[store.lead?.effort ?? (store.settings.autoEffort ? 'low' : store.settings.tiers.lead.effort)]}
       {/if}
       <span class="sep">·</span>
-      {modeLabel[store.settings.permissionMode]}
+      {T.settings.askShort[store.settings.permissionMode]}
     </span>
   {/if}
 </div>
@@ -287,6 +287,24 @@
   }
   textarea::placeholder {
     color: var(--faint);
+  }
+  @media (pointer: coarse) {
+    .round {
+      width: 44px !important;
+      height: 44px !important;
+    }
+    .thumb button {
+      width: 32px !important;
+      height: 32px !important;
+    }
+    .back,
+    .chip {
+      min-height: 44px;
+    }
+    textarea {
+      min-height: 44px;
+      padding-top: 10px;
+    }
   }
   .round {
     flex: none;
@@ -374,6 +392,11 @@
   .chip .mono {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .first {
+    min-width: 0;
+    font-size: 12px;
+    color: var(--faint);
   }
   .meta {
     flex: none;

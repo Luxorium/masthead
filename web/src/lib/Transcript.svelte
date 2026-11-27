@@ -1,4 +1,12 @@
 <script lang="ts">
+  import { T } from './text.ts';
+
+  /** Puts an example in the message box and focuses it, so the person can edit before sending. */
+  async function useExample(text: string) {
+    store.composerFor(store.composerKey).text = text;
+    await tick();
+    document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus();
+  }
   import { tick } from 'svelte';
   import type { Item } from '../../../shared/protocol.ts';
   import { handleCopyClick } from './markdown.ts';
@@ -58,11 +66,17 @@
   <div class="column" onclick={handleCopyClick}>
     {#if store.convId === null}
       <div class="hello">
-        <h1>What are we working on?</h1>
-        <p class="muted">You talk to the lead. It brings in more agents when the work calls for it.</p>
+        <h1>{T.empty.heading}</h1>
+        <p class="muted">{T.empty.intro}</p>
+        <!-- Example prompts teach by showing; a click puts the text in the box, it does not send. -->
+        <div class="examples" role="group" aria-label={T.empty.examplesLabel}>
+          {#each T.empty.examples as example (example)}
+            <button class="example" onclick={() => useExample(example)}>{example}</button>
+          {/each}
+        </div>
       </div>
     {:else if items.length === 0 && !draft && agent && agent.status !== 'running' && agent.status !== 'queued'}
-      <p class="muted center">Nothing here yet.</p>
+      <p class="muted center">{T.empty.nothingYet}</p>
     {/if}
 
     {#each items as item (key(item))}
@@ -89,12 +103,12 @@
       <StatusLine {agent} {toolRunning} />
     {/if}
     {#if store.creating}
-      <div class="working"><span class="dot running"></span>Starting…</div>
+      <div class="working"><span class="dot running"></span>{T.composer.starting}</div>
     {/if}
   </div>
 </div>
 {#if !pinned}
-  <button class="jump" onclick={toBottom} aria-label="Jump to latest">↓</button>
+  <button class="jump" onclick={toBottom} aria-label={T.transcript.jump}>↓</button>
 {/if}
 
 <style>
@@ -115,6 +129,32 @@
   .hello {
     margin: 18vh 0 8px;
     text-align: center;
+  }
+  .examples {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-top: 22px;
+  }
+  .example {
+    max-width: 100%;
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--raised);
+    color: var(--muted);
+    font-size: 14px;
+    text-align: left;
+  }
+  @media (pointer: coarse) {
+    .example {
+      min-height: 44px;
+    }
+  }
+  .example:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
   }
   .hello h1 {
     margin: 0 0 8px;

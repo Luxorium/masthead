@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { T } from '../text.ts';
   import type { Item } from '../../../../shared/protocol.ts';
   import { toolLine } from '../tools.ts';
 
@@ -22,16 +23,16 @@
     {#if !item.done}<span class="dot running"></span>{/if}
     <span class="verb">{line.verb}</span>
     {#if line.target}<span class="target mono">{line.target}</span>{/if}
-    {#if item.isError}<span class="failed">failed</span>{/if}
+    {#if item.isError}<span class="failed">{T.transcript.failed}</span>{/if}
     <span class="chev">{open ? '▾' : '›'}</span>
   </button>
   {#if open}
     <div class="tool-body">
-      <div class="tool-label">Input</div>
+      <div class="tool-label">{T.transcript.input}</div>
       <pre>{pretty(item.input)}</pre>
       {#if item.result !== undefined}
-        <div class="tool-label">Result</div>
-        <pre>{item.result || '(empty)'}</pre>
+        <div class="tool-label">{T.transcript.result}</div>
+        <pre>{item.result || T.transcript.empty}</pre>
       {/if}
     </div>
   {/if}

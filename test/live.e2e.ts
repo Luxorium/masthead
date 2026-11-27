@@ -12,9 +12,14 @@ import { Store } from '../server/storage/store.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'masthead-live-'));
 const settings = defaultSettings();
-for (const t of ['lead', 'opus', 'sonnet', 'haiku'] as const) settings.tiers[t].model = 'claude-haiku-5-5';
-settings.tiers.opus.max = 2;
-settings.tiers.sonnet.max = 1;
+/** Changes a tier in the profiles (the source of truth since 0.2.0) and in the old `tiers` view. */
+function setTier(id: 'lead' | 'opus' | 'sonnet' | 'haiku', patch: { model?: string; max?: number }): void {
+  for (const p of settings.profiles) for (const t of p.tiers) if (t.id === id) Object.assign(t, patch);
+  Object.assign(settings.tiers[id], patch);
+}
+for (const t of ['lead', 'opus', 'sonnet', 'haiku'] as const) setTier(t, { model: 'claude-haiku-5-5' });
+setTier('opus', { max: 2 });
+setTier('sonnet', { max: 1 });
 settings.defaultCwd = dir;
 settings.permissionMode = 'default';
 
@@ -119,7 +124,7 @@ try {
   check('the lead reported back', leadText().length > before);
 
   log('--- 3. limits: with one slot, two agents run one after the other; stopping works');
-  settings.tiers.opus.max = 1;
+  setTier('opus', { max: 1 });
   app.handle(client, { t: 'settings', settings });
   app.handle(client, {
     t: 'send',

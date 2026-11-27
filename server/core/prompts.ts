@@ -1,4 +1,4 @@
-import { CHILD_TIER, modelLabel, type Effort, type Settings, type Tier } from '../../shared/protocol.js';
+import { childTierOf, findTier, modelLabel, type Effort, type Settings, type Tier } from '../../shared/protocol.js';
 
 /** "a Sonnet 5.5", "an Opus 5.5". */
 export function withArticle(label: string): string {
@@ -16,14 +16,20 @@ export function systemAppend(opts: {
   settings: Settings;
   /** The level the agent runs at now; low if left out. */
   effort?: Effort;
+  /** The backend reports background commands (BackendCaps.background); true if left out. */
+  background?: boolean;
 }): string {
-  const { tier, name, parentName, settings, effort = 'low' } = opts;
-  const child = CHILD_TIER[tier];
-  const childCap = child ? settings.tiers[child].max : 0;
-  const label = (t: Tier) => modelLabel(settings.tiers[t].model);
+  const { tier, name, parentName, settings, effort = 'low', background = true } = opts;
+  const child = childTierOf(settings, tier);
+  const childCap = child ? (findTier(settings, child)?.max ?? 0) : 0;
+  const label = (t: string) => {
+    const spec = findTier(settings, t);
+    return spec?.label || modelLabel(spec?.model ?? t);
+  };
   const lines: string[] = ['# Masthead'];
 
-  if (tier === 'lead') {
+  // The lead is the agent nobody started (with profiles its tier id is not always `lead`).
+  if (parentName === null) {
     lines.push(
       `You are "${name}", the lead agent in Masthead, a local app that runs a tiered team of Claude agents. The person talks to you; other agents reach them through you.`,
       'Every agent has a name from the phonetic alphabet (you are alpha, then bravo, charlie, …) and the person may refer to any of them by name.',
@@ -53,6 +59,10 @@ export function systemAppend(opts: {
     lines.push(
       `You run at ${effort} thinking effort. When a task needs careful reasoning, use set_effort before you start it; Masthead resets you to low after each piece of work.`,
     );
+  }
+
+  if (!background) {
+    lines.push('A command you leave running in the background will not wake you when it ends; run commands you need the result of in the foreground and wait for them.');
   }
 
   lines.push(

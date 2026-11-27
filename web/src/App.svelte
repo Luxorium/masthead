@@ -1,17 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Composer from './lib/Composer.svelte';
+  import FirstRun from './lib/FirstRun.svelte';
   import PermissionCard from './lib/PermissionCard.svelte';
-  import SettingsMenu from './lib/SettingsMenu.svelte';
   import Sidebar from './lib/Sidebar.svelte';
   import TeamMap from './lib/TeamMap.svelte';
   import TeamPanel from './lib/TeamPanel.svelte';
   import Transcript from './lib/Transcript.svelte';
   import { displayName } from '../../shared/protocol.ts';
-  import { shortPath, store } from './lib/store.svelte.ts';
+  import { store } from './lib/store.svelte.ts';
+  import { T, friendlyError } from './lib/text.ts';
+  import { ui } from './lib/ui.svelte.ts';
 
-  let showSidebar = $state(true);
-  let showPanel = $state(true);
   let renaming = $state(false);
   let titleDraft = $state('');
 
@@ -24,8 +24,6 @@
       if (m && m[1] !== store.convId && store.conversations.some((c) => c.id === m[1])) store.open(m[1]!);
     };
     window.addEventListener('hashchange', onHash);
-    if (window.innerWidth < 1100) showPanel = false;
-    if (window.innerWidth < 760) showSidebar = false;
     return () => window.removeEventListener('hashchange', onHash);
   });
 
@@ -48,30 +46,84 @@
     renaming = false;
   }
 
+  /** Helpers exist in the open chat: only then is there a team to show. */
+  const hasTeam = $derived(store.agentList.some((a) => a.tier !== 'lead'));
+  const showPanel = $derived(hasTeam && ui.teamOpen);
+
+  // Advanced on a wide screen opens the team panel by itself when the first helper starts, unless the
+  // person has opened or closed it. Simple leaves it closed: the Team button is enough.
+  $effect(() => {
+    if (hasTeam && ui.advanced && !ui.teamTouched && ui.wide) ui.teamOpen = true;
+  });
+
+  /** On narrow screens the chat list and the team panel are drawers over the chat. */
+  const sidebarDrawer = $derived(ui.narrow && ui.sidebarOpen);
+  const teamDrawer = $derived(showPanel && !ui.wide);
+  const drawerOpen = $derived(sidebarDrawer || teamDrawer);
+  const columns = $derived(
+    [ui.sidebarOpen && !ui.narrow ? '264px' : '', 'minmax(0, 1fr)', showPanel && ui.wide ? '340px' : ''].filter(Boolean).join(' '),
+  );
+
+  function closeDrawers() {
+    if (sidebarDrawer) ui.sidebarOpen = false;
+    if (teamDrawer) ui.toggleTeam(false);
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && drawerOpen && !document.querySelector('[role="dialog"]')) closeDrawers();
+  }
+
+  // A polite announcement for screen readers: a finished reply, or a card that needs an answer.
+  let announce = $state('');
+  let lastLeadStatus: string | undefined;
+  let lastPending = 0;
+  $effect(() => {
+    const status = store.lead?.status;
+    if (lastLeadStatus === 'running' && status && status !== 'running' && store.lead) announce = T.shell.replied(displayName(store.lead.name));
+    lastLeadStatus = status;
+  });
+  $effect(() => {
+    const n = store.convPending.length;
+    if (n > lastPending) {
+      const p = store.convPending[n - 1]!;
+      announce = p.kind === 'question' ? T.card.question(displayName(p.agentName)) : T.card.permission(displayName(p.agentName));
+    }
+    lastPending = n;
+  });
+
   const path = $derived(store.viewAgent && store.viewAgent.tier !== 'lead' ? store.pathTo(store.viewAgent.id) : []);
 </script>
+
+<svelte:window onkeydown={onKey} />
+
+{#snippet code(text: string)}
+  <!-- Backticks in a string from text.ts mark a command, shown in code style. -->
+  {#each text.split('`') as part, i (i)}{#if i % 2}<code>{part}</code>{:else}{part}{/if}{/each}
+{/snippet}
 
 {#if store.signedOut}
   <div class="signed-out">
     <div class="signed-out-box">
       <h1>Masthead</h1>
-      <p>Open Masthead with the <code>masthead</code> command (or its launcher entry) to sign this browser in.</p>
+      <p>{@render code(T.signIn.open)}</p>
       {#if store.signedOut === 'refused'}
-        <p class="muted small">Masthead did not accept this browser's key. Open it with the <code>masthead</code> command to sign in again.</p>
-        <button class="btn primary" onclick={() => store.retryConnect()}>Try again</button>
+        <p class="muted small">{@render code(T.signIn.refused)}</p>
+        <button class="btn primary" onclick={() => store.retryConnect()}>{T.signIn.tryAgain}</button>
       {/if}
     </div>
   </div>
 {:else}
-<div class="shell" class:no-sidebar={!showSidebar} class:no-panel={!showPanel}>
-  {#if showSidebar}
-    <Sidebar onhide={() => (showSidebar = false)} />
+<a class="skip" href="#message">{T.shell.skip}</a>
+<div class="sr-only" aria-live="polite">{announce}</div>
+<div class="shell" class:narrow={ui.narrow} class:phone={ui.phone} class:team-col={showPanel && ui.wide} style:grid-template-columns={columns}>
+  {#if ui.sidebarOpen}
+    <Sidebar onhide={() => (ui.sidebarOpen = false)} onpick={() => ui.narrow && (ui.sidebarOpen = false)} />
   {/if}
 
-  <main>
+  <main inert={drawerOpen}>
     <header>
-      {#if !showSidebar}
-        <button class="btn ghost icon" onclick={() => (showSidebar = true)} title="Show conversations" aria-label="Show conversations">☰</button>
+      {#if !ui.sidebarOpen || ui.narrow}
+        <button class="btn ghost icon" onclick={() => (ui.sidebarOpen = true)} title={T.shell.showChats} aria-label={T.shell.showChats}>☰</button>
       {/if}
       <div class="title">
         {#if store.conv}
@@ -89,40 +141,33 @@
               }}
             />
           {:else}
-            <button class="title-btn" onclick={startRename} title="Rename">{store.conv.title}</button>
+            <button class="title-btn" onclick={startRename} title={T.shell.rename}>{store.conv.title}</button>
           {/if}
-          <span class="cwd mono" title={store.conv.cwd}>{shortPath(store.conv.cwd, store.app?.home)}</span>
         {:else}
-          <span class="title-text">New conversation</span>
+          <span class="title-text">{T.shell.newChatTitle}</span>
         {/if}
       </div>
-      {#if store.conv}
-        <div class="seg" role="tablist" aria-label="View">
-          <button role="tab" aria-selected={store.view === 'chat'} class:on={store.view === 'chat'} onclick={() => (store.view = 'chat')}>Chat</button>
-          <button role="tab" aria-selected={store.view === 'map'} class:on={store.view === 'map'} onclick={() => (store.view = 'map')}>
-            Team map{#if store.liveCount > 0}<span class="count">{store.liveCount}</span>{/if}
-          </button>
-        </div>
+      {#if store.conv && hasTeam}
+        <button class="team-btn" class:on={showPanel} onclick={() => ui.toggleTeam()} aria-expanded={showPanel} title={T.shell.teamTitle}>
+          {ui.phone ? T.shell.teamShort(store.liveCount) : T.shell.team(store.liveCount)}
+        </button>
       {/if}
-      <SettingsMenu />
-      <button class="btn ghost icon" onclick={() => (showPanel = !showPanel)} title={showPanel ? 'Hide team panel' : 'Show team panel'} aria-label="Toggle team panel">◧</button>
     </header>
 
-    {#if store.app?.claude.error}
-      <div class="banner bad">{store.app.claude.error}</div>
-    {/if}
     {#if !store.connected && store.app}
-      <div class="banner">Lost the connection to Masthead. Reconnecting…</div>
+      <div class="banner" role="status">{T.shell.reconnecting}</div>
     {/if}
     {#if store.rateLimit}
       <div class="banner" class:bad={store.rateLimit.status === 'rejected'}>
-        {store.rateLimit.status === 'rejected' ? 'Your Claude usage limit has been reached.' : 'You are close to your Claude usage limit.'}
-        {#if store.rateLimit.resetsAt}Resets {new Date(store.rateLimit.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}.{/if}
-        <button class="btn ghost" onclick={() => store.dismissLimit()}>Dismiss</button>
+        {store.rateLimit.status === 'rejected' ? T.banner.limitReached : T.banner.limitNear}
+        {#if store.rateLimit.resetsAt}{T.banner.resets(new Date(store.rateLimit.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }))}{/if}
+        <button class="btn ghost" onclick={() => store.dismissLimit()}>{T.banner.dismiss}</button>
       </div>
     {/if}
 
-    {#if store.view === 'map' && store.conv}
+    {#if store.app && !store.app.claude.path}
+      <FirstRun />
+    {:else if store.view === 'map' && store.conv && hasTeam && !ui.narrow}
       <TeamMap />
       {#if store.convPending.length > 0}
         <div class="dock">
@@ -135,12 +180,12 @@
       {/if}
     {:else}
       {#if path.length > 1}
-        <nav class="crumbs" aria-label="Agent">
+        <nav class="crumbs" aria-label={T.shell.breadcrumb}>
           {#each path as a, i (a.id)}
             {#if i > 0}<span class="sep">/</span>{/if}
             <button class:current={i === path.length - 1} onclick={() => store.viewOf(a.id)}>{displayName(a.name)}{#if a.title && i === path.length - 1}<span class="crumb-title"> · {a.title}</span>{/if}</button>
           {/each}
-          <button class="btn ghost back" onclick={() => store.lead && store.viewOf(store.lead.id)}>Back to {displayName(store.lead?.name ?? 'lead')}</button>
+          <button class="btn ghost back" onclick={() => store.lead && store.viewOf(store.lead.id)}>{T.shell.backTo(displayName(store.lead?.name ?? 'lead'))}</button>
         </nav>
       {/if}
       <Transcript />
@@ -161,8 +206,13 @@
     <TeamPanel />
   {/if}
 
+  {#if drawerOpen}
+    <!-- Tapping outside a drawer closes it. -->
+    <button class="backdrop" onclick={closeDrawers} aria-label={T.shell.closePanel} tabindex="-1"></button>
+  {/if}
+
   {#if store.error}
-    <div class="toast" role="alert">{store.error}</div>
+    <div class="toast" role="alert">{friendlyError(store.error)}</div>
   {/if}
 </div>
 {/if}
@@ -187,19 +237,10 @@
   .signed-out-box .small {
     font-size: 13px;
   }
+  /* Columns come from the script: chat list, chat, and the team panel when there is room for it. */
   .shell {
     display: grid;
-    grid-template-columns: 264px minmax(0, 1fr) 316px;
     height: 100%;
-  }
-  .shell.no-sidebar {
-    grid-template-columns: minmax(0, 1fr) 316px;
-  }
-  .shell.no-panel {
-    grid-template-columns: 264px minmax(0, 1fr);
-  }
-  .shell.no-sidebar.no-panel {
-    grid-template-columns: minmax(0, 1fr);
   }
   main {
     position: relative;
@@ -243,42 +284,28 @@
     background: var(--raised);
     font-weight: 600;
   }
-  .cwd {
-    color: var(--faint);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .team-btn {
+    flex: none;
+    padding: 4px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  @media (pointer: coarse) {
+    .team-btn,
+    .title-btn {
+      min-height: 44px;
+    }
+  }
+  .team-btn:hover,
+  .team-btn.on {
+    color: var(--text);
+    border-color: var(--muted);
   }
   .icon {
     padding: 4px 8px;
     font-size: 16px;
-  }
-  .seg {
-    display: flex;
-    padding: 2px;
-    border-radius: 8px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-  }
-  .seg button {
-    padding: 3px 12px;
-    border-radius: 6px;
-    font-size: 13px;
-    color: var(--muted);
-  }
-  .seg button.on {
-    background: var(--raised);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
-  }
-  .count {
-    margin-left: 6px;
-    padding: 0 6px;
-    border-radius: 999px;
-    background: var(--accent);
-    color: var(--bg);
-    font-size: 11px;
-    font-weight: 600;
   }
   .banner {
     display: flex;
@@ -351,21 +378,36 @@
     box-shadow: var(--shadow);
     z-index: 30;
   }
-  @media (max-width: 900px) {
-    .shell,
-    .shell.no-sidebar,
-    .shell.no-panel {
-      grid-template-columns: minmax(0, 1fr);
-    }
-    .shell :global(aside) {
-      position: fixed;
-      top: 0;
-      bottom: 0;
-      z-index: 20;
-      box-shadow: var(--shadow);
-    }
-    .shell :global(aside.right) {
-      right: 0;
-    }
+  /* Drawers: the chat list on narrow screens, the team panel below 1280 px. */
+  .shell.narrow :global(aside.left),
+  .shell:not(.team-col) :global(aside.right) {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    z-index: 20;
+    max-width: 88vw;
+    box-shadow: var(--shadow);
+  }
+  .shell.narrow :global(aside.left) {
+    left: 0;
+  }
+  .shell:not(.team-col) :global(aside.right) {
+    right: 0;
+  }
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    background: rgb(0 0 0 / 35%);
+  }
+  .shell.phone header {
+    height: 56px;
+    padding: 0 8px;
+  }
+  .shell.phone .dock {
+    padding: 0 10px calc(10px + env(safe-area-inset-bottom));
+  }
+  .dock {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
   }
 </style>

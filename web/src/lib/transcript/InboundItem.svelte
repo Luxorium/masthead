@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { T } from '../text.ts';
   import { displayName, type Item } from '../../../../shared/protocol.ts';
   import { renderMarkdown } from '../markdown.ts';
   import { STATUS_LABEL, store } from '../store.svelte.ts';
@@ -10,7 +11,6 @@
   let open = $state<boolean | undefined>(undefined);
   const isOpen = $derived(open ?? startsOpen(item));
 
-  const VIA: Record<string, string> = { task: 'Task from', report: 'Report from', message: 'Message from' };
 
   /** Whether an inbound item starts open: tasks start shut, reports too when the setting says so. */
   function startsOpen(item: Inbound): boolean {
@@ -32,14 +32,16 @@
 
 <div class="inbound {item.via}">
   <div class="inbound-head">
-    <span>{VIA[item.via]}</span>
+    <!-- "Asked by Alpha" / "Bravo finished" / "Bravo says": the name opens that agent's chat. -->
+    {#if item.via === 'task'}<span>{T.transcript.askedBy}</span>{/if}
     <button class="who" onclick={() => openAgent(item.from)}>{displayName(item.from)}</button>
+    {#if item.via === 'report'}<span>{T.transcript.finished('').trim()}</span>{:else if item.via === 'message'}<span>{T.transcript.says('').trim()}</span>{/if}
     {#if item.via === 'report' && item.status && item.status !== 'done'}<span class="state">{STATUS_LABEL[item.status].toLowerCase()}</span>{/if}
     {#if item.via === 'report' && !isOpen}
-      <button class="gist" onclick={() => (open = true)} aria-expanded="false" title="Show the report">{firstWords(item.text)}</button>
+      <button class="gist" onclick={() => (open = true)} aria-expanded="false" title={T.transcript.showReport}>{firstWords(item.text)}</button>
     {/if}
     <button class="toggle" onclick={() => (open = !isOpen)} aria-expanded={isOpen}>
-      {isOpen ? 'Hide' : 'Show'}
+      {isOpen ? T.transcript.hide : T.transcript.show}
     </button>
   </div>
   {#if isOpen}

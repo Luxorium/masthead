@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { T } from './text.ts';
   import { displayName, type AgentInfo } from '../../../shared/protocol.ts';
   import { store } from './store.svelte.ts';
 
@@ -10,8 +11,8 @@
   }
 </script>
 
-<button class="stop {placement}" onclick={press} title="Stop this agent and everything under it" aria-label="Stop {displayName(agent.name)}">
-  <span class="label" aria-hidden="true">Stop</span><span class="glyph" aria-hidden="true">■</span>
+<button class="stop {placement}" onclick={press} title={T.team.stopTitle} aria-label={T.team.stop(displayName(agent.name))}>
+  <span class="label" aria-hidden="true">{T.team.stopWord}</span><span class="glyph" aria-hidden="true">■</span>
 </button>
 
 <style>
@@ -69,5 +70,15 @@
   .stop:hover .label,
   .stop:focus-visible .label {
     display: inline;
+  }
+  /* Touch screens have no hover: in a list row the word is always there, and the target is 44 px. */
+  @media (pointer: coarse) {
+    .stop {
+      min-width: 44px;
+      min-height: 44px;
+    }
+    .stop.row .label {
+      display: inline;
+    }
   }
 </style>

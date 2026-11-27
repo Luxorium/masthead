@@ -5,8 +5,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import { App, type Client } from '../server/app/app.ts';
+import { App, DRIVES, expandHome, windowsDrives, type Client } from '../server/app/app.ts';
+
+/** File modes mean nothing on NTFS (Windows keeps the secret private with an ACL instead). */
+const POSIX = process.platform !== 'win32';
 import { agentEnv } from '../server/backends/claude/env.ts';
 import { defaultSettings, sanitizeSettings } from '../server/settings/settings.ts';
 import { loadSecret, readSecret } from '../server/transport/auth.ts';
@@ -116,7 +118,7 @@ test('app: listing folders leaves out files and hidden folders', () => {
   const missing = last({ t: 'dirs', path: join(dir, 'gone') });
   assert.ok(missing?.t === 'dirs' && missing.entries.length === 0 && missing.error);
   const root = last({ t: 'dirs', path: '/' });
-  assert.ok(root?.t === 'dirs' && root.parent === null);
+  assert.ok(root?.t === 'dirs' && root.parent === (POSIX ? null : DRIVES), 'above a Windows drive root comes the drive list');
 });
 
 test('app: rename tidies the title and ignores an empty one; delete removes the conversation', () => {
@@ -192,15 +194,21 @@ function askFor(app: App, opts: { convId?: string; toolName?: string; suggestion
   const ctrl = new AbortController();
   const conv = { meta: { id: opts.convId ?? 'c1' } };
   const agent = { id: 'agent-1', name: 'bravo' };
-  const result = app.askPermission(conv as never, agent as never, opts.toolName ?? 'Bash', opts.input ?? { command: 'ls' }, {
+  const toolName = opts.toolName ?? 'Bash';
+  const input = opts.input ?? { command: 'ls' };
+  const question = toolName === 'AskUserQuestion';
+  const result = app.askPermission(conv as never, agent as never, {
+    kind: question ? 'question' : 'command',
+    toolName,
+    input,
+    canAlways: !question && (opts.suggestions?.length ?? 0) > 0,
+    questions: question ? (input.questions as never) : undefined,
     signal: ctrl.signal,
-    suggestions: opts.suggestions,
-    toolUseID: 't1',
-  } as never);
+  });
   return { result, ctrl };
 }
 
-test('app: approvals are listed in state, answered once, and "always" passes the suggested rules', async () => {
+test('app: approvals are listed in state, answered once, and "always" is passed on when offered', async () => {
   const { app, send, got } = setup();
   got.length = 0;
   const rules = [{ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'session' }];
@@ -217,15 +225,11 @@ test('app: approvals are listed in state, answered once, and "always" passes the
 
   const answered = send({ t: 'permission', requestId: requests[0]!.id, decision: 'always' });
   assert.ok(answered.some((m) => m.t === 'permission_resolved' && m.requestId === requests[0]!.id));
-  const r1 = (await one.result) as Extract<PermissionResult, { behavior: 'allow' }>;
-  assert.equal(r1.behavior, 'allow');
-  assert.deepEqual(r1.updatedPermissions, rules);
+  assert.deepEqual(await one.result, { decision: 'always' });
   assert.deepEqual(send({ t: 'permission', requestId: requests[0]!.id, decision: 'deny' }), [], 'a second answer is ignored');
 
   send({ t: 'permission', requestId: requests[1]!.id, decision: 'always' });
-  const r2 = (await two.result) as Extract<PermissionResult, { behavior: 'allow' }>;
-  assert.equal(r2.behavior, 'allow');
-  assert.equal(r2.updatedPermissions, undefined, '"always" without suggestions is a plain allow');
+  assert.deepEqual(await two.result, { decision: 'allow' }, '"always" where none is offered is a plain allow');
 
   const after = send({ t: 'hello' }).at(-1);
   assert.ok(after?.t === 'state' && after.state.pending.length === 0);
@@ -237,21 +241,19 @@ test('app: deny, questions and cancelled requests', async () => {
   const denied = askFor(app);
   const id = (got.at(-1) as Extract<ServerMsg, { t: 'permission_request' }>).request.id;
   send({ t: 'permission', requestId: id, decision: 'deny', message: 'not now' });
-  assert.deepEqual(await denied.result, { behavior: 'deny', message: 'not now' });
+  assert.deepEqual(await denied.result, { decision: 'deny', message: 'not now' });
 
   got.length = 0;
   const q = askFor(app, { toolName: 'AskUserQuestion', input: { questions: [{ question: 'Which?', options: [] }] } });
   const qr = (got.at(-1) as Extract<ServerMsg, { t: 'permission_request' }>).request;
   assert.equal(qr.kind, 'question');
   send({ t: 'permission', requestId: qr.id, decision: 'allow', answers: { 'Which?': 'A', bad: 5 } });
-  const res = (await q.result) as Extract<PermissionResult, { behavior: 'allow' }>;
-  assert.deepEqual(res.updatedInput.answers, { 'Which?': 'A' });
+  assert.deepEqual(await q.result, { decision: 'allow', answers: { 'Which?': 'A' } });
 
   const cancelled = askFor(app);
   cancelled.ctrl.abort();
-  assert.equal((await cancelled.result).behavior, 'deny');
-  const own = await app.askPermission({ meta: { id: 'c' } } as never, { id: 'a', name: 'x' } as never, 'mcp__masthead__spawn_agent', {}, { signal: new AbortController().signal } as never);
-  assert.equal(own.behavior, 'allow', "Masthead's own tools are not put to the person");
+  assert.equal((await cancelled.result).decision, 'deny');
+  // Masthead's own tools never reach the app: the backend adapter allows them (test/agent.test.ts).
 });
 
 test('app: the latest usage notice of each kind is kept in state', () => {
@@ -299,8 +301,10 @@ test('config: the secret is created once, private, and kept', () => {
   assert.equal(readSecret(file), null);
   const s = loadSecret(file);
   assert.match(s, /^[0-9a-f]{64}$/);
-  assert.equal(statSync(file).mode & 0o777, 0o600);
-  assert.equal(statSync(join(dir, 'data')).mode & 0o077, 0);
+  if (POSIX) {
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    assert.equal(statSync(join(dir, 'data')).mode & 0o077, 0);
+  }
   assert.equal(loadSecret(file), s, 'kept across restarts');
   assert.equal(readSecret(file), s);
   writeFileSync(file, 'garbage');
@@ -310,7 +314,17 @@ test('config: the secret is created once, private, and kept', () => {
   // A valid secret that others can read (an old copy, a restore) is made private again, not replaced.
   chmodSync(file, 0o644);
   assert.equal(loadSecret(file), replaced);
-  assert.equal(statSync(file).mode & 0o777, 0o600);
+  if (POSIX) assert.equal(statSync(file).mode & 0o777, 0o600);
+});
+
+test('app: on Windows `~\\` expands too, and drive roots lead to the drive list', () => {
+  assert.equal(expandHome('~/p', '/home/a', 'linux'), '/home/a/p');
+  assert.equal(expandHome('~\\p', '/home/a', 'linux'), '~\\p', 'a backslash is a file-name character on POSIX');
+  assert.equal(expandHome('~\\p', 'C:\\Users\\a', 'win32'), 'C:\\Users\\a\\p');
+  assert.equal(expandHome('~', 'C:\\Users\\a', 'win32'), 'C:\\Users\\a');
+  assert.equal(expandHome('~x', '/home/a', 'linux'), '~x');
+  assert.deepEqual(windowsDrives((p) => p === 'C:\\' || p === 'E:\\'), ['C:\\', 'E:\\']);
+  assert.equal(DRIVES.includes('/') || DRIVES.includes('\\'), false, 'no folder can have this name');
 });
 
 test('config: maxRunMinutes is a whole number from 0 to a day, else unchanged', () => {

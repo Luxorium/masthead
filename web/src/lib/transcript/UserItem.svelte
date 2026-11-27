@@ -1,12 +1,15 @@
 <script lang="ts">
   import type { Item } from '../../../../shared/protocol.ts';
+  import { T } from '../text.ts';
 
   let { item }: { item: Extract<Item, { kind: 'user' }> } = $props();
+  // 0.1.x stored a count; 0.2.0 stores the images themselves (shown once images land, Stage B).
+  const count = $derived(Array.isArray(item.images) ? item.images.length : (item.images ?? 0));
 </script>
 
 <div class="user">
   <div class="bubble">
-    {#if item.images}<div class="attached">{item.images} image{item.images > 1 ? 's' : ''} attached</div>{/if}
+    {#if count > 0}<div class="attached">{T.transcript.images(count)}</div>{/if}
     {item.text}
   </div>
 </div>

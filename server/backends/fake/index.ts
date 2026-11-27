@@ -103,6 +103,8 @@ export class FakeSession implements Session {
   effort: Effort;
   model: string;
   closed: 'graceful' | 'now' | null = null;
+  readonly ended: Promise<void>;
+  private end!: () => void;
   private queue: Queued[] = [];
   private running = false;
   /** Ids consumed by the turn that is running now. */
@@ -119,6 +121,7 @@ export class FakeSession implements Session {
   ) {
     this.effort = spec.effort;
     this.model = spec.model;
+    this.ended = new Promise<void>((r) => (this.end = r));
     queueMicrotask(() => this.boot());
   }
 
@@ -132,6 +135,7 @@ export class FakeSession implements Session {
       if (!this.backend.stored.has(this.spec.resume)) {
         this.dead = true;
         this.ev.exited({ failure: `No session found with id ${this.spec.resume}`, sessionMissing: true });
+        this.end();
         return;
       }
       this.sessionId = this.spec.resume;
@@ -154,6 +158,14 @@ export class FakeSession implements Session {
 
   async interrupt(): Promise<void> {
     if (this.current) this.interruptRequested = true;
+    this.abortAsks();
+  }
+
+  /** Approval requests still open; withdrawn when the turn is interrupted or the session closed at once. */
+  private asks = new Set<AbortController>();
+  private abortAsks(): void {
+    for (const c of this.asks) c.abort();
+    this.asks.clear();
   }
 
   setEffort(effort: Effort): void {
@@ -167,9 +179,14 @@ export class FakeSession implements Session {
   close(how: 'graceful' | 'now'): void {
     if (this.closed) return;
     this.closed = how;
-    // Asked to close: no exited event (that is only for an unexpected end).
-    this.dead = true;
+    // Asked to close: no exited event (that is only for an unexpected end). Graceful lets the running
+    // turn finish, as a CLI does when its input ends; now stops at once.
     this.queue = [];
+    if (how === 'now' || !this.running) {
+      this.dead = true;
+      this.abortAsks();
+      queueMicrotask(() => this.end());
+    }
   }
 
   async contextUsage(): Promise<{ used: number; max: number }> {
@@ -191,6 +208,14 @@ export class FakeSession implements Session {
       }
     } finally {
       this.running = false;
+      this.finishGracefulClose();
+    }
+  }
+
+  private finishGracefulClose(): void {
+    if (this.closed === 'graceful' && !this.dead) {
+      this.dead = true;
+      this.end();
     }
   }
 
@@ -236,6 +261,7 @@ export class FakeSession implements Session {
             this.dead = true;
             this.current = null;
             this.ev.exited({ failure: 'The fake process crashed.' });
+            this.end();
             return;
           }
           if (r.stopTurn) break;
@@ -312,6 +338,7 @@ export class FakeSession implements Session {
         if (step.kind === 'question' && !this.spec.canAskPerson) return { text: 'I may not ask the person.' };
         this.ev.toolStarted({ id, name, input });
         const ctl = new AbortController();
+        this.asks.add(ctl);
         const answer = await this.ev.askPermission({
           kind: step.kind,
           toolName: name,
@@ -321,6 +348,8 @@ export class FakeSession implements Session {
           questions: step.kind === 'question' ? (input as { questions: never }).questions : undefined,
           signal: ctl.signal,
         });
+        this.asks.delete(ctl);
+        if (ctl.signal.aborted) return { stopTurn: true };
         if (answer.decision === 'deny') {
           this.ev.toolFinished({ id, result: answer.message ?? 'Denied.', isError: true });
           return { text: 'Permission denied.' };
@@ -367,6 +396,7 @@ export class FakeSession implements Session {
       while (!this.dead && this.queue.length > 0) await this.turn(this.queue.splice(0), false);
     } finally {
       this.running = false;
+      this.finishGracefulClose();
     }
   }
 }

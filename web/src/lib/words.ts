@@ -1,5 +1,6 @@
 // Words for statuses, sizes and paths, shared by every component that shows an agent.
 import { displayName, type AgentInfo } from '../../../shared/protocol.ts';
+import { T } from './text.ts';
 
 export function fmtTokens(n: number): string {
   if (n < 1000) return String(n);
@@ -7,8 +8,20 @@ export function fmtTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
+/** Replaces the home folder with `~`. Windows paths (`C:\\Users\\x`) are compared without case. */
 export function shortPath(path: string, home: string | undefined): string {
-  return home && (path === home || path.startsWith(home + '/')) ? '~' + path.slice(home.length) : path;
+  if (!home) return path;
+  const win = /^[A-Za-z]:\\/.test(home);
+  const p = win ? path.toLowerCase() : path;
+  const h = win ? home.toLowerCase() : home;
+  const under = p === h || p.startsWith(h + '/') || (win && p.startsWith(h + '\\'));
+  return under ? '~' + path.slice(home.length) : path;
+}
+
+/** A child path inside `parent`, with the parent's own separator (`\\` on Windows). */
+export function childPath(parent: string, name: string): string {
+  const sep = /^[A-Za-z]:\\/.test(parent) || (parent.includes('\\') && !parent.includes('/')) ? '\\' : '/';
+  return parent.endsWith(sep) ? parent + name : `${parent}${sep}${name}`;
 }
 
 /**
@@ -16,11 +29,11 @@ export function shortPath(path: string, home: string | undefined): string {
  * sub-state of a status belongs here, as one line.
  */
 export function statusWords(a: AgentInfo): string {
-  if (a.pausedUntil) return `Paused until ${new Date(a.pausedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · usage limit`;
-  if (a.status === 'waiting' && a.waitingFor) return `Waiting for an answer from ${displayName(a.waitingFor)}`;
-  if (a.status === 'running') return a.activity ?? 'Working';
-  if (a.status === 'failed') return a.error ? `Failed: ${shortReason(a.error)}` : 'Failed';
-  if (a.status === 'stopped' && a.error) return `Stopped · ${shortReason(a.error)}`;
+  if (a.pausedUntil) return T.status.paused(new Date(a.pausedUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+  if (a.status === 'waiting' && a.waitingFor) return T.status.waitingFor(displayName(a.waitingFor));
+  if (a.status === 'running') return a.activity ?? T.status.running;
+  if (a.status === 'failed') return a.error ? T.status.failedWith(shortReason(a.error)) : T.status.failed;
+  if (a.status === 'stopped' && a.error) return T.status.stoppedWith(shortReason(a.error));
   return STATUS_LABEL[a.status];
 }
 
@@ -45,12 +58,12 @@ export function shortReason(error: string): string {
 }
 
 export const STATUS_LABEL: Record<AgentInfo['status'], string> = {
-  queued: 'Queued',
-  running: 'Working',
+  queued: T.status.queued,
+  running: T.status.running,
   // Waiting on agents it started, or on a command it left running in the background.
-  waiting: 'Waiting',
-  idle: 'Idle',
-  done: 'Done',
-  failed: 'Failed',
-  stopped: 'Stopped',
+  waiting: T.status.waiting,
+  idle: T.status.idle,
+  done: T.status.done,
+  failed: T.status.failed,
+  stopped: T.status.stopped,
 };

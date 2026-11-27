@@ -7,7 +7,10 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { SIGN_IN_STALE_MS, UsageError, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, unitPortFrom, writeSignInFile, type Opener } from '../server/cli.ts';
+import { SIGN_IN_STALE_MS, UsageError, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, onPath, openersFor, removeLaterArgs, unitPortFrom, writeSignInFile, type Opener } from '../server/cli.ts';
+
+/** File modes and bash exist only on POSIX systems; Windows runners skip those checks. */
+const POSIX = process.platform !== 'win32';
 import { DEFAULT_PORT } from '../server/paths.ts';
 import { proofOf } from '../server/transport/auth.ts';
 
@@ -61,17 +64,19 @@ const KEY = 'c'.repeat(64);
 
 test('launcher: the key travels in the fragment, and sign-in files go to the runtime folder', () => {
   assert.equal(signInUrl('http://127.0.0.1:7790', KEY), `http://127.0.0.1:7790/#key=${KEY}`);
-  assert.equal(signInDir({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/d/masthead'), '/run/user/1000/masthead');
-  assert.equal(signInDir({}, '/d/masthead'), '/d/masthead/open');
-  assert.equal(signInDir({ XDG_RUNTIME_DIR: 'relative' }, '/d/masthead'), '/d/masthead/open');
+  assert.equal(signInDir({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/d/masthead', 'linux'), '/run/user/1000/masthead');
+  assert.equal(signInDir({}, '/d/masthead', 'linux'), '/d/masthead/open');
+  assert.equal(signInDir({ XDG_RUNTIME_DIR: 'relative' }, '/d/masthead', 'linux'), '/d/masthead/open');
 });
 
 test('launcher: the sign-in file is private, holds the fragment address, and stale ones are removed', () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'masthead-open-')), 'open');
   const target = signInUrl('http://127.0.0.1:7790', KEY);
   const first = writeSignInFile(dir, target);
-  assert.equal(statSync(dir).mode & 0o777, 0o700);
-  assert.equal(statSync(first).mode & 0o777, 0o600);
+  if (POSIX) {
+    assert.equal(statSync(dir).mode & 0o777, 0o700);
+    assert.equal(statSync(first).mode & 0o777, 0o600);
+  }
   const html = readFileSync(first, 'utf8');
   assert.match(html, new RegExp(`http-equiv="refresh" content="0; url=http://127.0.0.1:7790/#key=${KEY}"`));
   assert.match(html, new RegExp(`<a href="http://127.0.0.1:7790/#key=${KEY}">`));
@@ -88,7 +93,7 @@ test('launcher: the sign-in file is private, holds the fragment address, and sta
   assert.equal(existsSync(third), true);
 });
 
-test('launcher: an existing, too-open sign-in folder is made private again', () => {
+test('launcher: an existing, too-open sign-in folder is made private again', { skip: !POSIX && 'POSIX modes only' }, () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'masthead-open-')), 'open');
   mkdirSync(dir, { mode: 0o755 });
   chmodSync(dir, 0o755); // mkdir's mode is masked by umask
@@ -134,16 +139,16 @@ function fakeOpener(opts: { has?: string[]; code?: number | null | 'hang' } = {}
 test('launcher: the opener gets a file path, never the key, and the file is removed later', async () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'masthead-open-')), 'open');
   const { opener, calls, lines } = fakeOpener();
-  assert.equal(await openSignedIn({ base: 'http://127.0.0.1:7790', secret: KEY, dir, opener, tty: false }), true);
+  assert.equal(await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener, tty: false }), true);
   for (const c of calls) assert.ok(!c.args.join(' ').includes(KEY), `${c.cmd} got the key in its arguments`);
   assert.equal(calls[0]!.cmd, 'xdg-open');
   const file = calls[0]!.args[0]!;
   assert.ok(file.startsWith(dir) && existsSync(file));
-  assert.deepEqual(calls[1], { kind: 'detach', cmd: 'sh', args: ['-c', 'sleep 60; rm -f -- "$1"', 'sh', file] });
+  assert.deepEqual(calls[1], { kind: 'detach', cmd: 'node', args: removeLaterArgs(file) }, 'removed later by a detached Node, no shell');
   assert.deepEqual(lines, [], 'nothing printed when the browser opened and there is no terminal');
 
   const gio = fakeOpener({ has: ['gio'] });
-  await openSignedIn({ base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: gio.opener, tty: true });
+  await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: gio.opener, tty: true });
   assert.deepEqual(gio.lines, ['If the browser did not open signed in, run: masthead --no-browser'], 'in a terminal, one hint line and no key');
   assert.equal(gio.calls[0]!.cmd, 'gio');
   assert.equal(gio.calls[0]!.args[0], 'open');
@@ -152,14 +157,14 @@ test('launcher: the opener gets a file path, never the key, and the file is remo
 test('launcher: with no opener, or one that fails, the address is printed and no file is left', async () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'masthead-open-')), 'open');
   const none = fakeOpener({ has: [] });
-  assert.equal(await openSignedIn({ base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: none.opener, tty: true }), false);
+  assert.equal(await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: none.opener, tty: true }), false);
   assert.match(none.lines.join('\n'), new RegExp(`http://127.0.0.1:7790/#key=${KEY}`));
   assert.match(none.lines.at(-1)!, /masthead --no-browser/);
   assert.equal(existsSync(dir), false, 'no file written without an opener');
 
   for (const code of [1, null]) {
     const failing = fakeOpener({ code });
-    assert.equal(await openSignedIn({ base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: failing.opener, tty: true }), false);
+    assert.equal(await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: failing.opener, tty: true }), false);
     assert.match(failing.lines.join('\n'), /#key=/);
     assert.deepEqual(readdirSync(dir), [], 'the unused file is removed');
     assert.ok(!failing.calls.some((c) => c.kind === 'detach'));
@@ -171,7 +176,7 @@ test('launcher: a sign-in file that cannot be written is reported, and the addre
   writeFileSync(join(base, 'file'), '');
   const dir = join(base, 'file', 'open'); // under a regular file, so mkdir fails
   const fake = fakeOpener();
-  assert.equal(await openSignedIn({ base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: fake.opener, tty: true }), false);
+  assert.equal(await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: fake.opener, tty: true }), false);
   assert.match(fake.lines[0]!, /^Could not write the sign-in file/);
   assert.match(fake.lines.join('\n'), new RegExp(`http://127.0.0.1:7790/#key=${KEY}`));
   assert.ok(!fake.calls.some((c) => c.kind === 'run'), 'the opener is not run without a file');
@@ -180,7 +185,7 @@ test('launcher: a sign-in file that cannot be written is reported, and the addre
 test('launcher: without a terminal the key is never printed, only how to get it', async () => {
   const dir = join(mkdtempSync(join(tmpdir(), 'masthead-open-')), 'open');
   for (const fake of [fakeOpener({ has: [] }), fakeOpener({ code: 1 })]) {
-    assert.equal(await openSignedIn({ base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: fake.opener, tty: false }), false);
+    assert.equal(await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: fake.opener, tty: false }), false);
     assert.ok(!fake.lines.join('\n').includes(KEY), 'the key stays out of output that may be logged');
     assert.match(fake.lines.join('\n'), /masthead --no-browser/);
   }
@@ -190,7 +195,7 @@ test('launcher: an opener still running after the wait counts as opened, so mast
   const dir = join(mkdtempSync(join(tmpdir(), 'masthead-open-')), 'open');
   const hanging = fakeOpener({ code: 'hang' });
   const t0 = Date.now();
-  assert.equal(await openSignedIn({ base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: hanging.opener, tty: false, waitMs: 50 }), true);
+  assert.equal(await openSignedIn({ platform: 'linux', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: hanging.opener, tty: false, waitMs: 50 }), true);
   assert.ok(Date.now() - t0 < 2000, 'returned after the wait, not when the opener ended');
   assert.equal(hanging.calls.at(-1)!.kind, 'detach', 'the file is still removed later');
 });
@@ -224,10 +229,51 @@ test('launcher: the key goes only to a server that proves it knows it', async ()
   for (const f of impostors) assert.equal(await serverProves('http://127.0.0.1:7790', PORT, KEY, f), false);
 });
 
-test('install: the service PATH drops empty, relative and repeated entries', () => {
+test('install: the service PATH drops empty, relative and repeated entries', { skip: !POSIX && 'needs bash' }, () => {
   const script = join(import.meta.dirname, '..', 'scripts', 'path.sh');
   const clean = (p: string) => execFileSync('bash', ['-c', '. "$1"; clean_path "$2"', 'bash', script, p], { encoding: 'utf8' });
   assert.equal(clean('/usr/bin:.:bin::/usr/bin:/home/a b/bin:node_modules/.bin:/x/*:/usr/bin/'), '/usr/bin:/home/a b/bin:/x/*:/usr/bin/');
   assert.equal(clean(''), '');
   assert.equal(clean('.:relative'), '');
+});
+
+test('launcher: each platform has its own opener, and the right one is used', async () => {
+  assert.deepEqual(openersFor('linux'), ['xdg-open', 'gio']);
+  assert.deepEqual(openersFor('darwin'), ['open']);
+  assert.deepEqual(openersFor('win32'), ['explorer.exe']);
+  const dir = join(mkdtempSync(join(tmpdir(), 'masthead-open-')), 'open');
+  const mac = fakeOpener({ has: ['open'] });
+  assert.equal(await openSignedIn({ platform: 'darwin', node: 'node', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: mac.opener, tty: false }), true);
+  assert.equal(mac.calls[0]!.cmd, 'open');
+  assert.equal(mac.calls[0]!.args.length, 1);
+  // explorer.exe exits with 1 even when it worked: that still counts as opened.
+  const win = fakeOpener({ has: ['explorer.exe'], code: 1 });
+  assert.equal(await openSignedIn({ platform: 'win32', node: 'node.exe', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: win.opener, tty: false }), true);
+  assert.equal(win.calls.at(-1)!.cmd, 'node.exe');
+  const winFail = fakeOpener({ has: ['explorer.exe'], code: null });
+  assert.equal(await openSignedIn({ platform: 'win32', node: 'node.exe', base: 'http://127.0.0.1:7790', secret: KEY, dir, opener: winFail.opener, tty: false }), false);
+});
+
+test('launcher: sign-in files go to the per-user temporary folder on macOS, the data folder on Windows', () => {
+  assert.equal(signInDir({ TMPDIR: '/var/folders/x/T/' }, '/d/masthead', 'darwin'), '/var/folders/x/T/masthead');
+  assert.equal(signInDir({}, '/Users/a/Library/Application Support/Masthead', 'darwin'), '/Users/a/Library/Application Support/Masthead/open');
+  assert.equal(signInDir({ XDG_RUNTIME_DIR: '/run/user/1' }, 'C:\\Users\\a\\AppData\\Local\\Masthead', 'win32'), 'C:\\Users\\a\\AppData\\Local\\Masthead\\open');
+});
+
+test('launcher: commands are found on PATH without a shell, with PATHEXT on Windows', () => {
+  const files = new Set(['/usr/bin/xdg-open', 'C:\\Windows\\explorer.exe', 'C:\\tools\\gio.CMD']);
+  const exists = (p: string) => files.has(p);
+  assert.equal(onPath('xdg-open', { PATH: '/bin:/usr/bin' }, 'linux', exists), true);
+  assert.equal(onPath('gio', { PATH: '/bin:/usr/bin:relative' }, 'linux', exists), false);
+  assert.equal(onPath('explorer.exe', { Path: 'C:\\Windows' }, 'win32', exists), true, 'Path is case-insensitive on Windows');
+  assert.equal(onPath('gio', { PATH: 'C:\\tools', PATHEXT: '.EXE;.CMD' }, 'win32', exists), true);
+});
+
+test('launcher: the delayed removal is plain Node and really removes the file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'masthead-rm-'));
+  const file = join(dir, 'sign-in-x.html');
+  writeFileSync(file, 'x');
+  execFileSync(process.execPath, removeLaterArgs(file, 10));
+  assert.equal(existsSync(file), false);
+  execFileSync(process.execPath, removeLaterArgs(file, 10)); // a file already gone is no error
 });

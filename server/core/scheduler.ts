@@ -55,7 +55,9 @@ export class Scheduler {
 
   /** The lead is never limited: each conversation always has its one lead. */
   private cap(tier: Tier): number {
-    return tier === 'lead' ? Infinity : Math.max(0, this.limit(tier));
+    const limit = this.limit(tier);
+    // The lead's tier is never limited; a limit function may also say so with Infinity (first tiers of other profiles).
+    return tier === 'lead' || limit === Infinity ? Infinity : Math.max(0, limit);
   }
 
   running(tier: Tier): number {

@@ -2,7 +2,7 @@
 // tested without running anything.
 import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import { DEFAULT_PORT } from './paths.js';
 import { proofOk } from './transport/auth.js';
 
@@ -65,12 +65,43 @@ export function signInUrl(base: string, secret: string): string {
 }
 
 /**
- * Where sign-in files go: $XDG_RUNTIME_DIR/masthead (a per-user tmpfs, normally 0700) when it is set,
- * else <DATA_DIR>/open.
+ * Where sign-in files go: $XDG_RUNTIME_DIR/masthead (a per-user tmpfs, normally 0700) when it is set;
+ * on macOS the per-user temporary folder ($TMPDIR, 0700); else <DATA_DIR>/open.
  */
-export function signInDir(env: Record<string, string | undefined>, dataDir: string): string {
+export function signInDir(env: Record<string, string | undefined>, dataDir: string, platform: NodeJS.Platform = process.platform): string {
+  const p = platform === 'win32' ? win32 : posix;
   const runtime = env.XDG_RUNTIME_DIR;
-  return runtime && runtime.startsWith('/') ? join(runtime, 'masthead') : join(dataDir, 'open');
+  if (platform !== 'win32' && runtime && p.isAbsolute(runtime)) return p.join(runtime, 'masthead');
+  if (platform === 'darwin' && env.TMPDIR && p.isAbsolute(env.TMPDIR)) return p.join(env.TMPDIR, 'masthead');
+  return p.join(dataDir, 'open');
+}
+
+/** The programs that open a file in the default browser, per platform, in the order they are tried. */
+export function openersFor(platform: NodeJS.Platform): string[] {
+  if (platform === 'darwin') return ['open'];
+  if (platform === 'win32') return ['explorer.exe'];
+  return ['xdg-open', 'gio'];
+}
+
+/**
+ * Whether `cmd` is on PATH, looked up here instead of through a shell (Windows has no `sh`). On Windows
+ * a name without an extension is tried with each PATHEXT extension.
+ */
+export function onPath(cmd: string, env: Record<string, string | undefined>, platform: NodeJS.Platform, exists: (p: string) => boolean): boolean {
+  const win = platform === 'win32';
+  const p = win ? win32 : posix;
+  const get = (name: string) => (win ? Object.entries(env).find(([k]) => k.toUpperCase() === name)?.[1] : env[name]);
+  const exts = win && !p.extname(cmd) ? (get('PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : [''];
+  for (const dir of (get('PATH') ?? '').split(win ? ';' : ':')) {
+    if (!dir || !p.isAbsolute(dir)) continue;
+    for (const ext of exts) if (exists(p.join(dir, cmd + ext))) return true;
+  }
+  return false;
+}
+
+/** Arguments for a detached Node process that removes `file` after `ms` (no shell, so it works on Windows too). */
+export function removeLaterArgs(file: string, ms = 60_000): string[] {
+  return ['-e', `setTimeout(() => { try { require('fs').rmSync(process.argv[1], { force: true }); } catch {} }, ${ms});`, file];
 }
 
 const SIGN_IN_PREFIX = 'sign-in-';
@@ -150,10 +181,20 @@ export interface Opener {
  * there is no opener or it fails, the address is printed, but only to a terminal (`tty`): output that
  * is not a terminal may end up in a log other people can read.
  */
-export async function openSignedIn(opts: { base: string; secret: string; dir: string; opener: Opener; tty: boolean; waitMs?: number }): Promise<boolean> {
-  const { base, secret, dir, opener, tty, waitMs = OPENER_WAIT_MS } = opts;
+export async function openSignedIn(opts: {
+  base: string;
+  secret: string;
+  dir: string;
+  opener: Opener;
+  tty: boolean;
+  waitMs?: number;
+  platform?: NodeJS.Platform;
+  /** The Node that runs the delayed removal; tests pass their own. */
+  node?: string;
+}): Promise<boolean> {
+  const { base, secret, dir, opener, tty, waitMs = OPENER_WAIT_MS, platform = process.platform, node = process.execPath } = opts;
   const target = signInUrl(base, secret);
-  const cmd = ['xdg-open', 'gio'].find((c) => opener.has(c));
+  const cmd = openersFor(platform).find((c) => opener.has(c));
   let file: string | null = null;
   if (cmd) {
     try {
@@ -167,9 +208,11 @@ export async function openSignedIn(opts: { base: string; secret: string; dir: st
     const stillRunning = new Promise<'running'>((resolve) => (timer = setTimeout(() => resolve('running'), waitMs)));
     const code = await Promise.race([opener.run(cmd, cmd === 'gio' ? ['open', file] : [file]), stillRunning]);
     clearTimeout(timer);
-    if (code === 0 || code === 'running') {
+    // explorer.exe exits with 1 even when it opened the file, so only "could not start" counts as failure there.
+    const opened = code === 'running' || code === 0 || (cmd === 'explorer.exe' && code !== null);
+    if (opened) {
       // Long enough for a browser that is still starting; the file's name is no secret.
-      opener.detach('sh', ['-c', 'sleep 60; rm -f -- "$1"', 'sh', file]);
+      opener.detach(node, removeLaterArgs(file));
       // A confined browser (snap, flatpak) may not be able to read the file, which nothing here can see.
       if (tty) opener.log(BROWSER_HINT);
       return true;

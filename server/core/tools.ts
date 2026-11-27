@@ -1,6 +1,7 @@
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { CHILD_TIER, EFFORTS, VERSION, type Effort, type Tier } from '../../shared/protocol.js';
+import type { ToolDef } from '../backends/types.js';
+import { EFFORTS, VERSION, type Effort, type Tier } from '../../shared/protocol.js';
 import type { Agent } from '../runtime/agent.js';
 import { withArticle } from './prompts.js';
 
@@ -14,6 +15,8 @@ export interface TeamActions {
   setAgentEffort(caller: Agent, name: string, level: Effort): string;
   autoEffort(): boolean;
   label(tier: Tier): string;
+  /** The tier an agent of `tier` may start, from its team profile; null for the last tier. */
+  childTier(tier: Tier): Tier | null;
 }
 
 const effortSchema = z.enum(EFFORTS as unknown as [Effort, ...Effort[]]);
@@ -27,14 +30,14 @@ function reply(text: string) {
  * server, so every start, message and effort change goes through the conversation, which enforces
  * the tiers and the limits.
  */
-export function teamTools(agent: Agent, team: TeamActions): McpSdkServerConfigWithInstance {
-  const child = CHILD_TIER[agent.tier];
+function toolList(agent: Agent, team: TeamActions) {
+  const child = team.childTier(agent.tier);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: SdkMcpToolDefinition<any>[] = [
     tool(
       'send_message',
       'Send a short message to another agent in this conversation by name, e.g. "charlie" ("lead" and "parent" also work). A finished agent resumes with its context to read it. Use it to ask a question, pass on a finding or answer a message. It returns once delivered; any answer arrives later as a message.',
-      agent.tier === 'lead'
+      agent.info.parentId === null
         ? { to: z.string().min(1).max(80), message: z.string().min(1).max(20_000) }
         : {
             to: z.string().min(1).max(80),
@@ -76,7 +79,7 @@ export function teamTools(agent: Agent, team: TeamActions): McpSdkServerConfigWi
     tools.push(
       tool(
         'set_effort',
-        agent.tier === 'lead'
+        agent.info.parentId === null
           ? 'Change your own thinking effort from your next step on. Low is right for most work. Raise it when the task needs careful multi-step reasoning, subtle debugging or a design decision, or when you catch yourself making mistakes; lower it again afterwards. Change it at the start of a piece of work, not repeatedly.'
           : 'Ask to change your own thinking effort. Low is right for most work. Lowering applies at once. Raising needs the approval of the agent that started you: this sends the request and returns; keep working at your current level. If approved, the new level applies by itself from your next step; no message is sent. list_agents shows your current effort.',
         { level: effortSchema, reason: z.string().min(1).max(500).describe('One sentence on why') },
@@ -95,5 +98,22 @@ export function teamTools(agent: Agent, team: TeamActions): McpSdkServerConfigWi
     }
   }
 
-  return createSdkMcpServer({ name: 'masthead', version: VERSION, alwaysLoad: true, tools });
+  return tools;
+}
+
+export function teamTools(agent: Agent, team: TeamActions): McpSdkServerConfigWithInstance {
+  return createSdkMcpServer({ name: 'masthead', version: VERSION, alwaysLoad: true, tools: toolList(agent, team) });
+}
+
+/** The same tools, backend-neutral (backends/types.ts ToolDef), bound to `agent`. */
+export function teamToolDefs(agent: Agent, team: TeamActions): ToolDef[] {
+  return toolList(agent, team).map((t) => ({
+    name: t.name,
+    description: t.description,
+    input: z.toJSONSchema(z.object(t.inputSchema)) as ToolDef['input'],
+    run: async (input: unknown) => {
+      const r = await t.handler(input as never, {});
+      return r.content.map((c) => (c.type === 'text' ? c.text : '')).join('\n');
+    },
+  }));
 }

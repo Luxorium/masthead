@@ -162,7 +162,7 @@ test('store: conversations round-trip and ids cannot escape the data folder', ()
   const store = new Store(mkdtempSync(join(tmpdir(), 'masthead-test-')));
   const meta = { id: 'conv-1', title: 'T', cwd: '/tmp', createdAt: 1, updatedAt: 2, leadId: 'lead-1' };
   store.saveConversation({ meta, agents: [] });
-  assert.deepEqual(store.loadAll(), [{ meta, agents: [] }]);
+  assert.deepEqual(store.loadAll(), [{ format: 2, meta, agents: [] }]);
   assert.throws(() => store.appendItem('../../etc', 'x', { id: 'i', ts: 1, kind: 'text', text: '' }));
   assert.throws(() => store.loadItems('conv-1', '../conversation'));
   store.deleteConversation('conv-1');
@@ -178,7 +178,7 @@ test('prompts: each tier is told what it can do', () => {
   const haiku = systemAppend({ tier: 'haiku', name: 'h1', parentName: 's1', settings });
   assert.match(haiku, /"s1" started you/);
   assert.doesNotMatch(haiku, /spawn_agent/);
-  settings.tiers.sonnet.max = 0;
+  Object.assign(settings, sanitizeSettings({ tiers: { sonnet: { max: 0 } } }, settings)); // profiles are the source of truth
   settings.autoEffort = false;
   const opus = systemAppend({ tier: 'opus', name: 'o1', parentName: 'lead', settings });
   assert.match(opus, /switched off/);
@@ -190,7 +190,7 @@ test('prompts: each tier is told what it can do', () => {
 test('tool wording: past for the transcript, present for what is happening now', () => {
   assert.deepEqual(toolLine('Read', { file_path: '/a/b.ts' }), { verb: 'Read', target: '/a/b.ts' });
   assert.deepEqual(toolLine('Read', { file_path: '/a/b.ts' }, true), { verb: 'Reading', target: '/a/b.ts' });
-  assert.deepEqual(toolLine('mcp__masthead__spawn_agent', { title: 'Review the API' }, true), { verb: 'Starting an agent:', target: 'Review the API' });
+  assert.deepEqual(toolLine('mcp__masthead__spawn_agent', { title: 'Review the API' }, true), { verb: 'Starting a helper:', target: 'Review the API' });
   assert.equal(toolLine('Bash', { command: 'a\n  b' }).target, 'a b');
   assert.deepEqual(toolLine('mcp__github__list_issues', {}), { verb: 'Used list_issues', target: 'github' });
   assert.equal(toolLine('Mystery', null).verb, 'Used Mystery');

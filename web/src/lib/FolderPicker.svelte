@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { shortPath, store } from './store.svelte.ts';
+  import { childPath } from './words.ts';
+
+  /** The server's name for the list of drives on Windows (server/app/app.ts DRIVES). */
+  const DRIVES = 'drives:';
 
   let { onclose }: { onclose: () => void } = $props();
   let typed = $state(store.newCwd);
@@ -37,13 +41,14 @@
   </form>
   <div class="list">
     {#if store.dirs?.parent}
-      <button onclick={() => go(store.dirs!.parent!)}>‹ Up to {shortPath(store.dirs.parent, store.app?.home)}</button>
+      <!-- On Windows a drive root's parent is the sentinel 'drives:', the list of drives. -->
+      <button onclick={() => go(store.dirs!.parent!)}>‹ Up to {store.dirs.parent === DRIVES ? 'Drives' : shortPath(store.dirs.parent, store.app?.home)}</button>
     {/if}
     {#if store.dirs?.error}
       <p class="err">{store.dirs.error}</p>
     {:else}
       {#each store.dirs?.entries ?? [] as name (name)}
-        <button onclick={() => go(`${store.dirs!.path === '/' ? '' : store.dirs!.path}/${name}`)}>{name}</button>
+        <button onclick={() => go(store.dirs!.path === DRIVES ? name : childPath(store.dirs!.path, name))}>{name}</button>
       {:else}
         <p class="muted">No folders inside.</p>
       {/each}
@@ -51,7 +56,7 @@
   </div>
   <div class="actions">
     <button class="btn ghost" onclick={onclose}>Cancel</button>
-    <button class="btn primary" disabled={!store.dirs || !!store.dirs.error} onclick={choose}>Use this folder</button>
+    <button class="btn primary" disabled={!store.dirs || !!store.dirs.error || store.dirs.path === DRIVES} onclick={choose}>Use this folder</button>
   </div>
 </div>
 

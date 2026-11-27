@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { T } from '../text.ts';
   import type { Draft } from '../../../../shared/protocol.ts';
   import { renderMarkdown } from '../markdown.ts';
 
@@ -8,7 +9,7 @@
 {#if draft.kind === 'text'}
   <div class="md assistant streaming">{@html renderMarkdown(draft.text)}</div>
 {:else if draft.text}
-  <div class="thinking-live muted">Thinking… {draft.text.slice(-140)}</div>
+  <div class="thinking-live muted">{T.transcript.thinking} {draft.text.slice(-140)}</div>
 {/if}
 
 <style>

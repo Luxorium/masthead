@@ -30,7 +30,20 @@ describe('words', () => {
     expect(statusWords(agent({ activity: 'Reading a.ts' }))).toBe('Reading a.ts');
     expect(statusWords(agent({ status: 'waiting', waitingFor: 'alpha' }))).toBe('Waiting for an answer from Alpha');
     expect(statusWords(agent({ status: 'stopped', error: 'Stopped by the person.' }))).toBe('Stopped · by you');
-    expect(statusWords(agent({ status: 'queued' }))).toBe('Queued');
+    expect(statusWords(agent({ status: 'queued' }))).toBe('Waiting its turn');
     expect(statusWords(agent({ pausedUntil: Date.now() + 1e6 }))).toMatch(/^Paused until .* · usage limit$/);
+  });
+});
+
+import { childPath } from '../src/lib/words.ts';
+describe('paths on every system', () => {
+  it('shortens a Windows home without case', () => {
+    expect(shortPath('C:\\Users\\Ann\\proj', 'c:\\users\\ann')).toBe('~\\proj');
+  });
+  it('builds child paths with the parent separator', () => {
+    expect(childPath('/', 'home')).toBe('/home');
+    expect(childPath('/home/x', 'p')).toBe('/home/x/p');
+    expect(childPath('C:\\', 'Users')).toBe('C:\\Users');
+    expect(childPath('C:\\Users', 'x')).toBe('C:\\Users\\x');
   });
 });

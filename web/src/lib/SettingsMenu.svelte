@@ -2,19 +2,12 @@
   import { tick } from 'svelte';
   import { PERMISSION_CHOICES, type PermissionChoice } from '../../../shared/protocol.ts';
   import { shortPath, store } from './store.svelte.ts';
+  import { T } from './text.ts';
+  import { ui, type Theme } from './ui.svelte.ts';
 
-  const MODE: Record<PermissionChoice, string> = {
-    inherit: 'Use my Claude Code settings',
-    default: 'Ask me first',
-    acceptEdits: 'Accept file edits, ask for the rest',
-    auto: 'Auto (a classifier decides)',
-    bypassPermissions: 'Bypass all checks',
-  };
-
-  /** Choices for the longest run of a sub-agent, in minutes; 0 is no limit. */
+  /** Choices for the longest a helper may work, in minutes; 0 is no limit. */
   const RUN_LIMITS = [0, 15, 30, 60, 120, 240];
-  const runLabel = (m: number) => (m === 0 ? 'No limit' : m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`);
-
+  const runLabel = (m: number) => (m === 0 ? T.settings.noLimit : T.settings.minutes(m));
   let open = $state(false);
   let gear = $state<HTMLButtonElement | null>(null);
   let panel = $state<HTMLDivElement | null>(null);
@@ -53,66 +46,69 @@
     bind:this={gear}
     class="btn ghost icon"
     onclick={toggle}
-    title="Settings"
-    aria-label="Settings"
+    title={T.settings.title}
+    aria-label={T.settings.title}
     aria-haspopup="dialog"
     aria-expanded={open}>⚙</button
   >
   {#if open && store.settings}
     {@const s = store.settings}
-    <div bind:this={panel} class="panel" role="dialog" aria-label="Settings">
-      <h2>Settings</h2>
+    <div bind:this={panel} class="panel" role="dialog" aria-label={T.settings.title}>
+      <button class="close" onclick={() => close(true)} aria-label={T.settings.close}>×</button>
+      <h2>{T.settings.title}</h2>
+      <label class="check">
+        <input type="checkbox" checked={ui.advanced} onchange={(e) => ui.setAdvanced(e.currentTarget.checked)} />
+        <span><b>{T.settings.advanced}</b><small>{T.settings.advancedHelp}</small></span>
+      </label>
       <label class="mode">
-        <span>Permissions</span>
+        <span>{T.settings.ask}</span>
         <select value={s.permissionMode} onchange={(e) => store.updateSettings((n) => (n.permissionMode = e.currentTarget.value as PermissionChoice))}>
-          {#each PERMISSION_CHOICES as m (m)}<option value={m}>{MODE[m]}</option>{/each}
+          {#each PERMISSION_CHOICES as m (m)}<option value={m}>{T.settings.askChoices[m]}</option>{/each}
         </select>
       </label>
       {#if s.permissionMode === 'bypassPermissions'}
-        <p class="warn">Every agent can run any command and change any file without asking.</p>
+        <p class="warn">{T.settings.bypassWarning}</p>
       {/if}
       <label class="check">
-        <input type="checkbox" checked={s.autoEffort} onchange={(e) => store.updateSettings((n) => (n.autoEffort = e.currentTarget.checked))} />
-        <span>
-          <b>Automatic effort</b>
-          <small>Everyone starts at Low. The lead raises its own; the others ask the agent above them.</small>
-        </span>
-      </label>
-      <label class="check">
-        <input type="checkbox" checked={s.leanOpus} onchange={(e) => store.updateSettings((n) => (n.leanOpus = e.currentTarget.checked))} />
-        <span>
-          <b>Lean Opus</b>
-          <small>Opus agents skip your connected services too.</small>
-        </span>
-      </label>
-      <label class="check">
-        <input type="checkbox" checked={s.leanSubagents} onchange={(e) => store.updateSettings((n) => (n.leanSubagents = e.currentTarget.checked))} />
-        <span>
-          <b>Lean Sonnet and Haiku</b>
-          <small>They skip your connected services, which keeps their context small.</small>
-        </span>
-      </label>
-      <label class="check">
         <input type="checkbox" checked={s.collapseReports} onchange={(e) => store.updateSettings((n) => (n.collapseReports = e.currentTarget.checked))} />
-        <span>
-          <b>Fold agent reports</b>
-          <small>Reports show as one line in a chat until you open them.</small>
-        </span>
+        <span><b>{T.settings.fold}</b><small>{T.settings.foldHelp}</small></span>
       </label>
       <label class="mode run">
-        <span>Longest run for a sub-agent</span>
+        <span>{T.settings.runLimit}</span>
         <select value={s.maxRunMinutes ?? 0} onchange={(e) => store.updateSettings((n) => (n.maxRunMinutes = Number(e.currentTarget.value)))}>
           {#each RUN_LIMITS.includes(s.maxRunMinutes ?? 0) ? RUN_LIMITS : [...RUN_LIMITS, s.maxRunMinutes].sort((a, b) => a - b) as m (m)}<option value={m}>{runLabel(m)}</option>{/each}
         </select>
-        <small>A sub-agent still working after this long is stopped and its parent is told.</small>
+        <small>{T.settings.runLimitHelp}</small>
+      </label>
+      {#if ui.advanced}
+        <label class="check">
+          <input type="checkbox" checked={s.autoEffort} onchange={(e) => store.updateSettings((n) => (n.autoEffort = e.currentTarget.checked))} />
+          <span><b>{T.settings.autoEffort}</b><small>{T.settings.autoEffortHelp}</small></span>
+        </label>
+        <label class="check">
+          <input type="checkbox" checked={s.leanOpus} onchange={(e) => store.updateSettings((n) => (n.leanOpus = e.currentTarget.checked))} />
+          <span><b>{T.settings.leanOpus}</b><small>{T.settings.leanOpusHelp}</small></span>
+        </label>
+        <label class="check">
+          <input type="checkbox" checked={s.leanSubagents} onchange={(e) => store.updateSettings((n) => (n.leanSubagents = e.currentTarget.checked))} />
+          <span><b>{T.settings.leanSub}</b><small>{T.settings.leanSubHelp}</small></span>
+        </label>
+      {/if}
+      <label class="mode run">
+        <span>{T.settings.theme}</span>
+        <select value={ui.theme} onchange={(e) => ui.setTheme(e.currentTarget.value as Theme)}>
+          <option value="system">{T.settings.themeSystem}</option>
+          <option value="light">{T.settings.themeLight}</option>
+          <option value="dark">{T.settings.themeDark}</option>
+        </select>
       </label>
       <p class="about">
-        Masthead {store.app?.version ?? ''}<br />
+        {T.app.name} {store.app?.version ?? ''}<br />
         {#if store.app?.claude.path}
-          Claude Code {store.app.claude.version ?? ''}<br />
+          {T.settings.claude(store.app.claude.version ?? '')}<br />
           <span class="mono" title={store.app.claude.path}>{shortPath(store.app.claude.path, store.app.home)}</span>
         {:else}
-          Claude Code not found{store.app?.claude.error ? `: ${store.app.claude.error}` : ''}
+          {T.settings.claudeMissing}{store.app?.claude.error ? `: ${store.app.claude.error}` : ''}
         {/if}
       </p>
     </div>
@@ -129,17 +125,38 @@
   }
   .panel {
     position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
+    /* Opens upwards from the gear at the foot of the sidebar. */
+    bottom: calc(100% + 6px);
+    left: -8px;
     z-index: 25;
     width: 300px;
-    max-height: calc(100vh - 70px);
+    max-height: calc(100dvh - 80px);
     overflow-y: auto;
     padding: 14px 16px;
     border: 1px solid var(--border-strong);
     border-radius: 12px;
     background: var(--raised);
     box-shadow: var(--shadow);
+  }
+  /* Phones: the settings take the whole screen, with a close button. */
+  @media (max-width: 599px) {
+    .panel {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      width: auto;
+      max-height: none;
+      border: 0;
+      border-radius: 0;
+      padding: calc(14px + env(safe-area-inset-top)) 18px calc(18px + env(safe-area-inset-bottom));
+    }
+  }
+  .close {
+    float: right;
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 20px;
+    color: var(--muted);
   }
   h2 {
     margin: 0 0 8px;

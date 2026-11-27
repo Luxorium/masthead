@@ -6,7 +6,8 @@
   --border-strong: #c5cad3;
   --text: #14171c;
   --muted: #5d6470;
-  --faint: #8b92a0;
+  /* 4.6:1 on --bg: the lightest grey that still passes WCAG AA for small text. */
+  --faint: #697080;
   --accent: #3157d5;
   --accent-soft: #e6ebfb;
   --ok: #1f7a4d;
@@ -29,8 +30,34 @@
   --mono: ui-monospace, 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Source Code Pro', monospace;
 }
 
+/* Dark colours: chosen in the page's Appearance setting, or following the system when it says System. */
+:root[data-theme='dark'] {
+  --bg: #0f1217;
+  --panel: #0a0c10;
+  --raised: #181c24;
+  --border: #232832;
+  --border-strong: #353c49;
+  --text: #e7eaf0;
+  --muted: #9aa2b1;
+  --faint: #858d9c;
+  --accent: #8ea6ff;
+  --accent-soft: #1a2240;
+  --ok: #5fc892;
+  --warn: #e5b454;
+  --bad: #ff8a80;
+  --user-bubble: #1d222c;
+  --code-bg: #07090c;
+  --code-text: #e6e9f0;
+  --code-faint: #808899;
+  --code-muted: #b8bfcc;
+  --tier-lead: #e9b949;
+  --tier-opus: #b39cf5;
+  --tier-sonnet: #7fb0ff;
+  --tier-haiku: #5fd0b8;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 35%);
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --bg: #0f1217;
     --panel: #0a0c10;
     --raised: #181c24;
@@ -38,7 +65,7 @@
     --border-strong: #353c49;
     --text: #e7eaf0;
     --muted: #9aa2b1;
-    --faint: #6a7282;
+    --faint: #858d9c;
     --accent: #8ea6ff;
     --accent-soft: #1a2240;
     --ok: #5fc892;
@@ -56,6 +83,12 @@
     --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 35%);
   }
 }
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
 
 * {
   box-sizing: border-box;
@@ -66,6 +99,61 @@ body,
 #app {
   height: 100%;
   margin: 0;
+}
+
+/* The visible height on phones, so the on-screen keyboard does not cover the message box. */
+#app {
+  height: 100dvh;
+}
+
+/* Reduced motion: no pulsing dots, blinking cursor or smooth scrolling. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Touch screens: every control at least 44 px, and 16 px text in fields so iOS does not zoom. */
+@media (pointer: coarse) {
+  .btn {
+    min-height: 44px;
+  }
+  /* :root raises specificity above the `font: inherit` rule further down. */
+  :root input,
+  :root select,
+  :root textarea {
+    font-size: 16px;
+  }
+}
+
+/* A link that lets keyboard users jump past the chat list straight to the message box. */
+.skip {
+  position: absolute;
+  left: 8px;
+  top: -48px;
+  z-index: 50;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+}
+.skip:focus {
+  top: 8px;
+}
+
+/* Text for screen readers only. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 body {
@@ -307,6 +395,12 @@ button:disabled {
 .md .code-block:hover .code-copy,
 .md .code-copy:focus-visible {
   opacity: 1;
+}
+@media (pointer: coarse) {
+  .md .code-copy {
+    opacity: 1;
+    min-height: 32px;
+  }
 }
 .md blockquote {
   margin-left: 0;

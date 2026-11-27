@@ -1,7 +1,11 @@
 <script lang="ts">
+  import SettingsMenu from './SettingsMenu.svelte';
+  import UsageMeter from './UsageMeter.svelte';
   import { store } from './store.svelte.ts';
+  import { T } from './text.ts';
 
-  let { onhide }: { onhide: () => void } = $props();
+  /** onpick runs after a chat is chosen or started, so a drawer can close itself on narrow screens. */
+  let { onhide, onpick }: { onhide: () => void; onpick?: () => void } = $props();
   let confirming = $state<string | null>(null);
 
   function remove(id: string) {
@@ -23,40 +27,43 @@
 
 <aside class="left">
   <div class="top">
-    <span class="brand">Masthead</span>
-    <button class="btn ghost hide" onclick={onhide} title="Hide" aria-label="Hide conversations">⟨</button>
+    <span class="brand">{T.app.name}</span>
+    <button class="btn ghost hide" onclick={onhide} title={T.shell.hideChats} aria-label={T.shell.hideChats}>⟨</button>
   </div>
 
-  <button class="new" onclick={() => store.newConversation()}>
-    <span class="plus">+</span> New
+  <button class="new" onclick={() => { store.newConversation(); onpick?.(); }}>
+    <span class="plus">+</span> {T.shell.newChat}
   </button>
 
-  <div class="label">Recents</div>
-  <nav>
+  <div class="label" id="chats-label">{T.shell.chats}</div>
+  <nav aria-labelledby="chats-label">
     {#each store.conversations as c (c.id)}
       <div class="row" class:active={c.id === store.convId}>
-        <button class="open" onclick={() => store.open(c.id)} title={c.title}>
-          {#if c.busy}<span class="dot running" aria-label="Working"></span>{/if}
+        <button class="open" onclick={() => { store.open(c.id); onpick?.(); }} title={c.title}>
+          {#if c.busy}<span class="dot running" role="img" aria-label={T.shell.working}></span>{/if}
           <span class="name">{c.title}</span>
-          {#if waiting(c.id) > 0}<span class="needs" title="Needs your answer">{waiting(c.id)}</span>{/if}
+          {#if waiting(c.id) > 0}<span class="needs" title={T.shell.needsAnswer} aria-label={T.shell.needsAnswer}>{waiting(c.id)}</span>{/if}
         </button>
-        <button class="del" class:sure={confirming === c.id} onclick={() => remove(c.id)} title="Delete conversation" aria-label="Delete conversation">
-          {confirming === c.id ? 'Delete?' : '×'}
+        <button class="del" class:sure={confirming === c.id} onclick={() => remove(c.id)} title={T.shell.deleteChat} aria-label={T.shell.deleteChat}>
+          {confirming === c.id ? T.shell.confirmDelete : '×'}
         </button>
       </div>
     {:else}
-      <p class="empty">No conversations yet.</p>
+      <p class="empty">{T.shell.noChats}</p>
     {/each}
   </nav>
 
+  {#if Object.keys(store.usage).length > 0}
+    <!-- Only once Claude Code has reported usage: nothing to show before that. -->
+    <UsageMeter />
+  {/if}
   <div class="foot">
-    <span class="dot" class:done={store.connected} class:failed={!store.connected}></span>
-    <span class="muted">
-      {#if !store.connected}Disconnected
-      {:else if store.app?.claude.version}Claude Code {store.app.claude.version.replace(/\s*\(.*\)$/, '')}
-      {:else}Claude Code not found{/if}
-    </span>
-    <span class="ver muted">v{store.app?.version ?? ''}</span>
+    {#if !store.connected && store.app}
+      <span class="dot failed" aria-hidden="true"></span>
+      <span class="muted">{T.shell.disconnected}</span>
+    {/if}
+    <span class="spacer"></span>
+    <SettingsMenu />
   </div>
 </aside>
 
@@ -162,12 +169,24 @@
     color: var(--faint);
     font-size: 15px;
     line-height: 22px;
-    visibility: hidden;
+    /* Hidden by opacity, not visibility, so the keyboard can still reach it. */
+    opacity: 0;
   }
   .row:hover .del,
-  .del:focus-visible,
+  .row:focus-within .del,
   .del.sure {
-    visibility: visible;
+    opacity: 1;
+  }
+  /* Touch screens have no hover: always show it, and make it big enough to tap. */
+  @media (pointer: coarse) {
+    .del {
+      opacity: 1;
+      min-width: 44px;
+      min-height: 44px;
+    }
+    .open {
+      min-height: 44px;
+    }
   }
   .del:hover {
     color: var(--bad);
@@ -187,11 +206,11 @@
     align-items: center;
     gap: 8px;
     flex: none;
-    padding: 10px 16px;
+    padding: 6px 10px 8px 16px;
     border-top: 1px solid var(--border);
     font-size: 12.5px;
   }
-  .ver {
-    margin-left: auto;
+  .spacer {
+    flex: 1;
   }
 </style>

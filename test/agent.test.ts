@@ -90,12 +90,12 @@ function fakeHost(scheduler: Scheduler, settings: () => Settings = defaultSettin
     settings,
     claudePath: () => '/usr/bin/false',
     parentName: () => 'alpha',
-    tools: () => ({}) as ReturnType<AgentHost['tools']>,
+    tools: () => [],
     agentChanged: () => {},
     itemChanged: (_a, item) => void items.push(item),
     draftChanged: () => {},
     rateLimit: () => {},
-    askPermission: async () => ({ behavior: 'allow', updatedInput: {} }),
+    askPermission: async () => ({ decision: 'allow' }),
     turnEnded: (_a, outcome) => void turns.push(outcome),
     backgroundIdle: (a) => void idle.push(a.name),
     processLost: (a, message, usageLimit) => {
@@ -110,6 +110,15 @@ function fakeHost(scheduler: Scheduler, settings: () => Settings = defaultSettin
     }) as unknown as AgentHost['query'],
   };
   return { host, processes, turns, lost, items, idle, limits };
+}
+
+/** A copy of the settings with one tier changed, in the profiles and in the old `tiers` view. */
+function withTier(s: Settings, id: 'lead' | 'opus' | 'sonnet' | 'haiku', patch: { model?: string; effort?: Settings['tiers']['lead']['effort'] }): Settings {
+  return {
+    ...s,
+    profiles: s.profiles.map((p) => ({ ...p, tiers: p.tiers.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
+    tiers: { ...s.tiers, [id]: { ...s.tiers[id], ...patch } },
+  };
 }
 
 function info(name: string, tier: Tier = 'sonnet'): AgentInfo {
@@ -351,12 +360,12 @@ test('agent: applySettings caps effort, sets fixed effort and switches the lead 
   s.start();
   await ticks();
   assert.equal(s.info.effort, 'high');
-  settings = { ...settings, tiers: { ...settings.tiers, sonnet: { ...settings.tiers.sonnet, effort: 'medium' } } };
+  settings = withTier(settings, 'sonnet', { effort: 'medium' });
   s.applySettings(settings);
   await ticks();
   assert.equal(s.info.effort, 'medium');
   assert.deepEqual(processes[0]!.flags, [{ effortLevel: 'medium' }]);
-  settings = { ...settings, autoEffort: false, tiers: { ...settings.tiers, sonnet: { ...settings.tiers.sonnet, effort: 'low' } } };
+  settings = { ...withTier(settings, 'sonnet', { effort: 'low' }), autoEffort: false };
   s.applySettings(settings);
   await ticks();
   assert.equal(s.info.effort, 'low');
@@ -364,7 +373,7 @@ test('agent: applySettings caps effort, sets fixed effort and switches the lead 
   const lead = new Agent({ ...info('alpha', 'lead'), parentId: null, model: settings.tiers.lead.model }, host);
   lead.deliver('hi');
   await ticks();
-  settings = { ...settings, tiers: { ...settings.tiers, lead: { ...settings.tiers.lead, model: 'claude-opus-5-5' } } };
+  settings = withTier(settings, 'lead', { model: 'claude-opus-5-5' });
   lead.applySettings(settings);
   await ticks();
   assert.equal(lead.info.model, 'claude-opus-5-5');
@@ -632,4 +641,168 @@ test('agent: messages delivered from inside a usage-limit turnEnded reach a new 
   b.deliver('later');
   await ticks();
   assert.deepEqual(processes[3]!.received.map((m) => m.message.content), ['later'], 'held messages were dropped by end()');
+});
+
+test('claude adapter: approvals are translated both ways, and Masthead tools are allowed without asking', async () => {
+  const sched = new Scheduler(() => 1);
+  const { host, processes } = fakeHost(sched);
+  const asked: unknown[] = [];
+  host.askPermission = async (_a, ask) => {
+    asked.push(ask.kind);
+    if (ask.kind === 'question') return { decision: 'allow', answers: { 'Which?': 'A' } };
+    return { decision: ask.canAlways ? 'always' : 'deny', message: 'no' };
+  };
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'task' });
+  a.start();
+  await ticks();
+  const can = processes[0]!.options.canUseTool!;
+  const signal = new AbortController().signal;
+  const rules = [{ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'session' }];
+  assert.deepEqual(await can('mcp__masthead__spawn_agent', { x: 1 }, { signal } as never), { behavior: 'allow', updatedInput: { x: 1 } });
+  assert.deepEqual(await can('Bash', { command: 'ls' }, { signal, suggestions: rules } as never), { behavior: 'allow', updatedInput: { command: 'ls' }, updatedPermissions: rules });
+  assert.deepEqual(await can('Bash', { command: 'rm' }, { signal } as never), { behavior: 'deny', message: 'no' });
+  assert.deepEqual(await can('AskUserQuestion', { questions: [] }, { signal } as never), { behavior: 'allow', updatedInput: { questions: [], answers: { 'Which?': 'A' } } });
+  assert.deepEqual(asked, ['command', 'command', 'question']);
+  assert.deepEqual(processes[0]!.options.disallowedTools?.includes('AskUserQuestion'), true, 'a sub-agent may not ask the person');
+});
+
+// ---- The same runtime rules on the scripted fake backend (backend-neutral) ----
+
+import { FakeBackend } from '../server/backends/fake/index.ts';
+
+function onFake(opts: ConstructorParameters<typeof FakeBackend>[0] = {}) {
+  const sched = new Scheduler(() => 4);
+  const backend = new FakeBackend(opts);
+  const h = fakeHost(sched);
+  h.host.backend = () => backend;
+  const wait = async (cond: () => boolean) => {
+    const end = Date.now() + 3000;
+    while (!cond()) {
+      if (Date.now() > end) throw new Error('timed out');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  };
+  return { ...h, backend, sched, wait };
+}
+
+test('runtime on fake: a turn ends with the reply, and the context size is read', async () => {
+  const { host, turns, wait } = onFake();
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Reply with exactly the word KIWI' });
+  a.start();
+  await wait(() => turns.length === 1);
+  assert.equal(turns[0]!.text, 'KIWI');
+  assert.ok(a.sessionId?.startsWith('fake-'));
+  await wait(() => a.info.usage.contextMax === 200_000);
+});
+
+test('runtime on fake: a message during a slow turn joins the run and its text is kept', async () => {
+  const { host, turns, wait } = onFake({ slowMs: 60 });
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Count slowly please' });
+  a.start();
+  await wait(() => a.status === 'running' && a.hasProcess);
+  await new Promise((r) => setTimeout(r, 10));
+  a.deliver('Also reply with the word EXTRA');
+  await wait(() => turns.length === 1);
+  assert.match(turns[0]!.text, /DONE/);
+  assert.match(turns[0]!.text, /EXTRA/);
+  assert.equal(a.busy, false);
+});
+
+test('runtime on fake: background work, then the self-started turn ends the run', async () => {
+  const { host, turns, wait } = onFake({ backgroundMs: 30 });
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Build [[background]]' });
+  a.start();
+  await wait(() => turns.length === 1);
+  assert.equal(a.hasBackgroundWork, true);
+  await wait(() => turns.length === 2);
+  assert.equal(a.hasBackgroundWork, false);
+  assert.match(turns[1]!.text, /Started a background task/);
+  assert.match(turns[1]!.text, /finished/);
+});
+
+test('runtime on fake: the usage limit is recognised, the process closed, later messages kept', async () => {
+  const { host, turns, wait, backend } = onFake();
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: '[[limit 60s]]' });
+  a.start();
+  await wait(() => turns.length === 1);
+  assert.ok(turns[0]!.usageLimit?.resetsAt && turns[0]!.usageLimit.resetsAt > Date.now());
+  await wait(() => !a.hasProcess);
+  assert.equal(backend.sessions[0]!.closed, 'now');
+  a.deliver('Reply with exactly the word BACK');
+  await wait(() => turns.length === 2);
+  assert.equal(turns[1]!.text, 'BACK');
+  assert.equal(backend.sessions[1]!.spec.resume, a.sessionId);
+});
+
+test('runtime on fake: a deleted session starts fresh once; a crash is a lost process', async () => {
+  const { host, turns, lost, wait, backend, items } = onFake();
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Reply with exactly the word ONE' });
+  a.start();
+  await wait(() => turns.length === 1);
+  const old = a.sessionId!;
+  a.end('done');
+  await wait(() => !a.hasProcess);
+  backend.forget(old);
+  a.deliver('Reply with exactly the word TWO');
+  await wait(() => turns.length === 2);
+  assert.notEqual(a.sessionId, old);
+  assert.ok(items.some((i) => i.kind === 'notice' && /starts fresh/.test(i.text)));
+  a.deliver('[[crash]]');
+  await wait(() => lost.length === 1);
+  assert.match(lost[0]!, /crashed/);
+});
+
+test('runtime on fake: tool-result images are stored as blobs and their refs put on the tool item', async () => {
+  const { host, turns, wait, items } = onFake();
+  const stored: string[] = [];
+  host.storeImage = (_a, data, mediaType) => {
+    stored.push(mediaType);
+    return data ? { ref: { hash: 'h1', mediaType } } : { error: 'invalid' };
+  };
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: '[[image]]' });
+  a.start();
+  await wait(() => turns.length === 1);
+  const done = items.filter((i) => i.kind === 'tool' && (i as { done?: boolean }).done) as Array<Item & { images?: unknown[] }>;
+  assert.deepEqual(stored, ['image/png']);
+  assert.deepEqual(done.at(-1)!.images, [{ hash: 'h1', mediaType: 'image/png' }]);
+});
+
+test('runtime on fake: a self-started turn moves a waiting agent back to running', async () => {
+  const { host, turns, wait } = onFake({ backgroundMs: 40 });
+  const seen: string[] = [];
+  host.agentChanged = (ag) => void (seen.at(-1) !== ag.status && seen.push(ag.status));
+  host.turnEnded = (ag, o) => {
+    turns.push(o);
+    ag.setStatus(ag.hasBackgroundWork ? 'waiting' : 'done');
+  };
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: '[[background]]' });
+  a.start();
+  await wait(() => turns.length === 2);
+  const i = seen.indexOf('waiting');
+  assert.ok(i >= 0 && seen.slice(i).includes('running'), `statuses: ${seen.join(' ')}`);
+});
+
+test('runtime on fake: agents on a backend without background tracking are told so', async () => {
+  const withBg = onFake();
+  const noBg = onFake({ caps: { background: false } });
+  for (const h of [withBg, noBg]) new Agent(info('bravo'), h.host, { owesReport: true, seed: 'hi' }).start();
+  await withBg.wait(() => withBg.backend.sessions.length === 1 && noBg.backend.sessions.length === 1);
+  const a = withBg.backend.sessions[0]!.spec.instructions;
+  const b = noBg.backend.sessions[0]!.spec.instructions;
+  assert.notEqual(a, b, 'the instructions differ by the background line');
+});
+
+test('runtime on fake: an effort change that does not reach the session relaunches it before the next turn', async () => {
+  const { host, turns, wait, backend } = onFake();
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'hi' });
+  a.start();
+  await wait(() => turns.length === 1);
+  backend.sessions[0]!.setEffort = () => Promise.reject(new Error('refused'));
+  a.setEffort('high');
+  await new Promise((r) => setTimeout(r, 10));
+  a.deliver('again');
+  await wait(() => turns.length === 2);
+  assert.equal(backend.sessions.length, 2, 'a new session process');
+  assert.equal(backend.sessions[1]!.spec.resume, a.sessionId);
+  assert.equal(backend.sessions[1]!.spec.effort, 'high');
 });

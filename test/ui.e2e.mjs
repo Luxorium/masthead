@@ -2,10 +2,13 @@
 // Usage: node test/ui.e2e.mjs <url> <screenshot folder>
 // It sends real messages, so point it at a test server whose settings use cheap models, started with
 // its own XDG_CONFIG_HOME and XDG_DATA_HOME. The server's secret is taken from the URL's ?key=, else
-// MASTHEAD_KEY, else $XDG_DATA_HOME/masthead/secret. It never runs against the installed app on 7717.
+// MASTHEAD_KEY, else $MASTHEAD_DATA_DIR/secret, else $XDG_DATA_HOME/masthead/secret. It never runs
+// against the installed app on 7717. The browser is $CHROMIUM, else /usr/bin/chromium if present, else
+// Playwright's own Chromium (as in CI).
 // For the approval-card check the server's permissionMode must make a Write ask ("default"), and the opus
 // tier should allow 3 at once; see docs/wiki/Source-Tests.md for a settings file that does both.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 
@@ -17,15 +20,16 @@ if (target.port === '7717') {
 }
 if (!target.searchParams.get('key')) {
   let key = process.env.MASTHEAD_KEY;
-  if (!key && process.env.XDG_DATA_HOME) {
+  const dataDir = process.env.MASTHEAD_DATA_DIR || (process.env.XDG_DATA_HOME ? join(process.env.XDG_DATA_HOME, 'masthead') : '');
+  if (!key && dataDir) {
     try {
-      key = readFileSync(join(process.env.XDG_DATA_HOME, 'masthead', 'secret'), 'utf8').trim();
+      key = readFileSync(join(dataDir, 'secret'), 'utf8').trim();
     } catch {
       // reported below
     }
   }
   if (!key) {
-    console.error("No key for the test server: add ?key=<secret> to the URL, or set MASTHEAD_KEY, or the server's XDG_DATA_HOME.");
+    console.error("No key for the test server: add ?key=<secret> to the URL, or set MASTHEAD_KEY, or the server's MASTHEAD_DATA_DIR or XDG_DATA_HOME.");
     process.exit(2);
   }
   target.searchParams.set('key', key);
@@ -40,7 +44,8 @@ const check = (name, ok) => {
   if (!ok) failed = true;
 };
 
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox'] });
+const executablePath = process.env.CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
+const browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
 const scheme = process.env.SCHEME === 'light' ? 'light' : 'dark';
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, deviceScaleFactor: 1 });
 const errors = [];
@@ -50,6 +55,16 @@ page.on('pageerror', (e) => errors.push(String(e)));
 page.on('console', (m) => m.type() === 'error' && !/WebSocket connection .* 403/.test(m.text()) && errors.push(m.text()));
 
 const SIGN_IN = 'to sign this browser in';
+
+// Accessibility: axe-core's WCAG 2 A/AA rules, run inside the page (evaluate is not subject to the CSP).
+const AXE = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
+async function axeCheck(p, name) {
+  await p.evaluate(AXE);
+  const result = await p.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] } }));
+  const bad = result.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+  for (const v of result.violations) log(`axe ${name}: ${v.impact} ${v.id} (${v.nodes.length}): ${v.nodes.slice(0, 2).map((n) => n.target.join(' ')).join(' | ')}`);
+  check(`no serious accessibility problems: ${name}`, bad.length === 0);
+}
 
 try {
   // Sign-in: a browser with no key, and one with a wrong key, each in its own storage.
@@ -96,22 +111,24 @@ try {
   await page.waitForSelector('text=What are we working on?', { timeout: 15_000 }).catch(() => {});
   check('a wrong key pasted into the open tab is taken and refused, and it stays signed in', await signedIn());
   await page.screenshot({ path: `${shots}/1-new-${scheme}.png` });
-  check('new conversation screen renders', (await page.locator('aside.right h2').first().textContent())?.trim() === 'Team');
+  check('new conversation screen renders', (await page.locator('h1', { hasText: 'What are we working on?' }).count()) === 1);
 
-  // Limits: raise and lower the Opus count.
-  const opus = page.locator('.tier.tier-opus');
-  const before = await opus.locator('output').textContent();
-  await opus.getByLabel('More Opus 5.5 agents').click();
-  await page.waitForFunction((b) => document.querySelector('.tier.tier-opus output')?.textContent !== b, before);
-  const raised = await opus.locator('output').textContent();
-  await opus.getByLabel('Fewer Opus 5.5 agents').click();
-  await page.waitForFunction((b) => document.querySelector('.tier.tier-opus output')?.textContent === b, before, { timeout: 5000 }).catch(() => {});
-  const lowered = await opus.locator('output').textContent();
-  check('the stepper changes the limit', raised !== before && lowered === before);
-
-  // Usage section: either the plain "nothing yet" line or at least one bar.
-  const usage = page.locator('aside.right section', { has: page.locator('h2', { hasText: 'Usage' }) });
-  check('the usage section renders', (await usage.locator('text=No usage reported yet').count()) + (await usage.locator('.limit').count()) >= 1);
+  // Simple by default: few controls on first load, no team jargon, example prompts that fill the box.
+  const firstLoad = await page.evaluate(() => {
+    const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+    const controls = [...document.querySelectorAll('button:not([disabled]), textarea, select, input:not([type=hidden]), a[href]')].filter(visible);
+    return { count: controls.length, names: controls.map((c) => c.getAttribute('aria-label') || c.textContent?.trim() || c.tagName), text: document.body.innerText };
+  });
+  log(`first load: ${firstLoad.count} controls: ${firstLoad.names.join(' | ')}`);
+  check('first load shows at most 10 controls', firstLoad.count <= 10);
+  const jargon = firstLoad.text.match(/\b(tiers?|opus|sonnet|haiku|effort|sub-?agents?|lead)\b/gi);
+  check('first load has no team jargon', !jargon);
+  if (jargon) log(`jargon: ${jargon.join(', ')}`);
+  check('the team panel is hidden until a helper starts', (await page.locator('aside.right').count()) === 0);
+  await axeCheck(page, 'first load');
+  await page.locator('.example').first().click();
+  check('an example prompt fills the box without sending', (await page.locator('textarea').inputValue()).startsWith('Look through this folder') && (await page.locator('.user .bubble').count()) === 0);
+  await page.locator('textarea').fill('');
 
   // Settings popup: opens from the gear with Enter, Escape closes it and gives focus back.
   const gear = page.getByRole('button', { name: 'Settings', exact: true });
@@ -123,17 +140,20 @@ try {
   await page.keyboard.press('Escape');
   await menu.waitFor({ state: 'detached' });
   check('Escape closes it and focus returns to the gear', await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Settings'));
-  // Turn on "Fold agent reports" (used below) and check it survives a reload.
+  // Turn on folded reports and the team controls (both used below) and check they survive a reload.
   await gear.click();
-  const fold = menu.getByLabel(/Fold agent reports/);
+  const fold = menu.getByLabel(/Show helper reports as one line/);
   if (!(await fold.isChecked())) await fold.check();
-  await menu.getByLabel(/Longest run for a sub-agent/).selectOption('30');
+  await menu.getByLabel(/Longest a helper may work/).selectOption('30');
+  const advanced = menu.getByLabel(/Show team controls/);
+  if (!(await advanced.isChecked())) await advanced.check();
   await page.waitForTimeout(500);
   await page.reload();
   await page.waitForSelector('text=What are we working on?');
   await gear.click();
-  check('"Fold agent reports" persists across a reload', await menu.getByLabel(/Fold agent reports/).isChecked());
-  check('"Longest run for a sub-agent" persists across a reload', (await menu.getByLabel(/Longest run for a sub-agent/).inputValue()) === '30');
+  check('"Show helper reports as one line" persists across a reload', await menu.getByLabel(/Show helper reports as one line/).isChecked());
+  check('"Longest a helper may work" persists across a reload', (await menu.getByLabel(/Longest a helper may work/).inputValue()) === '30');
+  check('"Show team controls" persists across a reload (per device)', await menu.getByLabel(/Show team controls/).isChecked());
   await page.mouse.click(700, 300);
   await menu.waitFor({ state: 'detached' });
 
@@ -172,9 +192,24 @@ try {
     if (await allow.count()) await allow.click().catch(() => {});
   }, 500);
 
+  // With team controls on and a wide window, the team panel opens by itself once helpers start.
   await page.waitForSelector('aside.right .agent >> text=helper job', { timeout: 120_000 });
   await page.screenshot({ path: `${shots}/2-working-${scheme}.png` });
-  await page.getByRole('tab', { name: /Team map/ }).click();
+  check('the Team button appears once helpers work', (await page.locator('.team-btn').count()) === 1);
+
+  // Limits (Advanced): raise and lower the Opus count in the team panel.
+  const opus = page.locator('.tier.tier-opus');
+  const before = await opus.locator('output').textContent();
+  await opus.getByLabel(/^More .* helpers$/).click();
+  await page.waitForFunction((b) => document.querySelector('.tier.tier-opus output')?.textContent !== b, before);
+  const raised = await opus.locator('output').textContent();
+  await opus.getByLabel(/^Fewer .* helpers$/).click();
+  await page.waitForFunction((b) => document.querySelector('.tier.tier-opus output')?.textContent === b, before, { timeout: 5000 }).catch(() => {});
+  const lowered = await opus.locator('output').textContent();
+  check('the stepper changes the limit', raised !== before && lowered === before);
+  await axeCheck(page, 'chat with the team panel');
+
+  await page.getByRole('button', { name: 'Show as a map' }).click();
   await page.waitForSelector('.map .card >> text=helper job');
   // Lead > shell job > helper job: a card three levels deep in the tree.
   check('the map shows three levels', (await page.locator('.map .tree.root > li > ul > li > ul > li > .card', { hasText: 'helper job' }).count()) === 1);
@@ -241,12 +276,65 @@ try {
   await report.locator('.gist').click();
   check('a folded report opens on click', (await report.locator('.inbound-body').count()) === 1);
   check('the final answer has a table', (await page.locator('.md.assistant table').count()) >= 1);
+  // Usage: a quiet line in the sidebar once Claude Code has reported usage; it opens into each window.
+  const usageLine = page.locator('.usage .summary');
+  if (await usageLine.count()) {
+    await usageLine.click();
+    check('the usage line opens into its windows', (await page.locator('.usage .limit, .usage .muted').count()) >= 1);
+  } else {
+    log('no usage reported by Claude Code in this run; usage line not shown (as designed)');
+  }
 
   // Reload: the conversation comes back from disk.
   await page.reload();
   await page.waitForSelector('.md.assistant table');
   check('the conversation survives a reload', (await page.locator('.user .bubble').count()) === 1);
   check('the sidebar lists it', (await page.locator('aside.left .row').count()) >= 1);
+
+  // Phone: a 390 × 844 touch screen in the light theme, on the same server and conversation.
+  {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: 'light', deviceScaleFactor: 2 });
+    const p = await ctx.newPage();
+    p.on('pageerror', (e) => errors.push(`phone: ${e}`));
+    await p.goto(url);
+    await p.waitForSelector('text=What are we working on?');
+    const layout = await p.evaluate(() => {
+      const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+      const small = [...document.querySelectorAll('button:not([disabled]), select, input:not([type=hidden]), textarea, a[href]')]
+        .filter((el) => visible(el) && !el.classList.contains('skip'))
+        .filter((el) => el.getBoundingClientRect().height < 44)
+        .map((el) => el.getAttribute('aria-label') || el.textContent?.trim() || el.tagName);
+      const ta = document.querySelector('textarea');
+      return {
+        overflow: document.documentElement.scrollWidth > window.innerWidth,
+        small,
+        fieldFont: ta ? parseFloat(getComputedStyle(ta).fontSize) : 0,
+        boxBottom: ta ? ta.getBoundingClientRect().bottom : 0,
+      };
+    });
+    if (layout.small.length) log(`phone: targets under 44 px: ${layout.small.join(' | ')}`);
+    check('phone: nothing scrolls sideways', !layout.overflow);
+    check('phone: every tap target is at least 44 px', layout.small.length === 0);
+    check('phone: the message box uses 16 px text (no zoom on focus) and is on screen', layout.fieldFont >= 16 && layout.boxBottom <= 844);
+    check('phone: the chat list starts closed', (await p.locator('aside.left').count()) === 0);
+    await p.screenshot({ path: `${shots}/6-phone-new-light.png` });
+    await axeCheck(p, 'phone, new chat');
+    await p.getByRole('button', { name: 'Show chats' }).tap();
+    await p.locator('aside.left .open').first().waitFor();
+    await p.screenshot({ path: `${shots}/7-phone-drawer-light.png` });
+    await p.locator('aside.left .open').first().tap();
+    await p.waitForSelector('.user .bubble');
+    check('phone: choosing a chat closes the drawer', (await p.locator('aside.left').count()) === 0);
+    await p.locator('.team-btn').tap();
+    await p.locator('aside.right').waitFor();
+    check('phone: the team opens as a drawer over the chat', (await p.locator('.backdrop').count()) === 1);
+    await p.screenshot({ path: `${shots}/8-phone-team-light.png` });
+    await p.locator('.backdrop').tap({ position: { x: 10, y: 400 } });
+    await p.waitForFunction(() => !document.querySelector('aside.right'), null, { timeout: 5000 }).catch(() => {});
+    check('phone: tapping outside closes the drawer', (await p.locator('aside.right').count()) === 0);
+    await ctx.close();
+  }
+
   check('no page errors', errors.length === 0);
   if (errors.length) log(errors.join('\n'));
 } catch (e) {

@@ -4,7 +4,7 @@
  * it opens sessions, takes messages and reports what happened as neutral events. It never builds
  * protocol Items or page text, and it decides nothing about when an agent's work is over.
  */
-import type { AgentUsage, Effort, ImageAttachment, Question, RateLimitNotice } from '../../shared/protocol.js';
+import type { Effort, ImageAttachment, Question, RateLimitNotice } from '../../shared/protocol.js';
 
 export type BackendId = 'claude-code' | 'codex' | 'fake' | (string & {});
 
@@ -82,7 +82,7 @@ export interface SessionSpec {
   canAskPerson: boolean;
   permissionMode: string;
   lean: boolean;
-  /** Without credentials added or removed. */
+  /** Extra environment variables. The adapter builds the process environment (no credentials added or removed). */
   env: Record<string, string | undefined>;
 }
 
@@ -103,11 +103,21 @@ export interface Session {
   /** Queues a message; `id` is the runtime's and comes back in turnEnded.consumed. */
   send(id: string, content: Content): void;
   interrupt(): Promise<void>;
-  setEffort(effort: Effort): void;
-  setModel?(model: string): void;
+  /** May return a promise; a rejection means the change did not reach the session. */
+  setEffort(effort: Effort): void | Promise<void>;
+  setModel?(model: string): void | Promise<void>;
   /** graceful: end the input and let the backend finish; now: end the process at once. */
   close(how: 'graceful' | 'now'): void;
   contextUsage?(): Promise<{ used: number; max: number }>;
+  /** Settles once the backend process behind this session has fully stopped (after close or exit). */
+  readonly ended: Promise<void>;
+}
+
+/** `context` is the current size (absolute); `output` is tokens added since the last update; `costUsd` is this session's total so far. */
+export interface UsageUpdate {
+  context?: number;
+  output?: number;
+  costUsd?: number;
 }
 
 export interface TurnResult {
@@ -129,6 +139,7 @@ export interface SessionEvents {
   /** A final text block. `isError` when the backend marks it as an error message. */
   text(final: string, isError?: boolean): void;
   thinking(text: string): void;
+  /** append '' starts a new block of that kind; null ends the draft. */
   draft(d: { kind: 'text' | 'thinking'; append: string } | null): void;
   toolStarted(t: { id: string; name: string; input: unknown }): void;
   toolFinished(t: { id: string; result: string; isError: boolean; images?: ImagePart[] }): void;
@@ -137,9 +148,12 @@ export interface SessionEvents {
   rateLimit(n: RateLimitNotice): void;
   /** The full set of running background tasks (replace semantics). */
   background(activeIds: string[]): void;
-  usage(u: Partial<AgentUsage>): void;
-  /** The process ended without being asked to, or a start failed. */
-  exited(r: { failure?: string; sessionMissing?: boolean }): void;
+  usage(u: UsageUpdate): void;
+  /**
+   * The process ended without being asked to, or a start failed. Never sent after Session.close().
+   * `apiError` as in TurnResult, when the turn that was running had one.
+   */
+  exited(r: { failure?: string; sessionMissing?: boolean; apiError?: string }): void;
   askPermission(ask: PermissionAsk): Promise<PermissionAnswer>;
   /** Optional: earlier context was summarized. */
   compacted?(): void;
@@ -172,4 +186,6 @@ export interface Backend {
   models(): Promise<ModelInfo[]>;
   /** Must not throw for an ordinary failure: report events.exited({ failure }) instead. */
   open(spec: SessionSpec, events: SessionEvents): Session;
+  /** Optional: stop shared processes (e.g. one app-server per backend) when the app shuts down. */
+  dispose?(): Promise<void>;
 }

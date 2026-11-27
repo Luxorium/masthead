@@ -5,6 +5,7 @@
 </script>
 
 <script lang="ts">
+  import { T } from './text.ts';
   import { onMount } from 'svelte';
   import { displayName, type PermissionRequest } from '../../../shared/protocol.ts';
   import { store } from './store.svelte.ts';
@@ -80,10 +81,10 @@
   class="card"
   role="alertdialog"
   tabindex="-1"
-  aria-label={request.kind === 'question' ? `Question from ${displayName(request.agentName)}` : `Permission request from ${displayName(request.agentName)}`}
+  aria-label={request.kind === 'question' ? T.card.question(displayName(request.agentName)) : T.card.permission(displayName(request.agentName))}
 >
   {#if request.kind === 'question'}
-    <div class="head"><span class="who">{displayName(request.agentName)}</span> <span class="what">asks</span></div>
+    <div class="head"><span class="who">{displayName(request.agentName)}</span> <span class="what">{T.card.asks}</span></div>
     {#each request.questions ?? [] as q, qi (qi)}
       <fieldset>
         <legend>{q.question}</legend>
@@ -95,12 +96,12 @@
             </button>
           {/each}
         </div>
-        <input class="other" placeholder="Something else…" bind:value={other[qi]} oninput={() => !q.multiSelect && (picked[qi] = [])} />
+        <input class="other" placeholder={T.card.other} bind:value={other[qi]} oninput={() => !q.multiSelect && (picked[qi] = [])} />
       </fieldset>
     {/each}
     <div class="actions">
-      <button class="btn ghost" onclick={() => store.answer(request.id, 'deny')}>Skip</button>
-      <button class="btn primary" disabled={!complete} onclick={submitAnswers}>Answer</button>
+      <button class="btn ghost" onclick={() => store.answer(request.id, 'deny')}>{T.card.skip}</button>
+      <button class="btn primary" disabled={!complete} onclick={submitAnswers}>{T.card.answer}</button>
     </div>
   {:else}
     <div class="head">
@@ -111,16 +112,16 @@
       <pre class="detail">{detail}</pre>
     {:else}
       {#if line.target && !request.title}<div class="target mono">{line.target}</div>{/if}
-      <button class="more" onclick={() => (showDetail = !showDetail)}>{showDetail ? 'Hide details' : 'Show details'}</button>
+      <button class="more" onclick={() => (showDetail = !showDetail)}>{showDetail ? T.card.hideDetails : T.card.showDetails}</button>
       {#if showDetail}<pre class="detail">{detail}</pre>{/if}
     {/if}
     {#if request.description}<p class="desc">{request.description}</p>{/if}
     <div class="actions">
-      <button class="btn danger" onclick={() => store.answer(request.id, 'deny')}>Deny</button>
+      <button class="btn danger" onclick={() => store.answer(request.id, 'deny')}>{T.card.deny}</button>
       {#if request.canAlways}
-        <button class="btn" onclick={() => store.answer(request.id, 'always')} title="Allow, and stop asking for this in this session">Always allow</button>
+        <button class="btn" onclick={() => store.answer(request.id, 'always')} title={T.card.alwaysTitle}>{T.card.always}</button>
       {/if}
-      <button class="btn primary" onclick={() => store.answer(request.id, 'allow')}>Allow</button>
+      <button class="btn primary" onclick={() => store.answer(request.id, 'allow')}>{T.card.allow}</button>
     </div>
   {/if}
 </div>

@@ -2,11 +2,13 @@ import { timingSafeEqual } from 'node:crypto';
 import { createReadStream, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { extname, join, normalize, posix, resolve, sep } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { VERSION, type ServerMsg } from '../../shared/protocol.js';
 import type { App, Client } from '../app/app.js';
+import type { BlobStore } from '../storage/blobs.js';
 import { NONCE_FORMAT, proofOf } from './auth.js';
+import { BlobTokens, handleBlobGet, handleBlobPost } from './blobs.js';
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -39,6 +41,10 @@ export interface ServeOptions {
   /** Extra origins allowed to open the socket, e.g. the Vite dev server. */
   extraOrigins?: string[];
   onShutdown: () => void;
+  /** Conversation images; without it the /blob routes answer 404. */
+  blobs?: BlobStore;
+  /** Whether a conversation exists, so uploads only go to real ones. */
+  convExists?: (convId: string) => boolean;
 }
 
 /** Whether `given` is the secret, compared in constant time. */
@@ -82,6 +88,7 @@ export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
   /** The port actually listened on (known once listening; `opts.port` may be 0). */
   let boundPort = opts.port;
 
+  const blobTokens = new BlobTokens();
   const handleRequest = (req: IncomingMessage, res: ServerResponse): void => {
     if (!hostOk(req)) return void send(res, 403, 'Forbidden');
     const url = pathOf(req);
@@ -104,6 +111,12 @@ export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
       sendJson(res, 200, { ok: true });
       setTimeout(opts.onShutdown, 50);
       return;
+    }
+    if (opts.blobs) {
+      if (handleBlobGet(req, res, url, { blobs: opts.blobs, tokens: blobTokens })) return;
+      // Uploads need the secret in a custom header, which no other site can send without a preflight.
+      const authorised = secretOk(opts.secret, req.headers['x-masthead-key']);
+      if (handleBlobPost(req, res, url, { blobs: opts.blobs, authorised, convExists: opts.convExists ?? (() => false) })) return;
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return void send(res, 405, 'Method not allowed');
     serveStatic(webRoot, url.pathname, req, res);
@@ -135,7 +148,7 @@ export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
         socket.destroy();
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) => attach(app, ws));
+      wss.handleUpgrade(req, socket, head, (ws) => attach(app, ws, blobTokens));
     } catch (e) {
       console.error(`Masthead could not answer a socket upgrade: ${(e as Error)?.message ?? String(e)}`);
       socket.destroy();
@@ -157,8 +170,10 @@ export function serve(app: ServedApp, opts: ServeOptions): Promise<Server> {
   });
 }
 
-function attach(app: ServedApp, ws: WebSocket): void {
+function attach(app: ServedApp, ws: WebSocket, tokens: BlobTokens): void {
+  const blobToken = tokens.issue();
   const client: Client = {
+    blobToken,
     send(msg: ServerMsg) {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
     },
@@ -185,6 +200,7 @@ function attach(app: ServedApp, ws: WebSocket): void {
   }, PING_MS);
   ws.on('close', () => {
     clearInterval(alive);
+    tokens.release(blobToken);
     app.disconnect(client);
   });
   ws.on('error', () => ws.close());
@@ -210,7 +226,8 @@ function serveStatic(root: string, pathname: string, req: IncomingMessage, res: 
   if (rel.includes('\0')) return send(res, 400, 'Bad request');
   let file = join(root, rel);
   if (file !== root && !file.startsWith(root + sep)) return send(res, 403, 'Forbidden');
-  const isAsset = rel.startsWith('/assets/');
+  // Decided on the URL path, not the file path: on Windows `normalize` turns `/assets/` into `\\assets\\`.
+  const isAsset = posix.normalize(decodeURIComponent(pathname)).startsWith('/assets/');
   if (!isFile(file)) {
     if (isAsset || extname(rel)) return send(res, 404, 'Not found');
     file = join(root, 'index.html'); // the page handles its own routes
