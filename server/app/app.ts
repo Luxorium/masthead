@@ -19,7 +19,7 @@ import {
 import type { Agent } from '../runtime/agent.js';
 import { HOME, SETTINGS_FILE } from '../paths.js';
 import { findClaude, type ClaudeInfo } from '../backends/claude/env.js';
-import { loadSettings, sanitizeSettings, saveSettings } from '../settings/settings.js';
+import { loadSettings, sanitizeSettings, saveSettings, tierLimit } from '../settings/settings.js';
 import { Conversation, type ConversationHost } from '../core/conversation.js';
 import { Scheduler } from '../core/scheduler.js';
 import type { BlobRef } from '../storage/blobs.js';
@@ -79,7 +79,8 @@ export class App implements ConversationHost {
     this.fake = fakeBackendSelected(process.env) ? new FakeBackend({ stepMs: Number(process.env.MASTHEAD_FAKE_STEP_MS) || 20 }) : null;
     this.claude = this.fake ? { path: null, version: 'fake backend (tests only)' } : (opts.claude ?? findClaude());
     this.store = opts.store ?? new Store();
-    this.scheduler = new Scheduler((tier) => this.currentSettings.tiers[tier].max);
+    // Limits come from whichever profile the tier belongs to.
+    this.scheduler = new Scheduler((tier) => tierLimit(this.currentSettings, tier));
     for (const stored of this.store.loadAll()) {
       const conv = Conversation.restore(this, stored);
       this.conversations.set(conv.meta.id, conv);
@@ -349,7 +350,12 @@ export class App implements ConversationHost {
         if (msg.convId === null || msg.convId === undefined) {
           if (!this.claude.path && !this.fake) throw new Error(this.claude.error ?? 'Claude Code was not found.');
           const cwd = this.checkDir(typeof msg.cwd === 'string' && msg.cwd ? msg.cwd : this.currentSettings.defaultCwd);
-          conv = Conversation.create(this, cwd);
+          // v2 pages may choose a team profile; anything unknown falls back to the default one.
+          const wanted = (msg as { profile?: unknown }).profile;
+          const profiles = this.currentSettings.profiles;
+          const profile = typeof wanted === 'string' && profiles.some((p) => p.id === wanted) ? wanted : this.currentSettings.defaultProfile;
+          if (typeof wanted === 'string' && profile !== wanted) throw new Error(`There is no team profile "${wanted.slice(0, 40)}".`);
+          conv = Conversation.create(this, cwd, profile);
           this.conversations.set(conv.meta.id, conv);
           if (cwd !== this.currentSettings.defaultCwd) this.updateSettings({ ...this.currentSettings, defaultCwd: cwd });
           client.send({ t: 'created', convId: conv.meta.id, ref: msg.ref });

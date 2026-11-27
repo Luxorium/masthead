@@ -95,7 +95,11 @@
   .link:hover {
     text-decoration: underline;
   }
+  .head h2 {
+    flex: 1;
+  }
   .close {
+    min-width: 32px;
     padding: 2px 8px;
     font-size: 16px;
   }

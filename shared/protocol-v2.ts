@@ -36,6 +36,8 @@ export type ClientMsgV2 =
   | { t: 'item_full'; convId: string; agentId: string; itemId: string }
   /** Paged transcript: newest page first; `before` is the `cursor` of the previous page. */
   | { t: 'items'; convId: string; agentId: string; before?: number | null; limit?: number }
+  /** Version 1's `send`, plus the team profile for a new conversation (default: the settings' default). */
+  | (Extract<ClientMsg, { t: 'send' }> & { profile?: string })
   | ClientMsg;
 
 /** A per-conversation event as sent to a subscriber: version 1's event plus its sequence number. */

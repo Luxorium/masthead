@@ -173,6 +173,7 @@ textarea {
 }
 
 button {
+  -webkit-tap-highlight-color: transparent;
   cursor: pointer;
   border: 0;
   background: none;
@@ -409,6 +410,7 @@ button:disabled {
   color: var(--muted);
 }
 .md table {
+  /* Wide tables scroll sideways instead of squeezing their words on narrow screens. */
   display: block;
   max-width: 100%;
   overflow-x: auto;

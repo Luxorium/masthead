@@ -206,3 +206,43 @@ test('v2: a draft that ends before its item waits for it, or ends unnamed after 
   snap.say(v2);
   assert.deepEqual(snap.say({ t: 'subscribe', convId: 'c1' })[0]!.lastItemIds, { a: 'last' });
 });
+
+test('app: scheduler limits come from the tier\'s profile; a new conversation takes a known profile only', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { App } = await import('../server/app/app.ts');
+  const { defaultSettings, sanitizeSettings } = await import('../server/settings/settings.ts');
+  const { Store } = await import('../server/storage/store.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'masthead-profile-'));
+  const settings = sanitizeSettings(
+    { profiles: [...defaultSettings().profiles, { id: 'mini', label: 'Mini', tiers: [{ label: 'Boss', model: 'm1' }, { label: 'Helper', model: 'm2', max: 2 }] }] },
+    defaultSettings(),
+  );
+  const mini = settings.profiles.find((p) => p.id === 'mini');
+  assert.ok(mini, 'the test profile was accepted');
+  const app = new App({ store: new Store(join(dir, 'c')), settingsFile: join(dir, 's.json'), settings, claude: { path: null, version: null, error: 'no claude here' } });
+  assert.equal(app.scheduler.running(mini.tiers[1]!.id), 0);
+  // tierLimit is what the scheduler asks: the lead tier unlimited, the helper tier its max.
+  const { tierLimit } = await import('../server/settings/settings.ts');
+  assert.equal(tierLimit(settings, mini.tiers[0]!.id), Infinity);
+  assert.equal(tierLimit(settings, mini.tiers[1]!.id), 2);
+  assert.equal(tierLimit(settings, 'opus'), settings.profiles[0]!.tiers[1]!.max);
+  // With Claude Code present, an unknown profile is refused before anything is created.
+  const app2 = new App({ store: new Store(join(dir, 'c2')), settingsFile: join(dir, 's2.json'), settings, claude: { path: '/nonexistent/claude', version: null } });
+  const got: Array<Record<string, unknown>> = [];
+  const client: Client = { send: (m) => void got.push(m as Record<string, unknown>) };
+  app2.connect(client);
+  got.length = 0;
+  app2.handle(client, { t: 'send', convId: null, cwd: dir, text: 'hi', ref: 'r1', profile: 'nope' });
+  assert.deepEqual(got, [{ t: 'error', message: 'There is no team profile "nope".', ref: 'r1' }]);
+  got.length = 0;
+  app2.handle(client, { t: 'send', convId: null, cwd: dir, text: 'hi', ref: 'r2', profile: 'mini' });
+  const created = got.find((m) => m.t === 'created') as { convId: string } | undefined;
+  assert.ok(created, 'created on the chosen profile');
+  got.length = 0;
+  app2.handle(client, { t: 'open', convId: created.convId });
+  const conv = got.find((m) => m.t === 'conversation') as { agents: Array<{ tier: string }> };
+  assert.equal(conv.agents[0]!.tier, mini.tiers[0]!.id, "the lead is on the profile's first tier");
+  app2.shutdown();
+});
