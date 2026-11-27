@@ -19,6 +19,8 @@ export interface Client {
   blobToken?: string;
   /** Set by the transport for a remote device; absent means the local browser. */
   role?: Role;
+  /** The remote device's Tailscale node id; set with `role`. */
+  deviceId?: string;
 }
 
 /** What the hub needs from the app. */

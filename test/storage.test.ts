@@ -292,3 +292,15 @@ test('atomic: renames retry on Windows while the target is busy, and nowhere els
   assert.throws(() => renameRetry('x', 'y', 'win32', () => { d.n++; throw Object.assign(new Error('gone'), { code: 'ENOENT' }); }), /gone/);
   assert.equal(d.n, 1, 'other errors are not retried');
 });
+
+test('format marker: raised to 2, never lowered from a newer one', () => {
+  const data = tmp();
+  const root = join(data, 'conversations');
+  mkdirSync(root);
+  writeFileSync(join(data, 'format'), '3\n');
+  new Store(root);
+  assert.equal(readFileSync(join(data, 'format'), 'utf8').trim(), '3');
+  writeFileSync(join(data, 'format'), '1\n');
+  new Store(root);
+  assert.equal(readFileSync(join(data, 'format'), 'utf8').trim(), '2');
+});

@@ -28,7 +28,7 @@ export interface ApprovalSummary {
 export type ClientMsgV2 =
   | { t: 'hello'; protocol: number; caps?: Capability[] }
   /** Start receiving one conversation's events. `since`: the last `seq` the page has, to replay from. */
-  | { t: 'subscribe'; convId: string; since?: number }
+  | { t: 'subscribe'; convId: string; since?: number; epoch?: string }
   | { t: 'unsubscribe'; convId: string }
   /** A gap in a draft's `dseq`: send its whole text once. */
   | { t: 'draft_sync'; convId: string; agentId: string }
@@ -46,16 +46,19 @@ export type Sequenced<T> = T & { seq: number };
 // ---- server -> page (in addition to, or replacing, version 1's) ----
 export type ServerMsgV2 =
   /** Version 1's `state` with `protocol: 2`; `pending` holds summaries, not full requests. */
-  | { t: 'state'; protocol: 2; state: Record<string, unknown> & { pending: ApprovalSummary[]; blobToken?: string } }
+  /** `epoch` changes on every server start; send it back with `subscribe` so an old `seq` is never replayed. */
+  | { t: 'state'; protocol: 2; epoch: string; state: Record<string, unknown> & { pending: ApprovalSummary[]; blobToken?: string } }
   /** Snapshot on subscribe (or when `since` is too old to replay). */
-  | { t: 'conversation'; conv: ConversationMeta; agents: AgentInfo[]; pending: PermissionRequest[]; drafts: Record<string, Draft & { dseq: number }>; seq: number }
+  /** `lastItemIds`: each agent's newest stored item, so a reconnecting page fetches only newer ones. */
+  | { t: 'conversation'; conv: ConversationMeta; agents: AgentInfo[]; pending: PermissionRequest[]; drafts: Record<string, Draft & { dseq: number }>; lastItemIds: Record<string, string>; seq: number }
   | Sequenced<{ t: 'agent'; agent: AgentInfo }>
   /** `truncated`: tool `input`/`result` were clipped; ask with `item_full`. */
   | Sequenced<{ t: 'item'; convId: string; agentId: string; item: Item; truncated?: boolean }>
   /** A draft grew by `append`, or (with `text`) is replaced whole. `dseq` counts within one draft. */
   | Sequenced<{ t: 'draft'; convId: string; agentId: string; dseq: number; kind: Draft['kind']; append?: string; text?: string }>
   /** The draft ended (its text arrives as an item). */
-  | Sequenced<{ t: 'draft_end'; convId: string; agentId: string }>
+  /** `itemId`: the item that replaces the draft (absent when the turn was cut off). */
+  | Sequenced<{ t: 'draft_end'; convId: string; agentId: string; itemId?: string }>
   | Sequenced<{ t: 'permission_request'; request: PermissionRequest }>
   /** Every page, for badges. */
   | { t: 'approval'; summary: ApprovalSummary }

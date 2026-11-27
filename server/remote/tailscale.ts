@@ -59,6 +59,7 @@ export const runTailscale: Runner = (args) =>
 export function checkServePort(port: number): void {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error(`Invalid remote port: ${port}.`);
   if ([8443, 10000].includes(port)) throw new Error(`Port ${port} is one Tailscale Funnel can use; choose another.`);
+  if (port === 7717) throw new Error('Port 7717 is Masthead\'s own local port; choose another.');
 }
 
 /** Masthead's own target: a private Unix socket (or, as a fallback, a loopback port). */

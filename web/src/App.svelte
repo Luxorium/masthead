@@ -187,9 +187,11 @@
       {#if store.convPending.length > 0}
         <div class="dock">
           <div class="column">
-            {#each store.convPending as request (request.id)}
-              <PermissionCard {request} />
-            {/each}
+            {#if store.mayAnswer}
+              {#each store.convPending as request (request.id)}
+                <PermissionCard {request} />
+              {/each}
+            {/if}
           </div>
         </div>
       {/if}
@@ -209,12 +211,19 @@
           {#each remoteRequests as request (request.id)}
             <DeviceRequestCard {request} />
           {/each}
-          {#each store.convPending as request (request.id)}
-            <PermissionCard {request} />
-          {/each}
-          {#key store.composerKey}
-            <Composer />
-          {/key}
+          {#if store.mayAnswer}
+            {#each store.convPending as request (request.id)}
+              <PermissionCard {request} />
+            {/each}
+          {/if}
+          {#if store.mayAct}
+            {#key store.composerKey}
+              <Composer />
+            {/key}
+          {:else}
+            <!-- A remote device whose role cannot send: say plainly what it may do instead of a dead box. -->
+            <p class="role-line" role="note">{store.deviceRole === 'approve' ? T.device.roleApprove : T.device.roleRead}</p>
+          {/if}
         </div>
       </div>
     {/if}
@@ -301,6 +310,15 @@
     border-radius: 6px;
     background: var(--raised);
     font-weight: 600;
+  }
+  .role-line {
+    margin: 0;
+    padding: 12px 14px;
+    border: 1px dashed var(--border-strong);
+    border-radius: 12px;
+    color: var(--muted);
+    font-size: 13.5px;
+    text-align: center;
   }
   .team-btn {
     flex: none;

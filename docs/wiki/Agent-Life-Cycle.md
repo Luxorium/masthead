@@ -1,196 +1,124 @@
 # Agent life cycle
 
-This page follows one agent from creation to its end, names each **status** it can have, and explains what moves it between them. The code is in `server/agent.ts` (the `Agent` class) and `server/conversation.ts` (the `Conversation` class, which decides what happens when a turn ends).
+This page follows one agent from its start to its end **from the runtime's and the backend's side**: when a process starts, what happens during and after a turn, and how it ends or is resumed. The code is `server/runtime/agent.ts` (the `Agent` class, see [server/runtime/agent.ts](Source-Runtime.md)) and the backend behind it (`server/backends/`, see [Backend interface](Backend-Interface.md); for Claude Code, [Claude Code backend](Source-Backend-Claude.md)).
+
+The statuses, the holds that keep an agent `waiting` (children, an awaited answer, background work, a usage-limit pause), and what an ended turn means for the team are decided by the core state machine: see [State machine](State-Machine.md) and [server/core/machine.ts](Source-Core-Machine.md). This page refers to them but does not repeat them.
 
 ## Terms
 
-- **Turn**: one round of work by the model: it reads what it was sent, thinks, calls tools, and writes a final message. A turn ends with a `result` message from Claude Code.
-- **Session**: Claude Code's saved history of an agent's conversation, identified by a `session_id`. A session outlives a process; it can be **resumed** later.
-- **Process**: the running `claude` program for one agent. In code, the SDK's `Query` object (`Agent.q`) stands for it.
-- **Slot**: permission from the `Scheduler` for one agent of a tier to have a process. See [Slot scheduling](Slot-Scheduling.md).
-- **Live**: status `queued`, `running` or `waiting` (`LIVE_STATUSES` in `shared/protocol.ts`, and the `Agent.live` getter).
+- **Turn**: one round of work by the model: it reads what it was sent, thinks, calls tools and writes a final message. A turn ends with the backend's `turnEnded` event (for Claude Code, a `result` message).
+- **Session**: the backend's saved history of one agent's conversation, identified by a session id. A session outlives a process and can be **resumed**.
+- **Process**: the running backend program for one agent. In the runtime the backend's `Session` object (`Agent.session`) stands for it; `hasProcess` is true while there is one.
+- **Slot**: permission from the scheduler for one agent of a tier to have a process. See [Slot scheduling](Slot-Scheduling.md).
+- **Run**: the turns since the agent last took up work; its outcome text joins all their final texts.
 
-## Statuses
+## 1. Start
 
-`AgentStatus` in `shared/protocol.ts`:
+The conversation creates every `Agent`: the lead (no session, no process, status `idle`), a sub-agent from `spawn_agent` (status `queued`, owing a report, with its task as the **seed**, the first message of a brand-new session), and restored agents (with their saved `sessionId`, or their saved task as seed if they never got a session). `spawn()` then calls `agent.start()`, which is `ensureProcess()`. The lead gets its first process only when its first message arrives.
 
-| Status | Meaning |
-|---|---|
-| `queued` | Waiting for a free slot in its tier. |
-| `running` | A turn is in progress. |
-| `waiting` | Its turn ended, but something will still wake it: agents it started are still live, commands Claude Code put in the background for it still run (the lead too), or, for a sub-agent, it asked its parent or the lead a question with `send_message` and `wait: true` and is waiting for the answer (`info.waitingFor` names whom). So it is not finished. It keeps its slot and its process (`mustWait()` in `server/conversation.ts`). |
-| `idle` | Lead only: nothing in progress. |
-| `done` | A sub-agent finished normally. Its process is closed and slot returned. |
-| `failed` | A sub-agent ended with an error, or its process was lost. |
-| `stopped` | Ended on request (by the person, by an agent above it, or because the app closed). |
+## 2. Getting a slot
 
-## Sub-agent statuses
+`ensureProcess()` returns at once if a start is already in progress or a usable process exists. Otherwise:
 
-```mermaid
-stateDiagram-v2
-  [*] --> queued: spawn() — no free slot
-  [*] --> running: spawn() — slot free at once
-  queued --> running: slot granted, process launched
-  running --> waiting: turn ended, live children remain
-  waiting --> running: report, message, or a turn Claude Code starts itself
-  running --> running: more input arrived during the turn
-  running --> done: turn ended, no live children
-  waiting --> done: settle() — last child ended with no report
-  running --> failed: turn error, or process lost
-  queued --> stopped: stopTree()
-  queued --> failed: tier set to 0 (TierOff)
-  running --> stopped: stopTree()
-  waiting --> stopped: stopTree()
-  done --> queued: message from anyone (resume)
-  failed --> queued: message (resume)
-  stopped --> queued: message (resume; only the person, if the person stopped it)
-  done --> running: message, slot free (resume)
-```
+1. `starting = true` (so `busy` is true), and the current **generation** is noted. `end()` and `dispose()` increase it.
+2. `scheduler.acquire(tier, id, owner)`, owner = the parent's id (the conversation id for the lead).
+3. `queued` is shown only if the slot was not granted by the next microtask.
+4. Once granted, it waits for the previous process to have fully exited (`exited`, from `session.ended`), so a resume never overlaps the old process.
+5. If the generation changed meanwhile, the agent was ended while it waited (a slot can be granted in the same pass that freed it, after `end()` found nothing left to cancel): the start is dropped and the slot given back, unless a newer start now holds it. A stopped agent is never launched.
+6. A cancelled request (`SlotCancelled`, the agent was stopped while queued) is dropped quietly. Any other refusal, such as `TierOff` (the tier was set to 0 while the agent waited), goes to `host.processLost()`, as does an exception thrown by `launch()`.
 
-`queued` only appears when the slot is not free immediately: `ensureProcess()` sets it in a `queueMicrotask` callback only if the slot has not been granted by then. A resumed agent goes through `ensureProcess()` again, so it may wait in the queue like a new one.
+## 3. Opening a session: `launch()`
 
-## Lead statuses
+1. **Backend.** `host.backend(agent)` (the app picks the backend named by the tier's profile, `claude-code` by default, if it is available). If there is none, the agent fails with "No agent backend is available: the program this tier runs on was not found on this machine." and its slot is released. Only tests use the other way in, `host.query`, which builds a Claude Code backend around a stand-in for the SDK's `query()`.
+2. **Model and effort.** Tier settings come from the team profile (`findTier`), or the 0.1.x `tiers` view. The lead takes the tier's current model; other agents keep the one they were created with. With automatic effort the agent's level is capped at the tier's ceiling; without, it is the tier's level.
+3. **Input.** A new session (no `sessionId`) gets the seed first, then the backlog (messages accepted before the process existed). All of it is kept in `sent`.
+4. **Reset per process**: `resumedFrom`, `launchedAutoEffort`, rate-limit notices, the usage-limit flags, `stale`, `inTurn`, the background set, `closing`.
+5. **`backend.open(spec, events)`** with `resume` (if there is a session), model, effort, folder, Masthead's system text (`systemAppend()`, given the launch effort and the backend's caps), the team tools bound to this agent, `canAskPerson` (lead only), the permission mode and `lean` (never the lead).
+6. Every message in `sent` is sent with its id; the status becomes `running`.
 
-```mermaid
-stateDiagram-v2
-  [*] --> idle: Conversation.create()
-  idle --> running: message, report, or a turn Claude Code starts itself
-  running --> idle: turn ended, no live children
-  running --> waiting: turn ended, live children remain
-  waiting --> running: report, message, or a turn Claude Code starts itself
-  waiting --> idle: settle() — last child ended with no report
-  running --> idle: process lost (no live children)
-  running --> waiting: process lost (live children)
-```
+For Claude Code, `open()` starts the Agent SDK's `query()` in streaming-input mode with Claude Code's own system prompt plus Masthead's text, the team tools as an in-process MCP server, the built-in tools that would bypass the team turned off, partial messages for live drafts, adaptive thinking with summarized display, and the process started in its own process tree so a stop ends the commands it started. Details on [Claude Code backend](Source-Backend-Claude.md).
 
-The lead is never `done`, `failed` or `stopped` in normal flow. `Conversation.shutdown()` ends the lead's process with `dispose()` (which leaves the status alone) and then sets it to `idle`.
+## 4. Turns
 
-## Step by step
+- **Turn start.** The backend's `turnStarted` (Claude Code: `system/init`, any stream event, any assistant message) sets `inTurn` and cancels the background grace timer. If the agent is `idle` or `waiting` and not paused at the usage limit (`info.pausedUntil`), it becomes `running`: backends also start turns by themselves, for instance when a background command finishes.
+- **During the turn.** Text, thinking and tool events become transcript items; the live draft is sent at most every 70 ms (a new block is sent at once and clears the activity line); a tool call sets the activity line and its result is clipped to 12,000 characters, with images stored through `host.storeImage`.
+- **Messages during a turn** go straight into the running process, each with a new id in `unanswered`.
+- **Turn end.** The backend names the ids the turn consumed. They leave `unanswered`; a turn the backend started by itself names none (`[]`) and removes none; a backend that cannot tell (`null`, e.g. an older Claude Code that never names them) clears everything, so an agent can never stay busy for ever. The turn's final text is added to the run. Then:
+  - if anything is still unanswered, another turn follows; an error is shown as a notice and the agent stays `running`;
+  - otherwise the run text is emptied (unless background work runs), the real context size is read while the process is still up, and `host.turnEnded(agent, { text, error, interrupted })` hands the decision to the machine (finish, wait, or go idle).
 
-### 1. Creation
+The outcome text is every turn's final text since the agent took up work, because a message that lands as a turn ends makes the backend run one more turn whose reply is often only "Noted". At most the newest 8 texts and about 60,000 characters are kept; the text then starts with "(earlier text not shown)".
 
-- The lead is created by `Conversation.create()` with the name `alpha`, status `idle`, no session and no process. Its starting effort is `low` when automatic effort is on, otherwise its tier's effort from the settings.
-- A sub-agent is created by `Conversation.spawn()` when its parent calls the `spawn_agent` tool. It gets the next free name from the phonetic alphabet (`bravo`, `charlie`, …), the short `title` its parent gave, status `queued`, `owesReport: true`, and the full task text as its **seed** (the first message of a brand-new session). `spawn()` then calls `agent.start()`, which is just `ensureProcess()`.
+## 5. Background work
 
-### 2. Getting a process: `ensureProcess()` and `launch()`
+A backend that reports background commands (`caps.background`; Claude Code does) sends the full set of running ones each time it changes. The set belongs to one process.
 
-`ensureProcess()` returns early if a start is already in progress or a usable process exists. Otherwise it:
+- A turn that ends while background work runs still calls `turnEnded`; the machine keeps the agent `waiting` (the background hold). The run text is kept.
+- When the work ends, the backend starts a turn by itself; its result names no message and its outcome carries the earlier turn's text too.
+- If the set empties and no turn starts within 3 s (`BACKGROUND_GRACE_MS`), the runtime calls `host.backgroundIdle(agent)` (only if the same process is still open, not closing, not in a turn and not busy), and the machine releases the hold.
+- `end('done')` while background commands run closes the process at once instead of letting it finish, so it never waits for them.
+- If the process exits instead, the process-lost path runs (section 8).
 
-1. Sets `starting = true` (which also makes `busy` true) and notes the agent's current **generation**, a counter that `end()` and `dispose()` increase.
-2. Asks the scheduler: `scheduler.acquire(tier, id, owner)`, where `owner` is the parent's id (the conversation id for the lead). This returns a promise that resolves when a slot is granted.
-3. Once granted, waits for the previous process to have fully exited (`this.exited`), so a resume never overlaps the old process.
-4. Checks the generation. If it changed, the agent was ended while it waited (a slot can be granted in the same pass that freed it, after `end()` found nothing left to cancel): the start is dropped and the slot given back, unless a newer start now holds it. A stopped agent is therefore never launched.
-5. Otherwise calls `launch()`. If the slot request was cancelled (`SlotCancelled`, because the agent was stopped while queued), it quietly gives up. If it was refused with `TierOff` (the tier was set to 0 while the agent waited), that goes to `host.processLost()` like any other error, including an exception thrown by `launch()` itself: the agent fails with "This tier was switched off in the settings while the agent was waiting to start." and reports that to its parent.
+## 6. Usage limit
 
-`launch()` builds the SDK `Options` and calls `query({ prompt: input, options })`:
+A turn counts as stopped by the usage limit only if the latest rate-limit notice of some window this process reported has status `rejected` **and** the error is classed as a rate limit (`apiError: 'rate_limit'`, for Claude Code the assistant message's `error`) or says so. A busy API, a network or a tool error has no rejected notice behind it and is an ordinary error. An interrupted turn never counts.
 
-- If `claudePath()` is null (Claude Code not found), it releases the slot and reports `processLost`.
-- The lead's model is refreshed from the current settings; other agents keep the model they were created with.
-- The effort is set: with automatic effort on, the agent's current level capped at its tier's ceiling (`capEffort`); with it off, the tier's level.
-- A new input `Channel` is created. For a new session (`sessionId` is null) the seed goes in first, then any `backlog` (messages accepted before the process existed). Everything put into this process's input is also kept in `sent`, so it can be sent again to a fresh session (see 7a).
-- `resume: sessionId` is set if the agent has a session, so Claude Code continues the old conversation.
-- The system prompt is Claude Code's own (`preset: 'claude_code'`) with Masthead's text appended (`systemAppend()` in `server/prompts.ts`), which names the effort level the agent actually runs at.
-- Other options: `mcpServers: { masthead: teamTools(...) }`, `allowedTools: ['mcp__masthead']`, `disallowedTools` (see [server/agent.ts](Source-Agent.md)), `includePartialMessages: true` (for live drafts), adaptive thinking with summarized display, `strictMcpConfig` for lean agents (Sonnet and Haiku with `leanSubagents`, Opus with `leanOpus`; never the lead), the last 4,000 characters of Claude Code's error output kept in `stderrTail`, `canUseTool` routed to the app's approval system, and the permission mode from settings.
+Then the runtime, before calling the host:
 
-The status becomes `running`, and `consume()` starts reading the SDK's message stream in the background.
+1. moves the messages this process was sent and no turn consumed into `held` (as content, so they do not count as busy; the message the failed turn consumed is already in the session with the error and is not sent again);
+2. clears `unanswered`, marks the process `limited`, sets `backgroundStopped` if background work was running;
+3. closes the process at once, so nothing stays queued inside it and no turn can start by itself during the pause;
+4. calls `turnEnded` with `usageLimit: { resetsAt }` (ms; backends report seconds), even if more input was queued.
 
-### 3. During a turn: `handle()`
+Anything the host delivers from inside that `turnEnded` goes to the backlog of a new process, never to the closing one. A result that was already on its way from the closed process is reported with `usageLimit` too (the machine treats repeats as one pause). A process that *dies* at the limit calls `processLost(agent, message, usageLimit)` and holds its messages the same way.
 
-Each SDK message is turned into app state:
+The machine then pauses the agent until `resetsAt` and releases its slot; messages sent to it during the pause are kept by the conversation and delivered when the pause ends. The next `deliver()` sends the runtime's held messages first, under new ids, in a new process that resumes the session. `dropHeld()` forgets them; `end()`, `dispose()` and the machine's `dropHeld` effect (on a stop) call it. See [State machine](State-Machine.md) rows 11, 11a and 20.
 
-| SDK message | What `Agent.handle()` does |
-|---|---|
-| `system` / `init` | Records `session_id` as `sessionId` and drops the seed (it is now in the session). If the agent is `idle` or `waiting`, and not paused at the usage limit (`info.pausedUntil`), sets it `running`: the code comment says Claude Code also starts turns by itself, for instance when a background command finishes. (Seen once with a real Claude Code 2.1.331: the self-started turn begins with `init`; see 4a.) |
-| `system` / `status: compacting` | Activity line "Compacting its context". |
-| `system` / `background_tasks_changed` | Replaces the set of background tasks with the non-ambient ones listed (see 4a). |
-| `system` / `compact_boundary` | Adds an info notice: earlier context was summarized. |
-| `stream_event` | Updates usage (context size, output tokens) and the live **draft** (text or thinking being written). A new text or thinking block clears the activity line. |
-| `assistant` | Adds `text`, `thinking` and `tool` items. A tool call sets the activity line via `describeTool()`. |
-| `user` (tool results) | Marks the matching tool item done, with its result clipped to 12,000 characters. When no tool is open any more, the activity line is cleared, so a finished tool is not shown as what the agent is doing. |
-| `rate_limit_event` | Passed up as rate-limit notices for the whole app, one per window in `unifiedWindows` when present. A real event (2026-11-27) carried `utilization` as a fraction (0.33) and `resetsAt` in seconds since the epoch. The agent also remembers whether the latest event said a limit is reached (status `rejected`), for 7b. |
-| `result` | Ends the turn: `handleResult()`. Exception: on a resume that has not reported `init` yet, a result whose errors say the session is gone is set aside for the fresh-session rule (7a). |
+## 7. A session that no longer exists
 
-### 4. End of a turn: `handleResult()` and the "unanswered" set
+If an agent's session was deleted or moved, a resume cannot work. The backend says so with `exited({ sessionMissing: true })`. Claude Code reports it only as text, so the Claude adapter's rule is narrow: the process was a resume, it ended before reporting `init`, and the failure, the last 4,000 characters of Claude Code's error output, or a result set aside before `init` contains "No conversation found with session ID". Any other failure is reported as a lost process, so a session is never thrown away because of a network or sign-in problem.
 
-Every message Masthead pushes into an agent's input gets a fresh id and is added to `unanswered`. Which ones a `result` answered follows the rule written in the code (from the SDK's `SDKResultSuccess`/`SDKResultError` types):
+The runtime then starts fresh, **once**: it forgets the session id and seed, adds the notice "The earlier session could not be found, so its context is lost. This agent starts fresh.", and launches a new session whose input is a note to the agent saying the same, then every message the old process was sent and never answered, then the backlog. A second missing session in a row is not retried; the flag clears when a session does start.
 
-- A result names the ids the turn consumed in `user_message_uuids`, or older versions name one in `user_message_uuid`. Only those are removed.
-- A result that names none is a turn Claude Code started by itself (a background command finished) or an error turn with no single triggering message. If this Claude Code has named consumed messages earlier in this process (`namesConsumed`, also set when an `assistant` message carries `user_message_uuid`), nothing is removed: messages still queued get turns and results of their own.
-- If it has never named one in this process, it may be too old to, so everything is cleared, as 0.1.0 always did; that way an agent can never stay busy for ever. A process that dies clears everything anyway.
+## 8. Process lost
 
-If anything is still unanswered, more input arrived during the turn and Claude Code will run another turn for it, so the agent stays `running` (an error, if any, is shown as a notice). Only when nothing is unanswered does it call `host.turnEnded()` with the text, any error, and whether the turn was interrupted.
+If the session ends without Masthead asking (`closing` is false) and it is not a missing session, the runtime clears `unanswered` and the run text (after holding messages if it was the usage limit) and calls `host.processLost(agent, failure or 'The agent process ended unexpectedly.', usageLimit?)`. A failed `open()` and a refused slot come the same way. The conversation cancels the agent's open approvals and feeds `ProcessLost` to the machine: an error notice, the slot released, then a pause at the usage limit, or for a sub-agent a failure reported to its parent, or for the lead `waiting`/`idle`.
 
-**The text of a run.** A message that lands just as a turn ends makes Claude Code run one more turn, whose reply is often only "Noted". So the outcome's `text` is not the last turn's text but the final text of **every turn since the agent last took up work**, oldest first, joined by blank lines (`runTexts`; a turn whose text repeats the previous one is not added twice). The list is emptied when the outcome is sent (unless background work runs, see 4a), and by `end()`, `dispose()` and a lost process. `lastText`, used by `settle()`, holds the same joined text. A long run (background work can keep one open for many turns) keeps only the newest 8 turn texts and at most about 60,000 characters; older texts are dropped and the outcome then starts with "(earlier text not shown)".
+## 9. Stop, end, dispose
 
-This mechanism is what makes "the agent is finished" mean "it has answered everything it was sent", not just "a turn ended".
+- **`interrupt()`** (the lead's Stop button) ends the current turn and keeps the process and session; only while `running`.
+- **`end(status, error?)`** is how the machine's `end` effect ends an agent: it cancels a queued slot request, increases the generation (so a waiting start is dropped), marks `closing`, clears backlog, unanswered messages, run text, held messages and the background set, closes the session (`graceful` for `done` with no background work: the backend finishes on its own; `now` otherwise), releases the slot and sets the status. Because `closing` is set, the session's end is not treated as a crash.
+- **`dispose()`** does the same but always closes at once and leaves the status alone. `Conversation.shutdown()` uses it for agents that are not live sub-agents (the lead and finished agents); live sub-agents are stopped through the machine with "Masthead was closed while this agent was working.".
 
-### 4a. Background work
+## 10. Resume
 
-Claude Code can run a command in the background (Bash with `run_in_background`). It reports the full set of running tasks in each `system`/`background_tasks_changed` message; the agent keeps the non-ambient ones (`hasBackgroundWork`). The set belongs to one process: it is emptied when a process starts or ends, and by `end()` and `dispose()`.
+A `done`, `failed` or `stopped` agent has no process but keeps its `sessionId`. When the machine wakes it, `deliver()` puts the message in the backlog and `ensureProcess()` gets a slot (it may queue like a new agent), waits for the old process to have exited, and launches with `resume`. An agent that never got a session gets its saved seed first. Who may wake whom is on [Team rules](Team-Rules.md).
 
-- A turn that ends while background work runs still calls `host.turnEnded()`. The conversation keeps a sub-agent `waiting` instead of finishing it. `runTexts` is not emptied.
-- When the command ends, Claude Code starts a turn by itself: `init`, then a `result` that names no message (its `origin.kind` is `task-notification`). That result calls `turnEnded()` again, and its text includes the earlier turn's text.
-- If the set empties and no turn starts within `BACKGROUND_GRACE_MS` (3 s), the agent calls the optional `host.backgroundIdle(agent)`, so the normal ending happens.
-- If the process exits instead, the usual process-lost path runs (section 7).
+The same path relaunches a **stale** process. Settings the running process cannot take mark it stale: a change of the automatic-effort switch (the tools are built at launch), and a model or effort change that did not reach the session (`setModel` missing or rejected, `setEffort` rejected). The next message that arrives between turns (nothing unanswered, no turn running, no background work) closes the process gracefully and resumes the same session in a new process, keeping the slot. It is never relaunched mid-turn: a message during a turn goes into the running process.
 
-This sequence was checked against a real Claude Code 2.1.331 with a throwaway script (Haiku, `sleep 20` in the background): the turn's result at 3.5 s, then the task updates, an empty `background_tasks_changed` and `init` at 22.8 s, then the self-started result. The grace path was checked the same way: a background task stopped with `Query.stopTask()` gave `task_notification` (stopped) and an empty `background_tasks_changed`, Claude Code started no turn, and `backgroundIdle()` fired 3.0 s later. `npm run test:live` scenario 4 covers the normal case end to end.
+## Checked against a real Claude Code
 
-### 5. What the conversation does: `Conversation.turnEnded()`
+These were checked on 2026-11-27 against Claude Code 2.1.331 (Haiku) with throwaway harnesses that drove the 0.1.4 `Agent` class, before its Claude Code code moved into `server/backends/claude/session.ts`; the adapter says it carries that behaviour over unchanged. They were not run again for this page.
 
-- Adds a notice: "Stopped." if interrupted, or the error text.
-- **Lead:** status becomes `waiting` if it has live children, otherwise `idle`. The lead's process stays open. (Every agent, not only the lead, reads its real context size with `refreshContext()` at the end of a turn.)
-- **Sub-agent with live children and no error:** status `waiting`. It keeps its process and slot.
-- **Otherwise:** `finish(agent, 'done' | 'failed', text, error)`.
+- **Background work:** with `sleep 20` in the background, the turn's result came at 3.5 s, then task updates, an empty `background_tasks_changed` and `init` at 22.8 s, then the self-started turn's result (its `origin.kind` was `task-notification`). The grace path: a task stopped with `Query.stopTask()` gave `task_notification` (stopped) and an empty `background_tasks_changed`, Claude Code started no turn, and `backgroundIdle()` fired 3.0 s later.
+- **Missing session:** after the session's `.jsonl` file under `~/.claude/projects/<folder>/` was deleted, the resume wrote an `error_during_execution` result "No conversation found with session ID: …" before any `init`; the notice appeared once and the message was answered by a new session.
+- **Lead model change:** after `setModel()`, the next turn's `init` and assistant message named the new model, in the same process.
+- **Automatic-effort switch:** the next message started a new process that resumed the same session; its `init` listed the team tools without `set_effort` and `set_agent_effort`, the agent still knew the first message, and the new message was answered.
+- **Effort change mid-turn:** `applyFlagSettings({ effortLevel })` sent during a turn applied from the next request of the same turn.
+- **Rate limits:** a real `rate_limit_event` carried `utilization` as a fraction (0.33) and `resetsAt` in seconds since the epoch.
 
-`finish()` stops any live children, calls `agent.end(status)`, and then either sends a report to the parent (if the agent `owesReport`) or calls `settle(parent)`. See [A report coming back](Walkthrough-Report-Coming-Back.md).
+`npm run test:live` (real Claude Code, Haiku for every tier; not run for this page) covers background work in its fourth round and, in its sixth round, the automatic-effort relaunch together with a deleted lead session file; the seventh round switches automatic effort back.
 
-### 6. Ending: `Agent.end()`
+## Covered only by tests
 
-`end(status, error)`:
+- **The usage limit** (a `rejected` notice, held messages, the closed process, late results, a process lost at the limit) has never been seen for real; it is covered by `test/agent.test.ts` with a fake `query` and on the fake backend.
+- **A Claude Code that never names consumed messages** (`consumed: null`): unit test only.
+- **A failed `setEffort`** relaunching the process: fake backend only (Claude Code's `applyFlagSettings` was not seen to fail).
+- **Tool-result images stored as blobs**, **a self-started turn moving a `waiting` agent to `running`**, and **a backend without background tracking**: fake backend only.
+- **The generation guard** (an agent ended while waiting for a slot is never launched): unit test only.
 
-1. Cancels a queued slot request, if any.
-2. Increases the generation (so a start still waiting for a slot is dropped), marks `closing = true`, clears the backlog, `unanswered`, `runTexts` and the background set.
-3. For `done`, closes the input stream so Claude Code finishes cleanly; for `stopped` or `failed`, closes the process at once (`q.close()`).
-4. Releases the slot and sets the status (which records `endedAt`).
-
-Because `closing` is set, when `consume()` sees the stream end it does not treat it as a crash.
-
-### 7. Process lost
-
-If the SDK stream ends or throws when Masthead did not ask (`closing` is false), `consume()` first checks the fresh-session rule (7a); otherwise it clears `unanswered` and `runTexts` and calls `host.processLost()`. `Conversation.processLost()` cancels the agent's open approval requests, adds an error notice, releases the slot, and then: for the lead, sets `waiting` or `idle`; for a sub-agent, `finish(agent, 'failed', '', message)`, which reports the failure to the parent if one was owed.
-
-### 7a. A session that no longer exists
-
-If an agent's Claude Code session file was deleted or moved, a resume cannot work. Claude Code reports this only as text ("No conversation found with session ID", seen in Claude Code 2.1.331 according to the code comment), so the rule is narrow (`resumeWasMissing()`): the process was a resume, it ended before reporting `init`, a fresh start has not already been tried for it, and the error, the error output (`stderrTail`) or a result set aside in `handle()` names the missing session. Any other failure is reported as before, so a session is never thrown away because of a network or sign-in problem.
-
-Then `startFresh()` runs, once: it forgets the session id and seed, adds the notice "The earlier session could not be found, so its context is lost. This agent starts fresh.", and launches a new session whose input is a note to the agent saying the same, followed by every message the old process was sent and never answered, then the backlog. A second missing session in a row is not retried; the flag is cleared when a session does start (`init`). Checked on 2026-11-27 against Claude Code 2.1.331: after the session's `.jsonl` file under `~/.claude/projects/<folder>/` was deleted, the resume wrote an `error_during_execution` result "No conversation found with session ID: …" before any `init`; the notice appeared once and the message was answered by a new session. `npm run test:live` scenario 6 covers it.
-
-### 7b. The usage limit
-
-A turn counts as stopped by the usage limit only if the process's latest `rate_limit_event` had status `rejected` and the error is marked as a rate limit (the assistant message's `error` is `rate_limit`) or says so. A busy API or a tool error has no rejected event behind it and is an ordinary error. Then the agent reports the turn at once with `usageLimit: { resetsAt }` (ms; the event gives seconds), even if more input is queued, and **closes the process**. So nothing stays queued inside Claude Code during the pause, and no turn can start by itself. Messages the process was sent and no turn consumed move into `held`. They are kept as content, so they do not count as busy, and the next `deliver()` sends them first, under new ids, through a new process that resumes the session. The message the failed turn consumed is not sent again: it is already in the session, with the error. A result that was already on its way when the process closed is reported with `usageLimit` too; the conversation treats repeats as one pause. While `info.pausedUntil` is set, `init` does not change the status. A process that dies at the limit calls `processLost(agent, message, usageLimit)` and holds its messages the same way. `dropHeld()` forgets them; `end()` and `dispose()` call it, and the conversation calls it when the person stops an agent. What the conversation does with this (pausing until `resetsAt`) is in [server/conversation.ts](Source-Conversation.md). Covered only by `test/agent.test.ts`; a reached limit has not been seen for real.
-
-### 8. App shutdown
-
-`Conversation.shutdown()` ends live sub-agents with `end('stopped', 'Masthead was closed while this agent was working.')`, and every other agent with `dispose()`, which closes any process and returns any slot but keeps the recorded status (so a `done` agent stays `done`). The lead is then set to `idle`.
-
-### 9. Waking a finished agent
-
-A `done`, `failed` or `stopped` agent has no process, but it keeps its `sessionId`. `deliver()` puts the message in the backlog and calls `ensureProcess()`, which acquires a slot and launches with `resume`. If the agent never got a session (it was still queued when the app closed), its saved task (`seed`) is restored and sent first, so it still knows its job. When an agent wakes a finished sub-agent with `send_message`, the sub-agent owes its parent a fresh report (`owesReport = true` in `Conversation.message()`), whoever woke it, as long as the parent can still receive one (it is the lead or live). Agents cannot wake an agent the person stopped, and nobody can wake one whose tier is set to 0. See [Team rules](Team-Rules.md).
-
-### 10. Settings changed while an agent runs
-
-`applySettings(settings)` acts only on an agent with a live process; one without a process needs nothing, since `launch()` reads the settings. It caps the effort to a lowered ceiling (or sets the tier's fixed effort when automatic effort is off) through `setEffort()`, which uses `applyFlagSettings`. For the lead, a changed lead model goes through `Query.setModel()`; if that fails, the process is marked stale. A change of the automatic-effort switch marks the process stale, because the tools are built at launch.
-
-A stale process is relaunched only when the next message arrives between turns (nothing unanswered, no turn running, no background work): `deliver()` closes the old input and `ensureProcess()` resumes the same session in a new process, keeping the slot. It is never relaunched mid-turn; a message sent during a turn goes into the running process.
-
-Checked on 2026-11-27 against Claude Code 2.1.331 (Haiku): after the lead model changed through `setModel()`, the next turn's `init` and assistant message named the new model, in the same process. After the automatic-effort switch changed, the next message started a new process that resumed the same session: its `init` listed the team tools without `set_effort` and `set_agent_effort`, the agent still knew the first message, and the new message was answered. `npm run test:live` scenarios 6 and 7 cover the relaunch.
-
-## Interrupt versus stop
-
-- **Interrupt** (`Agent.interrupt()`, used for the lead by the Stop button via `{t:'interrupt'}`) ends the current turn but keeps the process and session. Only acts when the status is `running`.
-- An `end('done')` while background commands still run closes the process at once instead of only closing its input, so it never waits for them.
-- **Stop** (`Agent.end('stopped')`, via `Conversation.stopTree()`) ends the process and returns the slot. Applies to sub-agents and everything under them. See [Stopping an agent](Walkthrough-Stopping-an-Agent.md).
+The `runtime on fake:` tests in `test/agent.test.ts` run this runtime on the fake backend ([Fake backend](Source-Backend-Fake.md)); the `agent:` tests run it through the Claude adapter with a stand-in for the SDK's `query()`. All 30 passed on 2026-11-27.
 
 ## Related pages
 
-[server/agent.ts](Source-Agent.md) · [server/conversation.ts](Source-Conversation.md) · [Slot scheduling](Slot-Scheduling.md) · [Team rules](Team-Rules.md)
+[server/runtime/agent.ts](Source-Runtime.md) · [State machine](State-Machine.md) · [server/core/machine.ts](Source-Core-Machine.md) · [server/core/conversation.ts](Source-Core-Conversation.md) · [Backend interface](Backend-Interface.md) · [Claude Code backend](Source-Backend-Claude.md) · [Slot scheduling](Slot-Scheduling.md) · [Team rules](Team-Rules.md)

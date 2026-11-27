@@ -1,76 +1,140 @@
-# shared/protocol.ts
+# shared/protocol.ts and shared/protocol-v2.ts
 
-**Role:** the types and small helpers that the server and the browser share. The file's first comment sets its one rule: nothing in it may import Node or browser (DOM) APIs, so both sides can import it. Every message on the WebSocket is defined here, so the compiler catches any mismatch between the page and the server.
+**Role:** the types and small helpers that the server and the page share. Neither file may import Node or browser (DOM) APIs, so both sides can import them. Every WebSocket message is typed here, so the compiler catches a mismatch between page and server.
 
-The message types themselves (`ClientMsg`, `ServerMsg`, `Item`) are explained on [Browser/server protocol](Browser-Server-Protocol.md). This page covers the rest.
+- `shared/protocol.ts`: the base types (tiers, team profiles, settings, agents, items, conversations, approvals) and the **version 1** messages `ClientMsg` / `ServerMsg`.
+- `shared/protocol-v2.ts`: the messages that are new or changed in **protocol version 2**. Its header says it is kept separate while `protocol.ts` is being reworked and that "the two merge into one file before 0.2.0".
 
-## Version
+How the messages are used, step by step, is on [Browser/server protocol](Browser-Server-Protocol.md). This page lists what each file defines.
 
-`VERSION = '0.1.3'`. Used by the health endpoint, the launcher, `AppState`, the `CLAUDE_AGENT_SDK_CLIENT_APP` variable (`agentEnv()` in `server/config.ts`) and the team-tool server's version (`server/tools.ts`).
+## shared/protocol.ts
 
-## Tiers
+### Version
 
-- `Tier` = `'lead' | 'opus' | 'sonnet' | 'haiku'`. `TIERS` lists them from the top down.
-- `CHILD_TIER`: which tier each one may start (lead → opus → sonnet → haiku → `null`).
-- `TIER_LABEL`: fixed display names: "Fable 5.2", "Opus 5.5", "Sonnet 5.5", "Haiku 5.5". The only remaining use is in the accessible labels of the team panel's +/− buttons (`web/src/lib/TeamPanel.svelte`). Everything else shows names made by `modelLabel()`.
-- `modelLabel(model)`: turns a model id into the name people use. `claude-opus-5-5` becomes "Opus 5.5", `claude-opus-5` becomes "Opus 5", and `claude-sonnet-4-5-20250929` becomes "Sonnet 4.5". It recognises the families fable, mythos, opus, sonnet and haiku; any other id is shown unchanged. Because of this, the tier names in prompts, tool replies and on the page follow whatever model the settings name.
+`VERSION = '0.1.4'`. `package.json` also still says `0.1.4` on branch `next`. It is used by `server/main.ts` (the start-up line and `--version`), `AppState.version`, the `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/<VERSION>` variable (`server/backends/claude/env.ts`) and the version of the team-tool MCP server (`server/backends/claude/mcp.ts`). `server/settings/settings.ts` imports it but does not use it.
 
-## Agent names
+### Tiers (the Claude shape)
 
-Agents are not named by whoever starts them. Each conversation hands out names in order from the radio spelling alphabet:
+- `Tier` = `'lead' | 'opus' | 'sonnet' | 'haiku'`, and `TIERS` lists them from the top down. These are now the ids of the built-in `claude` profile's tiers, kept as a type for code and pages that still use the 0.1.x shape.
+- `CHILD_TIER`: which of these tiers each one may start (lead → opus → sonnet → haiku → `null`). For any profile, the general rule is `childTierOf()` below.
+- `TIER_LABEL`: fixed names "Fable 5.2", "Opus 5.5", "Sonnet 5.5", "Haiku 5.5".
+- `modelLabel(model)`: turns a model id into the name people use. `claude-opus-5-5` gives "Opus 5.5", `claude-opus-5` gives "Opus 5" and `claude-sonnet-4-5-20250929` gives "Sonnet 4.5". It recognises the families fable, mythos, opus, sonnet and haiku; any other id (a Codex model, for example) is shown unchanged.
 
-- `AGENT_NAMES`: `alpha`, `bravo`, `charlie`, … `xray`, `yankee`, `zulu`. The code uses the common English spellings `juliet` and `xray`, which are easy to type.
-- `agentName(n)`: the name of the nth agent in a conversation. 0 is the lead, so the lead is always `alpha`. After `zulu` (n = 25) a round is added as a Roman numeral: `alpha-ii`, `bravo-ii`, …, then `alpha-iii`. `displayName` shows these as "Alpha II".
-- `displayName(name)`: the form people see, with a capital first letter ("Bravo").
+### Team profiles
 
-The person and the agents can then refer to any agent by a short name they can say. See [Team rules](Team-Rules.md#names-and-titles).
+See [Team profiles and settings](Team-Profiles-and-Settings.md) for what these mean.
 
-## Effort
+- `TierId = string`. Ids are unique across all profiles: `lead`/`opus`/`sonnet`/`haiku` for `claude`, `<profileId>:<index>` for the others.
+- `PALETTE`: `amber`, `violet`, `blue`, `teal`, `rose`, `green`, `slate`, `orange`. These are colour slots; the page owns the real light and dark colours. `PaletteColour` is the union.
+- `TierSpec`: `id`, `label`, `backend`, `model`, `effort` (the ceiling with automatic effort, the fixed level without), `max` (agents of the tier running at once, app-wide; ignored for the first tier), `lean` (skip the person's own MCP servers), `colour`.
+- `TeamProfile`: `id`, `label`, `description?` (at most 200 characters), `builtIn`, `tiers` (index 0 is the lead; tier i starts tier i+1; the last starts nothing).
+- `MAX_TIERS = 5`, `CLAUDE_PROFILE = 'claude'`.
+- `profileOfTier(s, tier)`: the profile that holds the tier id.
+- `findTier(s, tier)`: the `TierSpec` with that id, in any profile.
+- `childTierOf(s, tier)`: the id of the next tier in the same profile, or null for the last tier or an unknown one.
+- `isLeadTier(s, tier)`: whether the id is the first tier of its profile.
 
-- `Effort` = `'low' | 'medium' | 'high' | 'xhigh'`. `EFFORTS` holds them in order and `EFFORT_LABEL` gives the display names (`xhigh` is shown as "Extra"). There is deliberately no `max` level. A comment saying so sits just above `modelLabel()`'s comment in the file, away from the `Effort` type it describes.
-- `effortRank(e)`: the level's position (0–3), used for comparisons.
-- `capEffort(wanted, ceiling)`: the lower of the two levels.
+### Agent names
 
-See [Thinking effort](Thinking-Effort.md).
+- `AGENT_NAMES`: `alpha`, `bravo`, `charlie`, … `zulu`. The spellings `juliet` and `xray` are used because they are easy to type.
+- `agentName(n)`: the name of the nth agent in a conversation, where 0 is the lead (always `alpha`). After `zulu` a Roman-numeral round is added: `alpha-ii` … `zulu-ii`, then `alpha-iii`, and so on.
+- `displayName(name)`: the form people see: "Bravo", "Alpha II".
 
-## Settings
+See [Team rules](Team-Rules.md).
 
-- `TierSettings`: `model`, `effort` (a ceiling or a fixed level, depending on `autoEffort`) and `max` (ignored for the lead).
+### Effort
+
+- `Effort` = `'low' | 'medium' | 'high' | 'xhigh'`. `EFFORTS` holds them in order. `EFFORT_LABEL` gives the names shown, and `xhigh` appears as "Extra". There is deliberately no `max` level; the comment that says so sits just above `modelLabel()`.
+- `effortRank(e)`: the level's position, 0–3.
+- `capEffort(wanted, ceiling)`: the lower of the two.
+
+### Settings
+
+- `TierSettings`: `{ model, effort, max }`, the shape of one entry in the compatibility view `Settings.tiers`.
 - `PermissionChoice` / `PERMISSION_CHOICES`: `inherit`, `default`, `acceptEdits`, `auto`, `bypassPermissions`.
-- `Settings`: `tiers`, `permissionMode`, `autoEffort`, `leanSubagents` (Sonnet and Haiku skip the person's own MCP servers), `leanOpus` (Opus agents skip them too), `collapseReports` (reports are shown folded shut until the person opens them), `defaultCwd`.
-- `MAX_PER_TIER = 12`: the highest allowed `max`.
+- `Settings`: `version: 2`, `profiles`, `defaultProfile`, `tiers` (compatibility view of the `claude` profile), `permissionMode`, `autoEffort`, `leanSubagents` and `leanOpus` (compatibility view), `collapseReports`, `keepAwake`, `maxRunMinutes`, `defaultCwd`. Every field is explained on [Configuration and settings](Configuration-and-Settings.md).
+- `MAX_PER_TIER = 12`.
+- `SettingsPatch`: what a page sends in `{t:'settings'}`. Any field except `version`, with `tiers` allowed to be partial at both levels. The server merges it with `sanitizeSettings()` ([settings code](Source-Settings.md)).
 
-See [Configuration and settings](Configuration-and-Settings.md).
+### Agents
 
-## Agents
+- `AgentStatus`: `queued`, `running`, `waiting`, `idle` (lead only), `done`, `failed`, `stopped`. `LIVE_STATUSES` is the first three. See [Agent life cycle](Agent-Life-Cycle.md) and [State machine](State-Machine.md).
+- `AgentUsage`: `context`, `contextMax`, `output`, `costUsd`, `turns`.
+- `AgentInfo`: `id`, `convId`, `name`, `tier` (typed as `Tier`, but for a non-claude profile it holds a `<profile>:<index>` string; `Conversation.create` casts it with `as Tier`), `parentId`, `title`, `task`, `status`, `model`, `effort`, `createdAt`, `endedAt?`, `usage`, `activity?`, `error?`, `waitingFor?` (the agent it is waiting to hear from), `pausedUntil?` (paused at a usage limit until about this time, in ms since 1970).
 
-- `AgentStatus`: `queued`, `running`, `waiting`, `idle` (lead only), `done`, `failed`, `stopped`. `LIVE_STATUSES` is the first three. See [Agent life cycle](Agent-Life-Cycle.md).
-- `AgentUsage`: `context` (tokens in the context window at the latest request), `contextMax`, `output` (output tokens so far), `costUsd`, `turns`.
-- `AgentInfo`: everything the page knows about an agent:
-  - `id`, `convId`, `name`, `tier`, `parentId` (null for the lead);
-  - `title`: a few words on its job, given by whoever started it (empty for the lead);
-  - `task`: the first part of its task;
-  - `status`, `model`, `effort`, `createdAt`, `endedAt?`, `usage`;
-  - `activity?`: one line on what it is doing right now;
-  - `error?`;
-  - `waitingFor?`: the name of the agent it asked a question of (`send_message` with `wait: true`) and is waiting to hear from; set and cleared by `Conversation` (`message()`, `clearWait()`), cleared on restore.
+### Transcripts
 
-  The server's `Agent` object keeps one of these as `agent.info` and broadcasts it every time it changes.
+- `Item`: `user` (`text`, and `images?`, which is a **count** in 0.1.x files and a `BlobRef[]` from 0.2.0), `text`, `thinking`, `tool` (`name`, `input`, `result?`, `isError?`, `done`, `images?: BlobRef[]`), `inbound` (`via: 'task' | 'report' | 'message'`, `from`, `text`, `status?`), `notice` (`level: 'info' | 'error'`, `text`). Each item has an `id` and a `ts`.
+- `NewItem`: an `Item` without `id`/`ts` (`id` optional). It is built with a conditional type so that each variant loses those fields separately; a plain `Omit` on the union would merge the variants.
+- `Draft`: `{ kind: 'text' | 'thinking', text }`, the block being streamed now.
 
-## Transcripts
+### Conversations, approvals and images
 
-- `Item`, `NewItem`: see [Browser/server protocol](Browser-Server-Protocol.md#transcript-items-item). `NewItem` uses a conditional type to remove `id` and `ts` from each variant of `Item` separately. A plain `Omit` on the union would merge the variants.
-- `Draft`: `{kind: 'text' | 'thinking', text}`, the block being streamed right now.
+- `ConversationMeta`: `id`, `title`, `cwd`, `createdAt`, `updatedAt`, `leadId`, `profileId?` (0.2.0; missing in 0.1.x files, which means `claude`), and `busy?` (filled in when the list is sent, never stored).
+- `QuestionOption`, `Question`, `PermissionRequest` (`kind: 'permission' | 'question'`, `canAlways`, `questions?`, …). See [Permissions and questions](Permissions-and-Questions.md).
+- `BlobRef`: `{ blob, mediaType, w, h, bytes }`, an image stored on the server. `server/storage/blobs.ts` declares the same shape.
+- `ImageAttachment`: `{ mediaType, data }`, the image as base64 without a `data:` prefix (images sent inline with a message).
+- `RateLimitNotice`: `status`, `type?`, `utilization?`, `resetsAt?`.
+- `AppState`: `version`, `settings`, `conversations`, `claude` (`path`, `version`, `error?`), `home`, `pending`, `usage`, and `blobToken?` (per socket; images load from `/blob/<convId>/<hash>?t=<blobToken>`).
 
-## Conversations, approvals and other shapes
+### Version 1 messages
 
-- `ConversationMeta`: `id`, `title`, `cwd`, `createdAt`, `updatedAt`, `leadId`, and `busy?`, which is true while any agent in the conversation is live. `busy` is filled in by `App.metas()` when the list is sent and is never stored.
-- `Question`, `QuestionOption`, `PermissionRequest`: see [Permissions and questions](Permissions-and-Questions.md).
-- `ImageAttachment`: `mediaType` (PNG, JPEG, GIF or WebP) and the base64 `data`, without a `data:` prefix.
-- `RateLimitNotice`: `status`, `type?`, `utilization?`, `resetsAt?` (seconds since 1970; the page multiplies it by 1000).
-- `AppState`: `version`, `settings`, `conversations`, `claude` (`path`, `version`, `error?`), `home`, `pending` (every approval request and question still open, in any conversation) and `usage` (the latest `RateLimitNotice` of each limit type Claude Code has reported since Masthead started). The page uses `home` to show paths with `~` (`shortPath()` in `web/src/lib/store.svelte.ts`).
-- In `ClientMsg`, `send` has an optional `ref`; in `ServerMsg`, both `created` and `error` carry `ref?`, so the browser can match a reply, or a refusal, to its own request.
+`ClientMsg` (page → server): `hello`, `open`, `items` (with optional paging `before`/`limit`; without `limit` the whole transcript comes back), `send` (`convId` null for a new conversation, `cwd?`, `text`, `images?`, `agentId?`, `ref?`, `blobs?` for images already uploaded, `profile?` for a new conversation), `interrupt`, `stop_agent`, `stop_all`, `permission`, `settings`, `reset_profile`, `rename`, `delete`, `dirs`.
+
+`ServerMsg` (server → page): `state`, `conversations`, `conversation`, `created`, `deleted`, `items` (`cursor?`, `more?` when paged), `agent`, `item`, `draft` (whole text), `permission_request`, `permission_resolved`, `settings`, `rate_limit`, `dirs`, `error` (`code?` of `too_large`, `invalid`, `not_found`, `refused`, `protocol`, and `ref?`).
+
+`server/app/app.ts` also sends and accepts a few messages (`remote`, `check_backends`) that are not in these unions. Those belong to [Remote access](Remote-Access.md) and the backend pages.
+
+## shared/protocol-v2.ts
+
+### Constants and small types
+
+- `PROTOCOL_VERSION = 2`.
+- `Capability`: `'drafts-delta' | 'items-paging' | 'blobs' | 'resync'`, what a version 2 page says it can handle.
+- `ErrorCode`: `protocol`, `refused`, `not_found`, `too_large`, `invalid`.
+- `CLIP_CHARS = 16 * 1024`: live `item` events clip tool input and output beyond this many characters; the page asks for the rest with `item_full`.
+- `RING_SIZE = 500`: events kept per conversation so a reconnecting page can resync.
+- `ApprovalSummary`: `{ id, convId, agentName, kind }`, enough for a badge on every conversation without sending the request itself.
+- `Sequenced<T>` = `T & { seq: number }`: a per-conversation event with its sequence number.
+
+### `ClientMsgV2` (page → server, in addition to version 1's)
+
+| Message | Meaning |
+|---|---|
+| `{t:'hello', protocol, caps?}` | Says the page speaks protocol 2. A remote socket gets nothing until it has said this. |
+| `{t:'subscribe', convId, since?}` | Start receiving one conversation's events. `since` is the last `seq` the page has, to replay from. |
+| `{t:'unsubscribe', convId}` | Stop. |
+| `{t:'draft_sync', convId, agentId}` | There was a gap in a draft's `dseq`; send the whole text once. |
+| `{t:'item_full', convId, agentId, itemId}` | The whole of an item that arrived clipped. |
+| `{t:'items', convId, agentId, before?, limit?}` | Paged transcript, newest page first; `before` is the previous page's `cursor`. |
+| version 1 `send` plus `profile?` | Team profile for a new conversation. |
+
+Every version 1 `ClientMsg` is also accepted.
+
+### `ServerMsgV2` (server → page)
+
+| Message | Meaning |
+|---|---|
+| `{t:'state', protocol: 2, state}` | Version 1's state, but `pending` holds `ApprovalSummary`s, plus `blobToken?`. |
+| `{t:'conversation', conv, agents, pending, drafts, seq}` | Snapshot on subscribe, or when `since` is too old to replay. `drafts` carry their `dseq`. |
+| `Sequenced` `agent`, `permission_request` | As in version 1, with `seq`. |
+| `Sequenced` `item` (`truncated?`) | `truncated`: tool `input`/`result` were clipped. |
+| `Sequenced` `draft` (`dseq`, `kind`, `append?` or `text?`) | A draft grew by `append`, or was replaced whole by `text`. `dseq` counts within one draft. |
+| `Sequenced` `draft_end` | The draft ended; its text arrives as an item. |
+| `{t:'approval', summary}` | Sent to every page, for badges. |
+| `{t:'resync', convId}` | The events could not be replayed; the page reloads the conversation, and a snapshot follows. |
+| `{t:'item_full', …, item}` | Answer to `item_full`. |
+| `{t:'items', …, cursor?, more?}` | Answer to `items`. |
+| `{t:'error', code, message, ref?}` | `code` is required in version 2. |
+
+Every version 1 `ServerMsg` is also part of the union.
+
+### Who uses it
+
+`server/app/clients.ts` (the hub that turns `App`'s version 1 events into what each tab asked for: unchanged for version 1 tabs, with subscriptions, `seq` and draft deltas for version 2 tabs), `web/src/lib/store.svelte.ts` and `test/protocol-v2.test.ts`.
+
+Not verified by running: this page was written from the code.
 
 ## Related pages
 
-[Browser/server protocol](Browser-Server-Protocol.md) · [shared/toolline.ts](Source-Shared-Toolline.md) · [Glossary](Glossary.md)
+[Browser/server protocol](Browser-Server-Protocol.md) · [shared/toolline.ts](Source-Shared-Toolline.md) · [Team profiles and settings](Team-Profiles-and-Settings.md) · [Glossary](Glossary.md)

@@ -363,7 +363,7 @@ export class App implements ConversationHost {
       }
       case 'reset_profile': {
         // A built-in team back to how Masthead ships it (Claude's, or one generated for a backend).
-        const id = String(msg.profileId ?? '');
+        const id = String(msg.id ?? '');
         if (!this.currentSettings.profiles.some((p) => p.id === id && p.builtIn)) throw new ClientError('not_found', 'Only a built-in team can be reset.');
         this.updateSettings(resetProfile(this.currentSettings, id, this.registry.generatedProfiles()));
         return true;
@@ -374,6 +374,11 @@ export class App implements ConversationHost {
           this.backendsDetected();
           this.broadcast({ t: 'backends', backends: this.registry.status() } as unknown as ServerMsg);
         });
+        return true;
+      case 'forget_me':
+        // From a device, for itself only (the gate refuses it from the local browser).
+        if (!client.deviceId) throw new ClientError('refused', 'Only a paired device can forget itself.');
+        this.requireRemote().forget(client.deviceId);
         return true;
       case 'remote_audit':
         client.send({ t: 'remote_audit', entries: this.requireRemote().audit() } as unknown as ServerMsg);
@@ -459,13 +464,17 @@ export class App implements ConversationHost {
           conv = this.conv(msg.convId);
           // Pictures uploaded beforehand (POST /blob), plus any still sent inline: all become files of
           // this conversation, go on the person's item, and reach the agent as image content.
-          const refs = this.checkRefs(conv.meta.id, sentRefs, images.length);
+          const uploaded = this.checkRefs(conv.meta.id, sentRefs, images.length);
+          // One 30 MB cap for the whole message: uploaded and inline pictures together.
+          const inlineBytes = images.reduce((n, img) => n + Math.floor((img.data.length * 3) / 4), 0);
+          if (uploaded.reduce((n, r) => n + r.bytes, 0) + inlineBytes > MAX_TOTAL_IMAGE_BYTES) throw new ClientError('too_large', 'The images together are larger than 30 MB.');
+          const inlineRefs: BlobRef[] = [];
           for (const img of images) {
             const stored = this.storeImage(conv.meta.id, img.data, img.mediaType);
-            if ('ref' in stored) refs.push(stored.ref);
+            if ('ref' in stored) inlineRefs.push(stored.ref);
           }
-          images = [...images, ...this.imagesOf(conv.meta.id, refs.slice(0, refs.length - images.length))];
-          firstRefs = refs;
+          images = [...images, ...this.imagesOf(conv.meta.id, uploaded)];
+          firstRefs = [...inlineRefs, ...uploaded];
         }
         // The stored refs go on the person's item; `images` (base64) is what the agent receives.
         conv.userSend(text, images, typeof msg.agentId === 'string' ? msg.agentId : undefined, firstRefs?.length ? firstRefs : undefined);

@@ -806,3 +806,21 @@ test('runtime on fake: an effort change that does not reach the session relaunch
   assert.equal(backend.sessions[1]!.spec.resume, a.sessionId);
   assert.equal(backend.sessions[1]!.spec.effort, 'high');
 });
+
+test('runtime on fake: a lead on a non-Claude profile (tier "codex:0") may ask the person and follows the settings model', async () => {
+  const { host, wait, backend } = onFake();
+  const lead = new Agent({ ...info('alpha'), tier: 'codex:0' as never, parentId: null }, host);
+  lead.deliver('hi');
+  await wait(() => backend.sessions.length === 1);
+  assert.equal(backend.sessions[0]!.spec.canAskPerson, true);
+  assert.equal(backend.sessions[0]!.spec.lean, false);
+});
+
+test('runtime on fake: a team tool reported under its bare name is shown like Claude Code\'s', async () => {
+  const { host, turns, wait, items } = onFake();
+  host.tools = () => [{ name: 'list_agents', description: 'd', input: { type: 'object', properties: {} }, run: async () => 'none' }];
+  const a = new Agent(info('bravo'), host, { owesReport: true, seed: 'Call the tool list_agents with input {}' });
+  a.start();
+  await wait(() => turns.length === 1);
+  assert.ok(items.some((i) => i.kind === 'tool' && (i as { name: string }).name === 'mcp__masthead__list_agents'));
+});

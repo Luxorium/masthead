@@ -58,7 +58,7 @@ export interface BackendCaps {
   questions: boolean;
   /** false: turn results do not name the messages they consumed (the runtime's fallback rule). */
   consumedIds: boolean;
-  /** false: the runtime queues sends until turnEnded and sends them as one batch. */
+  /** false: a message sent during a turn waits in the backend for the next turn (the runtime sends at once either way). */
   midTurnDelivery: boolean;
   contextUsage: boolean;
   /** Can skip the person's own MCP servers. */

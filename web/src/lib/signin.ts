@@ -120,3 +120,33 @@ export function forgetDeviceToken(): void {
     // Nothing stored.
   }
 }
+
+export type DeviceRole = 'full' | 'approve' | 'read';
+
+/**
+ * What the remote listener says about this device's token: approved (with its role), unknown (no token,
+ * or one that was revoked or expired), refused (by policy), or null when it could not be asked.
+ */
+export async function whoami(): Promise<{ state: 'approved'; role: DeviceRole } | { state: 'unknown' | 'refused' } | null> {
+  try {
+    const token = deviceToken();
+    const res = await fetch('/api/remote/whoami', { cache: 'no-store', headers: token ? { 'x-masthead-device': token } : {} });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { state?: string; role?: DeviceRole };
+    if (body.state === 'approved') return { state: 'approved', role: body.role ?? 'read' };
+    if (body.state === 'unknown' || body.state === 'refused') return { state: body.state };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Forgets this device entirely on the page: its token and any pairing request in progress. */
+export function forgetDevice(): void {
+  forgetDeviceToken();
+  try {
+    sessionStorage.removeItem('masthead.pairing');
+  } catch {
+    // Nothing stored.
+  }
+}

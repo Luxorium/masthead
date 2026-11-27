@@ -31,9 +31,11 @@
     <button class="btn ghost hide" onclick={onhide} title={T.shell.hideChats} aria-label={T.shell.hideChats}>⟨</button>
   </div>
 
+  {#if store.mayAct}
   <button class="new" onclick={() => { store.newConversation(); onpick?.(); }}>
     <span class="plus">+</span> {T.shell.newChat}
   </button>
+  {/if}
 
   <div class="label" id="chats-label">{T.shell.chats}</div>
   <nav aria-labelledby="chats-label">
@@ -44,9 +46,11 @@
           <span class="name">{c.title}</span>
           {#if waiting(c.id) > 0}<span class="needs" title={T.shell.needsAnswer} aria-label={T.shell.needsAnswer}>{waiting(c.id)}</span>{/if}
         </button>
+        {#if store.mayAct}
         <button class="del" class:sure={confirming === c.id} onclick={() => remove(c.id)} title={T.shell.deleteChat} aria-label={T.shell.deleteChat}>
           {confirming === c.id ? T.shell.confirmDelete : '×'}
         </button>
+        {/if}
       </div>
     {:else}
       <p class="empty">{T.shell.noChats}</p>

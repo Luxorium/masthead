@@ -11,9 +11,11 @@
   }
 </script>
 
-<button class="stop {placement}" onclick={press} title={T.team.stopTitle} aria-label={T.team.stop(displayName(agent.name))}>
+{#if store.mayAct}
+<button class="stop {placement === 'map' ? 'on-map' : 'row'}" onclick={press} title={T.team.stopTitle} aria-label={T.team.stop(displayName(agent.name))}>
   <span class="label" aria-hidden="true">{T.team.stopWord}</span><span class="glyph" aria-hidden="true">■</span>
 </button>
+{/if}
 
 <style>
   .stop {
@@ -29,7 +31,7 @@
     color: var(--text);
     opacity: 0.8;
   }
-  .stop.map {
+  .stop.on-map {
     position: absolute;
     right: 6px;
     bottom: 6px;
@@ -38,7 +40,7 @@
     justify-content: center;
   }
   /* On a map card the word floats above the button, so it never covers the card's text. */
-  .stop.map .label {
+  .stop.on-map .label {
     position: absolute;
     right: 0;
     bottom: calc(100% + 4px);

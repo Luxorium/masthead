@@ -1,78 +1,81 @@
 # Configuration and settings
 
-Masthead is configured in two ways: **settings**, which the person changes in the browser's sidebar and which are saved to disk, and **environment variables and command-line options**, which are read when the program starts. Code: `server/config.ts` and `Settings` in `shared/protocol.ts`.
+There are two ways to configure Masthead:
 
-## Settings
+- **Settings**: the person changes these in the page's settings and team panels. They are saved to `settings.json`.
+- **Environment variables**: read when the program starts.
 
-Saved in `~/.config/masthead/settings.json` (see [Storage on disk](Storage-on-Disk.md)). The page's team panel edits them; see [Web components](Source-Web-Components.md#teampanelsvelte). The shape is `Settings`:
+Command-line options (`--port`, `--no-browser` and the rest) belong to the launcher. They are documented on [Command-line launcher](Command-Line-Launcher.md) and [Building, testing and installing](Building-Testing-Installing.md).
 
-| Field | Type | Default | Meaning |
-|---|---|---|---|
-| `tiers.lead.model` | string | `claude-fable-5-2` | Model id for the lead. Read every time the lead's process starts, and applied to a running lead at once through `Query.setModel()` (`Agent.applySettings()`). The name shown for each tier everywhere comes from this id (`modelLabel()`). |
-| `tiers.opus.model` | string | `claude-opus-5-5` | Model id for Opus agents, fixed when each agent is created. |
-| `tiers.sonnet.model` | string | `claude-sonnet-5-5` | Same, Sonnet. |
-| `tiers.haiku.model` | string | `claude-haiku-5-5` | Same, Haiku. |
-| `tiers.<tier>.effort` | `low`/`medium`/`high`/`xhigh` | lead `xhigh`, opus `xhigh`, sonnet `high`, haiku `medium` | With automatic effort on: the highest level the tier may reach. Off: the level it runs at. See [Thinking effort](Thinking-Effort.md). |
-| `tiers.<tier>.max` | integer 0–12 | lead 1 (ignored), opus 3, sonnet 4, haiku 4 | How many agents of the tier may run at once, app-wide. 0 switches the tier off. See [Slot scheduling](Slot-Scheduling.md). |
-| `permissionMode` | `inherit`/`default`/`acceptEdits`/`auto`/`bypassPermissions` | `inherit` | Claude Code permission mode for all agents. `inherit` uses the person's own Claude Code settings. See [Permissions and questions](Permissions-and-Questions.md). |
-| `autoEffort` | boolean | `true` | Automatic effort: agents start low and manage their effort with tools. |
-| `leanSubagents` | boolean | `true` | Sonnet and Haiku agents skip the person's own MCP servers (`strictMcpConfig`), which keeps their context small. |
-| `leanOpus` | boolean | `true` | Opus agents skip them too. The lead always loads them. |
-| `collapseReports` | boolean | `false` | Reports from agents are shown folded shut in a transcript until the person opens them (a display setting only; `web/src/lib/Transcript.svelte`). |
-| `defaultCwd` | absolute path | the home folder | The folder a new conversation starts in. Updated automatically when a new conversation is started in a different folder. |
+Settings types: `Settings` in `shared/protocol.ts`. Validation and defaults: `server/settings/settings.ts`. Folders: `server/paths.ts`.
 
-An **MCP server** (Model Context Protocol) is an add-on that gives Claude Code extra tools. Masthead itself provides one, named `masthead`, holding the team tools; "lean" agents get only that one.
+## Where the settings file is
 
-### How settings are checked
+`settings.json` in the config folder (`SETTINGS_FILE`):
 
-`sanitizeSettings(raw, base)` always returns valid settings, whatever it is given: it starts from a copy of `base` and copies over only fields that pass. For the settings file `base` is `defaultSettings()`; for settings sent by a browser it is the **current** settings, so a partial update (say `{collapseReports: true}`) changes only what it names and an invalid field keeps its current value. The checks:
-
-- model: a string of 1–80 characters from letters, digits and `. _ - [ ] :`;
-- effort: one of the four levels;
-- max: a number, truncated and clamped to 0–12 (`MAX_PER_TIER`); the lead's `max` is never taken;
-- permissionMode: one of the five choices;
-- autoEffort, leanSubagents, leanOpus, collapseReports: booleans;
-- defaultCwd: a string starting with `/`.
-
-It is used both when loading the file (`loadSettings()`; an unreadable file gives the defaults) and when a browser sends new settings. The settings file used by `App` can be changed with its `settingsFile` option; the tests use this.
-
-### When a change takes effect
-
-`App.updateSettings()` saves the file (a failed write is logged once and the new settings still apply), calls `scheduler.limitsChanged()` so queued agents start if a limit went up, or fail if their tier went to 0, calls `settingsChanged()` on every conversation so running agents take what they can at once (`Agent.applySettings()`), and broadcasts the new settings. Beyond that, each setting is read at a particular moment:
-
-| Setting | Read when |
+| Platform | Default path |
 |---|---|
-| `max` | Each time a slot is requested or freed. Lowering does not stop running agents (known limitation). Setting a tier to 0 fails the agents of that tier still waiting in the queue (`TierOff`, see [Slot scheduling](Slot-Scheduling.md)) and stops finished ones from being woken. |
-| Permission mode, lean sub-agents and lean Opus | Each time an agent's process is launched (`Agent.launch`). A running process keeps what it started with. |
-| Effort ceiling (and the fixed level with automatic effort off) | At launch, and at once for running agents: `applySettings()` caps a running agent's effort at a lowered ceiling (or sets the fixed level) through `setEffort()`. A raised ceiling raises nobody. |
-| Lead model | At launch, and at once for a running lead through `Query.setModel()`; if that fails, the lead's process is relaunched (same session) before its next turn. |
-| Sub-agent model | When the agent is created (`spawn`). |
-| `autoEffort` | Tool list: at launch; a change marks running processes stale, so each is relaunched with the same session before its next turn. Tool behaviour, starting effort: at the moment of the call. |
-| Child `max` in the prompt | At launch, when the system prompt is built. |
-| `defaultCwd` | When a new conversation is started without a folder. |
+| Linux and others | `~/.config/masthead/settings.json` (or `$XDG_CONFIG_HOME/masthead/settings.json`) |
+| macOS | `~/Library/Application Support/Masthead/settings.json` |
+| Windows | `%APPDATA%\Masthead\settings.json` |
+
+`MASTHEAD_CONFIG_DIR` overrides the folder on every platform. The file is format version 2. A 0.1.x file is backed up to `settings.json.v1.bak` once and migrated; see [Team profiles and settings](Team-Profiles-and-Settings.md#migration-from-01x). If the file cannot be read or parsed, the defaults apply, and the file is overwritten at the next change.
+
+## Every setting
+
+| Field | Type / range | Default | Meaning |
+|---|---|---|---|
+| `profiles` | list of team profiles | the built-in `claude` profile (plus `codex` once Codex is detected) | The teams: each tier's backend, model, effort ceiling, `max`, lean switch, label and colour. The source of truth for tiers. See [Team profiles and settings](Team-Profiles-and-Settings.md). |
+| `defaultProfile` | an existing profile id | `claude` | The team a new conversation uses unless the person picks another. |
+| `tiers.<lead\|opus\|sonnet\|haiku>` | `{model, effort, max}` | from the `claude` profile | Compatibility view of the `claude` profile. Changing it changes the profile. |
+| `permissionMode` | `inherit` / `default` / `acceptEdits` / `auto` / `bypassPermissions` | `inherit` | Permission mode for every agent. `inherit` leaves it to the person's own CLI settings. Claude Code receives it as its permission mode (`bypassPermissions` also sets `allowDangerouslySkipPermissions`). Codex maps it to an approval policy and sandbox (`permissions()` in `server/backends/codex/index.ts`). See [Permissions and questions](Permissions-and-Questions.md). |
+| `autoEffort` | boolean | `true` | Agents start at low effort and raise it with tools when the work needs it: the lead by itself, the others with approval. Off: every agent runs at its tier's effort. See [Thinking effort](Thinking-Effort.md). |
+| `leanSubagents` | boolean | `true` | Compatibility view: the `claude` profile's Sonnet and Haiku tiers skip the person's own MCP servers. |
+| `leanOpus` | boolean | `true` | Compatibility view: the Opus tier skips them too. |
+| `collapseReports` | boolean | `false` | Reports from agents are shown folded shut in a transcript until the person opens them. Display only. |
+| `keepAwake` | boolean | `true` | Keep the computer from sleeping while any conversation has agents working (`App.keepAwake()`). Applies at once. |
+| `maxRunMinutes` | integer 0–1440 | `0` (no limit) | The longest a sub-agent may stay live on one piece of work. |
+| `defaultCwd` | absolute path for this system | the home folder | The folder a new conversation starts in. It is updated automatically when a conversation is started in a different folder. |
+| `version` | `2` | `2` | Settings format. Not changeable. |
+
+An **MCP server** (Model Context Protocol) is an add-on that gives an agent extra tools. Masthead provides its own one, `masthead`, which holds the team tools. A "lean" agent gets only that one.
+
+The page sends changes as `{t:'settings', settings: <patch>}`. The server merges the patch over the current settings with `sanitizeSettings()`, the one place settings are checked: a malformed field keeps its current value. A built-in profile is reset with `{t:'reset_profile', id}`. The full validation table and the list of when each change takes effect are on [Team profiles and settings](Team-Profiles-and-Settings.md#validation-in-one-place).
 
 ## Environment variables
 
-| Variable | Read by | Effect |
-|---|---|---|
-| `MASTHEAD_PORT` | `port()` in `server/main.ts` | Port to use if `--port` is not given. Default 7717 (`DEFAULT_PORT`). Must be 1024–65535. |
-| `MASTHEAD_CLAUDE` | `findClaude()` | Path to the `claude` program, tried first. |
-| `MASTHEAD_DEV` | `runServer()` | `1` adds the Vite development server (port 7718) to the accepted Host and Origin values. See [Security model](Security-Model.md). |
-| `XDG_CONFIG_HOME`, `XDG_DATA_HOME` | `server/config.ts` | Base folders for settings and data (conversations and the local secret). `masthead stop` reads the secret from `XDG_DATA_HOME`, so it must match the server's; the install script writes both into the service when they are set. |
-| `PATH` | `findClaude()` | Searched for `claude`. |
+### Folders (`server/paths.ts`)
 
-### Finding Claude Code
+| Variable | Effect |
+|---|---|
+| `MASTHEAD_CONFIG_DIR` | The config folder (settings), used exactly as given. Wins over everything else. |
+| `MASTHEAD_DATA_DIR` | The data folder (conversations, the secret, remote access), used exactly as given. Wins over everything else. |
+| `XDG_CONFIG_HOME` | When set, the config folder is `$XDG_CONFIG_HOME/masthead`, on every platform. |
+| `XDG_DATA_HOME` | When set, the data folder is `$XDG_DATA_HOME/masthead`, on every platform. |
+| `APPDATA`, `LOCALAPPDATA` | Windows only: the base of the config and data folders. |
 
-`findClaude()` runs once, when `App` is created. It tries, in order: `$MASTHEAD_CLAUDE`; `claude` in each `PATH` folder; `~/.local/bin/claude`; `~/.claude/local/claude`; `/usr/local/bin/claude`; `/usr/bin/claude`. The first that exists is run with `--version` (15-second limit). The result (`path`, `version`, `error`) is sent to the page in `AppState.claude`. If none is found, starting a conversation fails with "Claude Code was not found. Install it and sign in with `claude`, then restart Masthead."
+`masthead stop` reads the local secret from the data folder, so the data-folder variables must match the ones the server was started with. Main prints: "There is no local secret (…) for this data folder, so the Masthead on port N cannot be stopped from here. Use the data folder it was started with (MASTHEAD_DATA_DIR or XDG_DATA_HOME)."
 
-### The environment agents get
+### Server (`server/main.ts`)
 
-`agentEnv()` copies the server's environment for each Claude Code process, except a named list of variables that a running Claude Code session sets about itself (`SESSION_VARS`: `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT` and ten session-describing `CLAUDE_CODE_*` names) and anything starting with `CLAUDE_CODE_BRIDGE_`. That way a Masthead server started from inside a Claude Code terminal still starts clean agents, while settings the person exports on purpose and credentials pass through untouched. It then sets `CLAUDE_AGENT_SDK_CLIENT_APP=masthead/0.1.3`, which identifies Masthead to the SDK. The full list is on [server/config.ts](Source-Config.md#agentenv).
+| Variable | Effect |
+|---|---|
+| `MASTHEAD_PORT` | The port when no `--port` is given (parsed in `server/cli.ts`); the default is 7717. See [Command-line launcher](Command-Line-Launcher.md). |
+| `MASTHEAD_DEV` | `1` adds the Vite development page (`http://localhost:<port>` and `http://127.0.0.1:<port>`) to the accepted origins (`extraOrigins`), and prints its sign-in address. See [Security model](Security-Model.md). |
+| `MASTHEAD_DEV_WEB_PORT` | The port of that Vite page; the default is 7718. An invalid value stops the server with "Invalid MASTHEAD_DEV_WEB_PORT…". |
 
-## Command-line options
+### Backends (documented on their own pages)
 
-See [Command-line launcher](Command-Line-Launcher.md): `--port N`, `--no-browser`, `--version`, `--help`.
+| Variable | Page |
+|---|---|
+| `MASTHEAD_CLAUDE`: path to the `claude` program, tried before `PATH` | [Claude backend](Source-Backend-Claude.md) |
+| `MASTHEAD_CODEX`: path to the `codex` program, tried before `PATH` | [Codex backend](Source-Backend-Codex.md) |
+| `MASTHEAD_BACKEND=fake` with `MASTHEAD_ALLOW_FAKE=1` (and `MASTHEAD_FAKE_STEP_MS`): the scripted test backend, for tests only | [Fake backend](Source-Backend-Fake.md) |
+
+`PATH` is searched for both CLIs. The environment the agents themselves receive is described on [Claude backend](Source-Backend-Claude.md).
+
+Not verified by running: this page was written from the code.
 
 ## Related pages
 
-[server/config.ts](Source-Config.md) · [Storage on disk](Storage-on-Disk.md)
+[Team profiles and settings](Team-Profiles-and-Settings.md) · [Settings code](Source-Settings.md) · [Storage on disk](Storage-on-Disk.md) · [Command-line launcher](Command-Line-Launcher.md) · [Building, testing and installing](Building-Testing-Installing.md)

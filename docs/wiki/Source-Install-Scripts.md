@@ -1,6 +1,19 @@
 # Installing (scripts and packaging)
 
-Files: `scripts/install.sh`, `scripts/uninstall.sh`, `packaging/masthead.desktop` and `packaging/masthead.svg`. They install Masthead 0.1.4 for the current user. Nothing needs root. Running `install.sh` again updates an existing installation. Everything on this page is read from the scripts, not run.
+Files: `scripts/install.sh`, `scripts/uninstall.sh`, `scripts/path.sh`, `packaging/masthead.desktop`, `packaging/masthead.svg`, `packaging/README.md`, and the outlines `packaging/homebrew/masthead.rb`, `packaging/aur/PKGBUILD` and `packaging/scoop/masthead.json`. Read on branch `next` on 2026-11-27. Everything on this page is read from the files, not run.
+
+## Which way to install
+
+From 0.2.0 there are two ways:
+
+| Way | For | Systems |
+|---|---|---|
+| `npm install -g --omit=optional <package>`, then `masthead service install` | everyone, once the package is published | Linux, macOS, Windows ([Platforms](Platforms.md#background-service)) |
+| `scripts/install.sh` from a checkout | **developers**, and 0.1.x installs until then | Linux with bash only |
+
+`masthead service install` is the cross-platform way to start Masthead at login. It writes the same systemd unit as `install.sh` on Linux, a launchd agent on macOS and a Task Scheduler task on Windows. `install.sh` does not call it yet: it still builds, copies and writes its own unit, as described below. The plan to make it "`npm pack`, `npm i -g`, `masthead service install`" is in `docs/plans/0.2.0/distribution.md` §2.2.
+
+The scripts install for the current user. Nothing needs root. Running `install.sh` again updates an existing installation.
 
 ## Where things go
 
@@ -77,12 +90,22 @@ Step by step:
 
 The service always serves port 7717. The launcher's `masthead`, `masthead stop` and `masthead status` use systemd only for the unit's port; any other port is a separate copy handled over HTTP (see [Command-line launcher](Command-Line-Launcher.md)). A clean `masthead stop` makes the server exit with code 0, so `Restart=on-failure` does not start it again.
 
+## `path.sh`
+
+`scripts/path.sh` is sourced by `install.sh` and defines one bash function, `clean_path PATH`. It returns the same list without empty entries, relative entries (anything not starting with `/`) and repeats, in the original order. A relative entry in a service's `PATH` would be looked up from wherever the service happens to run. It is a separate file so `test/launcher.test.ts` can run it without running the installer (that test is skipped where there is no bash). `cleanPath()` in `server/service/common.ts` does the same for `masthead service install`.
+
 ## The packaging files
 
-| File | Content |
-|---|---|
-| `packaging/masthead.desktop` | `Type=Application`, `Name=Masthead`, `Comment=Run a tiered team of Claude agents`, `Exec=masthead` (replaced on install), `Icon=masthead`, `Terminal=false`, `Categories=Development;Utility;`, `StartupNotify=false`, and a `#` comment saying the installer replaces `Exec`. It makes Masthead appear in the desktop's application launcher. |
-| `packaging/masthead.svg` | A 32×32 icon: a dark rounded square with three light bars of falling length, like lines of text. `Icon=masthead` finds it by name in the hicolor theme. |
+| File | Content | Status |
+|---|---|---|
+| `packaging/masthead.desktop` | `Type=Application`, `Name=Masthead`, `Comment=Run a tiered team of Claude agents`, `Exec=masthead` (replaced on install), `Icon=masthead`, `Terminal=false`, `Categories=Development;Utility;`, `StartupNotify=false`, and a `#` comment saying the installer replaces `Exec`. It puts Masthead in the Linux desktop's application launcher. | used by `install.sh` |
+| `packaging/masthead.svg` | A 32×32 icon: a dark rounded square with three light bars of falling length, like lines of text, over a thin blue line. `Icon=masthead` finds it by name in the hicolor theme. | used by `install.sh` |
+| `packaging/README.md` | Lists the outlines below and their status. Says nothing may be published until the person has decided the package name and the gates in `docs/plans/0.2.0/PLAN.md` are cleared, and that `@luxorium/masthead` is a placeholder. | – |
+| `packaging/homebrew/masthead.rb` | A tap formula (`Luxorium/homebrew-tap`): `depends_on "node"`, installs the npm tarball with `npm install *std_npm_args --omit=optional`, links the `bin`. A `service do` block runs `masthead serve`, restarts only after a crash, logs to `var/log/masthead.log`. Its test checks `masthead --version`. URL and `sha256` are placeholders. | outline, not published |
+| `packaging/aur/PKGBUILD` | `arch=(any)`, `depends=(nodejs)`, `makedepends=(npm)`, `optdepends` Claude Code. `package()` runs `npm install -g --omit=optional --prefix "$pkgdir/usr"` on the tarball, makes folders 755 and installs the licence. `sha256sums=('SKIP')` until release. | outline; to be checked against Arch's Node.js packaging rules |
+| `packaging/scoop/masthead.json` | Windows without admin: `depends: nodejs-lts`, the npm tarball as URL, an installer script running `npm install -g --omit=optional --prefix $dir`, then removing the tarball; `bin: masthead.cmd`. Hash is a placeholder. | outline, untested on Windows |
+
+Every outline installs with `--omit=optional`, which skips the Agent SDK's private Claude Code binary (see [Build configuration](Source-Build-Config.md#optional-packages)). Homebrew users would use `brew services start masthead` instead of `masthead service install`.
 
 ## What `uninstall.sh` does
 
@@ -99,11 +122,12 @@ Like the installer, it finds the unit, desktop entry and icon through `XDG_CONFI
 ## Points to be aware of
 
 - `After=network-online.target` normally has no effect in a user unit, because user units cannot wait for that system target. It does no harm.
-- The build step in the project folder uses a full `npm ci`, so the source checkout's `node_modules` normally includes the optional package. Only the installed copy omits it.
+- The build step in the project folder uses a full `npm ci`, so the source checkout's `node_modules` includes the optional packages. It must: the build tools (esbuild, rolldown) need theirs. Only the installed copy omits them.
+- `install.sh` is written for Linux (bash, systemd, a `.desktop` entry, `cp -al`). It is not meant for macOS or Windows; use the npm package and `masthead service install` there.
 - The installed launcher and unit fix the paths to Node and Claude Code, and the whole `PATH`, as found at install time. If any of them changes, run `install.sh` again. Relative and empty entries in the installer's `PATH` are left out of the unit.
 - The busy check only asks port 7717. A separate copy on another port is not checked. A copy on 7717 started without the service is not restarted. The service then exits with "Port 7717 is already in use" (`runServer` in `server/main.ts`), and `Restart=on-failure` retries it every 2 seconds until the old copy is stopped.
 - Anything on 7717 that does not answer as Masthead counts as "not busy".
 
 ## Related pages
 
-[Building, testing and installing](Building-Testing-Installing.md) · [Command-line launcher](Command-Line-Launcher.md) · [Storage on disk](Storage-on-Disk.md)
+[Building, testing and installing](Building-Testing-Installing.md) · [Platforms](Platforms.md) · [Command-line launcher](Command-Line-Launcher.md) · [Storage on disk](Storage-on-Disk.md) · [Build configuration](Source-Build-Config.md)

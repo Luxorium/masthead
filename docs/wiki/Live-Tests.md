@@ -1,0 +1,61 @@
+# Live tests
+
+**Role:** how to run the tests that drive the real agent CLIs on this machine, per backend, and what they cost. None of them is part of `npm test` or CI: each needs the CLI installed and signed in, and each spends real usage on the person's account. For everything that runs without an account, see [Tests](Source-Tests.md).
+
+| Backend | Command | What it runs | Cost |
+|---|---|---|---|
+| Claude Code | `npm run test:live` | `test/live.e2e.ts`: seven scenarios through a real `App` | Real Claude usage; every tier on `claude-haiku-5-5` |
+| Codex | `node --import tsx --test test/codex.live.ts` | The backend conformance suite on the real Codex CLI | Real, small Codex usage; `gpt-6-luna` at low effort |
+| Codex | `node --import tsx test/codex-team.live.ts` | One conversation on the generated Codex team through a real `App` | Real, small Codex usage; every tier `gpt-6-luna` at low effort |
+| Fake | (none needed) | The fake backend runs in `npm test` and in CI's browser test | Nothing: no account, no CLI. See [server/backends/fake/](Source-Backend-Fake.md) |
+
+`AGENTS.md` asks for `npm run test:live` for any change that touches agents, messaging, limits or effort. Never point a live run at the installed app's data: all three create their own temp folder and their own `App`, with no HTTP server and no port.
+
+## Claude Code: `test/live.e2e.ts`
+
+`npm run test:live` runs `node --disable-warning=CLAUDE_SDK_CAN_USE_TOOL_SHADOWED --import tsx test/live.e2e.ts` (`package.json`). Needs Claude Code found by `findClaude()` and signed in.
+
+**Set-up** (top of the file):
+
+- A fresh folder `masthead-live-…` under the system temp directory (`mkdtempSync`), used as `defaultCwd`, for conversations and for the settings file. It is left behind; the path is printed at the end.
+- `defaultSettings()`, then `setTier()` sets **every tier's model to `claude-haiku-5-5`** through the team profiles (the source of truth since 0.2.0) and the old `tiers` view; the second tier (`opus`) may run 2 at once, the third (`sonnet`) 1. `permissionMode` is `default`, and the stand-in client allows every approval request.
+- A stand-in `Client` copies each message (as the network would), records agents and items, and logs with timestamps. Each `until()` wait gives up after 4 minutes by default.
+
+**Scenarios** (the `--- n.` log lines), 20 checks, each printed as PASS or FAIL:
+
+1. **Chain:** lead → second tier → third tier; reports travel back up (three tiers used, sub-agents `done`, PINEAPPLE-OK reached the person, names `alpha`, `bravo`, `charlie` in order).
+2. **Messaging a finished agent resumes it; an effort request goes to its parent** (bravo resumed and finished again, its effort was raised to medium by its parent, the lead reported back).
+3. **Limits:** with one slot, two agents run one after the other; stopping the first from the app works.
+4. **Background command:** an agent with a background command still running is `waiting`, not finished, and reports once, after the command ends.
+5. **`wait: true`:** a question keeps the asker alive until it is answered; the question is not taken as a report.
+6. **Settings change, then a resume whose session file is gone** (the file is deleted on purpose): one fresh session, the message answered.
+7. **Automatic effort switched back** restarts the process on the same session, with no second fresh start.
+
+Finally it checks that usage (context and output) was recorded for every agent that ran a turn. Exit code 1 on any failure or time-out.
+
+**Cost and time:** real Claude usage at Haiku prices for every agent in all seven scenarios. Not run for this page, so no current timing is given.
+
+## Codex: `test/codex.live.ts`
+
+`node --import tsx --test test/codex.live.ts`. Runs `runConformance('codex (live)', …, { live: true, model, timeoutMs: 240_000 })` from `test/backend-conformance.ts` against a real `CodexBackend`: the same cases as the fake and the scripted Codex server in `npm test` (see [Backend interface](Backend-Interface.md)). In a live run the permission-request case is skipped.
+
+**Cost:** the file header says "real (small) Codex usage": the cheapest model, `MASTHEAD_CODEX_MODEL` (default `gpt-6-luna`), at low effort, a temp folder per session. Threads must be saved for the resume case, so every thread it creates is recorded (from `sessionStarted`) and deleted afterwards with `codex delete --force <id>` (`MASTHEAD_CODEX` names another `codex` binary). It prints how many threads it deleted.
+
+## Codex: `test/codex-team.live.ts`
+
+`node --import tsx test/codex-team.live.ts` (a plain script, not `--test`). A conversation on the **generated Codex team**, through the real `App`, `BackendRegistry` and signed-in Codex CLI:
+
+1. `registry.detectAll()`; checks that Codex is usable and that a Codex team was generated from its model list (at least two tiers).
+2. `App` in a temp folder `masthead-codex-team-…`; `backendsDetected()` adds the team; a settings update sets **every tier of the `codex` profile to `MASTHEAD_CODEX_MODEL` (default `gpt-6-luna`) at low effort**, with automatic effort off.
+3. Sends a new conversation with `profile: 'codex'` asking the lead to spawn "leaf" (reply PINEAPPLE) and pass its report on; waits up to 240 s.
+4. Checks: the leaf ran on the second Codex tier (`codex:1`) and finished; its report reached the lead; the lead passed it on.
+
+Afterwards it shuts the app down, disposes the registry and deletes every thread it created with `codex delete --force`. Exit 1 on failure.
+
+## When adding scenarios
+
+Check the settings the run actually uses. Live runs made before the profile fix during 0.2.0 development changed only the old `tiers` view, so agents ran on the profile defaults (Fable, Opus, Sonnet) instead of Haiku. `setTier()` in `live.e2e.ts` now changes the profiles too; set any new tier, limit or model through it (or through the profiles), not through `settings.tiers` alone.
+
+## Related pages
+
+[Tests](Source-Tests.md) · [Backend interface](Backend-Interface.md) · [server/backends/claude/](Source-Backend-Claude.md) · [server/backends/codex/](Source-Backend-Codex.md) · [server/backends/fake/](Source-Backend-Fake.md)

@@ -55,7 +55,9 @@ export class Store {
     // In the data folder beside `conversations/`; a test store in a temp folder keeps it inside.
     const marker = basename(this.root) === 'conversations' ? join(this.root, '..', 'format') : join(this.root, '.format');
     try {
-      if (readFileSync(marker, 'utf8').trim() !== String(FORMAT)) writeFileAtomic(marker, `${FORMAT}\n`);
+      // Only ever raised: a marker from a newer Masthead is left as it is.
+      const was = Number(readFileSync(marker, 'utf8').trim());
+      if (!(was >= FORMAT)) writeFileAtomic(marker, `${FORMAT}\n`);
     } catch {
       try {
         writeFileAtomic(marker, `${FORMAT}\n`);

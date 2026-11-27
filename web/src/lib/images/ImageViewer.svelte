@@ -29,6 +29,8 @@
 <div class="viewer" role="dialog" aria-modal="true" aria-label={T.images.viewer} tabindex="-1" bind:this={box} onkeydown={onKey}>
   <div class="bar">
     <span class="count">{urls.length > 1 ? T.images.of(at + 1, urls.length) : ''} {urls[at]!.w} × {urls[at]!.h}</span>
+    <!-- The link carries this socket's blob token into the new tab's history. Accepted: the token is per
+         socket and stops working about a minute after that socket closes (security review, 0.2.0). -->
     <a class="btn ghost" href={urls[at]!.src} target="_blank" rel="noopener noreferrer">{T.images.openTab}</a>
     <button class="btn ghost close" onclick={onclose} aria-label={T.images.close}>×</button>
   </div>

@@ -47,7 +47,7 @@ export interface AgentHost {
   backgroundIdle?(agent: Agent): void;
   /** Stores an image from a tool result; optional until the blob store is wired. */
   storeImage?(agent: Agent, data: string, mediaType: string): { ref: unknown } | { error: string };
-  /** The backend to run this agent on; undefined (or absent) means Claude Code at claudePath(). */
+  /** The backend to run this agent on. Undefined: the agent fails with a neutral not-found error (tests use `query`). */
   backend?(agent: Agent): Backend | undefined;
   /** Starts a Claude Code session in the default backend. Only tests set this. */
   query?: typeof query;
@@ -198,6 +198,10 @@ export class Agent {
   get tier() {
     return this.info.tier;
   }
+  /** The agent nobody started (with team profiles its tier id is not always 'lead'). */
+  get isLead(): boolean {
+    return this.info.parentId === null;
+  }
   get status(): AgentStatus {
     return this.info.status;
   }
@@ -347,7 +351,7 @@ export class Agent {
     const settings = this.host.settings();
     // The lead follows the model in the settings; other agents keep the one they were started with.
     const tier = this.tierSettings(settings);
-    if (this.tier === 'lead') this.info.model = tier.model;
+    if (this.isLead) this.info.model = tier.model;
     const ceiling = tier.effort;
     this.info.effort = settings.autoEffort ? capEffort(this.info.effort, ceiling) : ceiling;
     const first = !this.sessionId && this.seed !== null ? [this.userMessage(this.seed)] : [];
@@ -355,7 +359,7 @@ export class Agent {
     this.backlog = [];
 
     // Lean agents load only Masthead's own tools, not the person's connectors. Never the lead.
-    const lean = this.tier !== 'lead' && tier.lean;
+    const lean = !this.isLead && tier.lean;
     this.resumedFrom = this.sessionId;
     this.launchedAutoEffort = settings.autoEffort;
     this.limits.clear();
@@ -376,8 +380,8 @@ export class Agent {
           cwd: this.host.cwd,
           env: {},
           instructions: systemAppend({ tier: this.tier, name: this.name, parentName: this.host.parentName(this), settings, effort: this.info.effort, caps: { efforts: backend.caps.efforts, background: backend.caps.background, midTurnDelivery: backend.caps.midTurnDelivery } }),
-          tools: this.host.tools(this),
-          canAskPerson: this.tier === 'lead',
+          tools: this.toolsForSession(),
+          canAskPerson: this.isLead,
           permissionMode: settings.permissionMode,
           lean,
         },
@@ -412,9 +416,12 @@ export class Agent {
       thinking: (text) => this.addItem({ kind: 'thinking', text }),
       draft: (d) => this.onDraft(d),
       toolStarted: (t) => {
-        const item = this.addItem({ id: `tool-${t.id}`, kind: 'tool', name: t.name, input: t.input, done: false }) as Item & { kind: 'tool' };
+        // Backends name Masthead's team tools differently (Claude: mcp__masthead__x; Codex: x); the page
+        // and describeTool know the first form, so a bare team tool name is shown in it.
+        const name = this.teamTools.has(t.name) ? `mcp__masthead__${t.name}` : t.name;
+        const item = this.addItem({ id: `tool-${t.id}`, kind: 'tool', name, input: t.input, done: false }) as Item & { kind: 'tool' };
         this.openTools.set(t.id, item);
-        this.setActivity(describeTool(t.name, t.input));
+        this.setActivity(describeTool(name, t.input));
       },
       toolFinished: (t) => {
         const item = this.openTools.get(t.id);
@@ -447,6 +454,14 @@ export class Agent {
     };
   }
 
+  /** Names of the team tools given to the current session. */
+  private teamTools = new Set<string>();
+  private toolsForSession(): ToolDef[] {
+    const tools = this.host.tools(this);
+    this.teamTools = new Set(tools.map((t) => t.name));
+    return tools;
+  }
+
   private onSessionStarted(id: string): void {
     this.freshRetried = false;
     if (this.sessionId !== id) {
@@ -461,6 +476,8 @@ export class Agent {
     const t = findTier(settings, this.tier);
     if (t) return t;
     const old = settings.tiers[this.tier as keyof Settings['tiers']];
+    // A tier no profile lists any more (its profile was deleted): keep what the agent has.
+    if (!old) return { model: this.info.model, effort: this.info.effort, lean: false };
     const lean = (settings.leanSubagents && (this.tier === 'sonnet' || this.tier === 'haiku')) || (settings.leanOpus && this.tier === 'opus');
     return { model: old.model, effort: old.effort, lean };
   }
@@ -775,7 +792,7 @@ export class Agent {
     const ceiling = tier.effort;
     const effort = settings.autoEffort ? capEffort(this.info.effort, ceiling) : ceiling;
     if (effort !== this.info.effort) this.setEffort(effort);
-    if (this.tier === 'lead' && tier.model !== this.info.model) {
+    if (this.isLead && tier.model !== this.info.model) {
       const session = this.session;
       this.info.model = tier.model;
       this.host.agentChanged(this);

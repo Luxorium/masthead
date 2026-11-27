@@ -1,74 +1,94 @@
 # Walkthrough: stopping an agent
 
-There are four ways an agent gets stopped: the person stops one agent, the person stops everything, an agent stops one below it, and the app shuts down. Interrupting the lead is related but different: it ends the lead's turn without stopping anything. All the code is in `server/conversation.ts` and `server/agent.ts`.
+An agent is stopped in one of five ways: the person stops one agent, the person stops everything, an agent stops one below it, the run-time limit is reached, or the app shuts down. Interrupting the lead is related but different: it ends the lead's turn and stops nothing. Every stop is a `Stop` event (or, for the run-time limit, a `Tick`) run through the agent's state machine; see [State machine](State-Machine.md). The code is in `server/core/conversation.ts`, `server/core/machine.ts` and `server/runtime/agent.ts`.
 
 ## The person stops a sub-agent
 
-The person presses the ■ button on an agent in the team panel or the team map, and the browser sends `{t:'stop_agent', convId, agentId}`. `App.dispatch()` calls `conv.stopAgent(agentId, 'Stopped by the person.')`.
+The person presses stop on an agent; the page sends `stop_agent` and `App` (`server/app/app.ts`) calls `conv.stopAgent(agentId, 'Stopped by the person.')`.
 
 ```mermaid
 sequenceDiagram
-  participant B as Browser
+  participant App
   participant C as Conversation
-  participant X as Agent "bravo" (Opus)
-  participant K as its children
-  participant L as alpha, the lead (its parent)
-  B->>C: stop_agent(bravo)
-  C->>C: mark live agents of bravo's subtree in stoppedByPerson
-  C->>C: remember wasLive, owesReport
-  C->>K: stopTree(child) for each (children first, recursively)
-  C->>X: stopTree(bravo)
-  Note over X: cancelPermissions · owesReport=false ·<br/>end('stopped') · notice "Stopped by the person."
-  alt was live and owed a report
-    C->>L: report(lead, bravo, 'stopped', 'Stopped by the person.')
+  participant K as bravo's children
+  participant M as bravo's machine
+  participant X as Agent "bravo"
+  participant L as the lead (its parent)
+  App->>C: stopAgent(bravo, "Stopped by the person.")
+  C->>K: stopTree(child, why, 'person') for each (children first)
+  Note over K: each live one: cancelPermissions,<br/>apply(Stop by person, drop QUIET)
+  C->>C: cancelPermissions(bravo)
+  C->>M: apply(bravo, Stop by person)
+  M-->>C: ended(stopped); effects [dropHeld, end, notice, report or childEndedQuietly, save]
+  C->>X: dropHeld(); end('stopped', why)
+  C->>X: notice "Stopped by the person."
+  alt bravo owed a report
+    C->>L: report(lead, bravo, 'stopped', "Stopped by the person.")
   else
-    C->>C: settle(lead)
+    C->>L: settle(lead) → ChildEnded {reported:false}
   end
 ```
 
-Step by step:
+1. **Children first.** `stopAgent()` calls `stopTree(child, why, 'person')` on each child. `stopTree()` recurses into that child's children before the child itself, so the deepest agents stop first. For each live one it calls `host.cancelPermissions(id)` (open approval requests are denied with "The agent was stopped.") and `apply(child, { type: 'Stop', by: 'person', why }, { drop: QUIET })`. `QUIET` drops `report`, `childEndedQuietly` and `stopChildren`: their parents are being stopped too, so nobody is told, and the tree walk itself handles the children. Agents that are not live are skipped.
+2. **The agent itself.** `cancelPermissions(bravo)`, then `apply(bravo, { type: 'Stop', by: 'person', why })`. `apply()` recounts `bravo`'s live children (now none). In `step()` (rows 23/24), for a live sub-agent:
+   - `stoppedByPerson = true` (the epilogue emits `save`, because the mark changed). Only a live agent gets here, so a finished helper is not marked and stays reusable by the lead;
+   - `stopChildren` if any children were still live (none here);
+   - `dropHeld`;
+   - `endAs('stopped', why, 'person')`: phase `ended`, holds cleared, report debt cleared, effect `end`;
+   - `notice` with the reason;
+   - `report { status: 'stopped', text: why }` if it owed a report, else `childEndedQuietly`.
+3. **The effects** (`exec()`):
+   - `dropHeld`: forgets messages held for it in the conversation (a usage-limit pause) and calls `agent.dropHeld()`;
+   - `end` → `bravo.end('stopped', why)`: cancels a queued slot request (rejecting it with `SlotCancelled`), bumps the generation counter, clears the backlog and unanswered input, closes the session at once, releases the slot (which may start a queued agent of that tier), and sets status `stopped` with the reason as `info.error`. Then `releaseWaitsOn(bravo)`: agents waiting for `bravo`'s answer are told there is none;
+   - `notice`: the line "Stopped by the person." in its transcript;
+   - `report` → the lead gets an `<agent-report … status="stopped">` with "Stopped by the person.", which wakes it so it can react; or `childEndedQuietly` → `settle(lead)` → `ChildEnded { reported: false }` moves a lead that was only waiting on it to `idle` (a sub-agent parent would finish `done`);
+   - `save` → `host.metaChanged()`, so the mark is saved with the conversation (`stoppedByPerson` in `toStored()`).
+4. **An agent that was not live.** The machine changes nothing and returns no `report` or `childEndedQuietly`; `stopAgent()` sees that and calls `settle(parent)` itself, so a parent waiting only on it still moves on.
 
-1. `stopAgent()` finds the agent and marks it and every agent under it that was live in `stoppedByPerson` (a finished helper stays reusable by the lead). From now on other agents cannot wake them with `send_message` ("Error: the person stopped "bravo"; only they can wake it."); the person can, by messaging the agent, which clears its mark. The marks are saved with the conversation (`stoppedByPerson` in `conversation.json`), so they survive a restart; saving is asked for through `metaChanged()`. It then records whether it was live and whether it owed a report **before** stopping, because `stopTree()` clears `owesReport`.
-2. `stopTree(agent, why)` recurses into the children first, so the deepest agents stop first. For each agent that is live:
-   - `host.cancelPermissions(agent.id)` denies any approval request from it ("The agent was stopped.");
-   - `owesReport = false`;
-   - `agent.end('stopped', why)`: cancels a queued slot request (rejecting it with `SlotCancelled`), marks the agent as closing, clears its backlog and unanswered set, closes the Claude Code process at once (`q.close()`), releases its slot (which may start a queued agent of that tier), and sets status `stopped` with the reason as the error;
-   - adds an info notice with the reason.
-   Agents that are not live (already done, failed or stopped) are skipped.
+When the closed session's process exits, the runtime's `onExited()` sees `closing` set and reports no lost process.
 
-   Stopping also ends a usage-limit pause: `agentChanged()` clears pause state when an agent stops being live, and `stopAgent()` on the lead (which stays live) calls `clearPause()`. Messages held for a paused agent are dropped (`dropHeld()`).
-3. If the agent was live and owed a report, its parent gets a report with status `stopped` and the text "Stopped by the person.". That wakes the parent, so it can react. Otherwise `settle(parent)` moves a parent that was only waiting on it to `idle` (lead) or `done`.
+An agent stopped while queued, or while its old process was exiting, is never launched afterwards: `end()` bumped the generation counter, so when the slot (or the exit) arrives, `ensureProcess()` does not call `launch()` and gives back a slot granted in the meantime.
 
-When the process ends, `consume()` sees `closing` is set and does not report a lost process.
-
-An agent stopped while it was still queued, or while its old process was exiting, is never launched afterwards. `end()` bumps the agent's generation counter; when the slot (or the old process's exit) arrives, `ensureProcess()` sees the counter changed, does not call `launch()`, and gives back a slot that was granted in the meantime. Without this, stopping one queued agent could free a slot that went straight to another agent already being stopped.
+After the stop, other agents cannot wake `bravo`: `message()` returns 'Error: the person stopped "bravo"; only they can wake it.' The person can, by messaging it: `userSend()` applies `Woken { by: 'person' }`, which clears the mark.
 
 ## The person stops the lead or everything
 
-- `{t:'stop_agent'}` with the lead's id: `stopTree()` on each of the lead's children, then `lead.interrupt()`, then `settle(lead)`. The lead keeps its session and process. `interrupt()` only acts if the lead is `running` (its turn then ends as interrupted); if the lead was `waiting` on those children, `settle()` moves it to `idle`.
-- `{t:'stop_all'}` (the "Stop everything" button): `stopAll()` does the same, then calls `settle(lead)` once more.
+- `stop_agent` with the lead's id: `stopTree()` on each child (`by: 'person'`, so every live agent below is marked), then `lead.interrupt()`, then `apply(lead, Stop by person)`. For the lead the machine does not end anything: it clears a usage-limit pause, emits `dropHeld`, and runs `released()`, so a lead that was `waiting` on its children (and is not busy) goes `idle` with `setEffortLow`. The lead keeps its session. `interrupt()` acts only while the lead is `running`; its turn then ends as interrupted (see below).
+- `stop_all` ("Stop everything"): `stopAll()` calls `stopAgent(lead, 'Stopped by the person.')`, then `settle(lead)` once more.
 
-No reports are sent in either case: `stopTree()` clears `owesReport` and the lead is not told. Every sub-agent that was live is marked in `stoppedByPerson`, so the lead cannot wake them again; the person can.
+No reports are sent: the children are stopped with `QUIET`, and the lead is not told.
 
 ## Interrupting the lead
 
-`{t:'interrupt'}` → `interruptLead()` → `lead.interrupt()`: sets `interrupted` and calls the SDK's `q.interrupt()`. Claude Code ends the turn; the `result` arrives; `handleResult()` ignores any error on an interrupted turn; `turnEnded()` adds the notice "Stopped." and sets the lead `idle` or `waiting`. Agents the lead started keep working.
+`interrupt` → `interruptLead()` → `lead.interrupt()` → `session.interrupt()`. The backend ends the turn; `handleResult()` passes `interrupted: true` to `turnEnded()`; `TurnEnded` adds the notice "Stopped." and sets the lead `waiting` if something holds it, else `idle`. Agents waiting for the lead's answer are told at once that there is no answer (`checkWaitsOn()` with `interrupted`). Agents the lead started keep working.
 
 ## An agent stops one below it
 
-An agent that can start others has `stop_agent`. `Conversation.stop(caller, name)`:
+Agents with a child tier have `stop_agent`. `Conversation.stop(caller, name)`:
 
 1. finds the target (`parent` means the caller's parent, which then fails the next check);
-2. requires `isAncestor(caller, target)`: only agents started by the caller or below it;
-3. returns "\"name\" is not running (status)." if it is not live;
-4. clears `owesReport` (the caller asked for it, so no report is needed), `stopTree(target, 'Stopped by "caller".')`. This does not mark the target in `stoppedByPerson`, so agents may wake it again later;
-5. if the target's parent is not the caller (a grandchild was stopped), `settle()`s that parent;
-6. returns "Stopped "name" and everything under it."
+2. requires `isAncestor(caller, target)`, else "Error: you can only stop agents started by you or below you.";
+3. returns '"name" is not running (status).' if it is not live;
+4. `stopTree()` on each of the target's children (`by: 'agent'`, `QUIET`), `cancelPermissions(target)`, then `apply(target, { type: 'Stop', by: 'agent', why: 'Stopped by "caller".' })`. The machine ends it as `stopped` (`by: 'agent'`), does not mark it, and emits `childEndedQuietly` instead of a report (row 24): the caller asked for it. The shell runs `settle()` on the target's parent, which moves that parent on if it was waiting only on the target;
+5. returns 'Stopped "name" and everything under it.'
+
+Agents may wake an agent stopped this way later with `send_message`.
+
+## The run-time limit
+
+With `maxRunMinutes` set, the 30-second `tick()` applies `Tick` to every agent. A live sub-agent whose run clock (`ranMs()`: time `running` with no approval open) is past the limit is stopped (row 21): `stopChildren` with the reason, `dropHeld`, the notice "Stopped after N minutes: the run-time limit set by the person.", `end` (`by: 'limit'`), and a report with status `stopped` if owed, else `childEndedQuietly`. The lead and paused agents are never stopped this way.
 
 ## The app shuts down
 
-`App.shutdown()` (from Ctrl+C, SIGTERM, `masthead stop` or `POST /api/shutdown`) denies all pending approvals, then `Conversation.shutdown()` for each conversation: live sub-agents are ended as `stopped` with "Masthead was closed while this agent was working."; every other agent, including the lead, gets `dispose()`, which closes any process without changing the recorded status; then the lead is set to `idle`. Pending saves are flushed to disk. `server/main.ts` exits 300 ms later.
+`App.shutdown()` (from Ctrl+C, SIGTERM, SIGHUP, or `POST /api/shutdown`, which `masthead stop` sends) denies every pending approval with "Masthead is shutting down.", then calls `Conversation.shutdown()` on each conversation:
 
-## Related pages
+1. it leaves the sleep watcher and stops the 30-second timer;
+2. each live sub-agent gets `apply(a, { type: 'Stop', by: 'restart', why: 'Masthead was closed while this agent was working.' }, { drop: SHUTDOWN })`. `SHUTDOWN` drops `report`, `childEndedQuietly`, `stopChildren` and `notice`; `dropHeld` and `end` still run, so the runtime closes the process and releases the slot, the status becomes `stopped` with that error, and the machine agrees;
+3. every other agent, the lead included, gets `dispose()`: its process is closed without changing its status;
+4. the lead is set to `idle` if it was not (a `Status: idle` event follows).
 
-[Team rules](Team-Rules.md#stopping) · [Agent life cycle](Agent-Life-Cycle.md) · [Command-line launcher](Command-Line-Launcher.md)
+`App` then flushes pending saves to disk, and `server/main.ts` exits 300 ms later. On the next start, the stored error text is how the lead learns which agents were cut off; see [Restarting the app](Walkthrough-Restarting-the-App.md).
+
+What was not verified by running: written from the code and the unit tests in `test/conversation.test.ts` (stop, stopAll, "stopping drops what is held …", "fix: shutdown ends working agents through the machine; …"); no real process was stopped.
+
+Related pages: [Team rules](Team-Rules.md#stopping) · [State machine](State-Machine.md) · [Agent life cycle](Agent-Life-Cycle.md) · [Source: core/conversation.ts](Source-Core-Conversation.md) · [Command-line launcher](Command-Line-Launcher.md)

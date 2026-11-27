@@ -54,6 +54,8 @@ const APPROVE = new Set([...READ, 'permission', 'interrupt', 'stop_agent', 'stop
 const LOCAL_ONLY = new Set(['device_decision', 'device_revoke', 'device_role', 'remote_settings', 'remote_audit', 'shutdown']);
 
 export function allowedMessage(role: Role | 'local', type: string): boolean {
+  // A device may always forget itself; the local browser has nothing to forget.
+  if (type === 'forget_me') return role !== 'local';
   if (role === 'local') return true;
   if (LOCAL_ONLY.has(type)) return false;
   if (role === 'full') return true;

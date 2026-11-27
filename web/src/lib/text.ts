@@ -263,6 +263,15 @@ export const T = {
     hideDetails: 'Hide details',
   },
 
+  device: {
+    title: 'This device',
+    staysSignedIn: 'This browser stays signed in to Masthead until you forget it here, or the computer removes it.',
+    forget: 'Forget this device',
+    forgetHelp: 'Signs this browser out and removes it from the computer’s list. Use it on a phone or computer that is not yours.',
+    roleRead: 'This device can follow the chats but not change anything.',
+    roleApprove: 'This device can follow the chats and answer questions and permission requests, but not send messages or change settings.',
+  },
+
   errors: {
     notConnected: "Masthead isn't answering. Check that it is running, then try again.",
   },

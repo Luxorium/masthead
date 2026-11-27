@@ -120,7 +120,8 @@ try {
   // Simple by default: few controls on first load, no team jargon, example prompts that fill the box.
   const firstLoad = await page.evaluate(() => {
     const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-    const controls = [...document.querySelectorAll('button:not([disabled]), textarea, select, input:not([type=hidden]), a[href]')].filter(visible);
+    // The skip link sits off screen until focused, so it is not counted.
+    const controls = [...document.querySelectorAll('button:not([disabled]), textarea, select, input:not([type=hidden]), a[href]:not(.skip)')].filter(visible);
     return { count: controls.length, names: controls.map((c) => c.getAttribute('aria-label') || c.textContent?.trim() || c.tagName), text: document.body.innerText };
   });
   log(`first load: ${firstLoad.count} controls: ${firstLoad.names.join(' | ')}`);
@@ -163,6 +164,16 @@ try {
     check('the remote access section renders', (await page.getByRole('status').filter({ hasText: /Tailscale|Off/ }).count()) >= 1);
   } else log('no remote access section (the server sent no state.remote)');
   await axeCheck(page, 'settings view');
+  // Teams (bravo): editing the built-in team refuses an empty name in plain words, then Cancel.
+  const editClaude = menu.getByRole('button', { name: /^Edit Claude/ });
+  if (await editClaude.count()) {
+    await editClaude.first().click();
+    const nameField = menu.getByLabel(/Team name/).first();
+    await nameField.fill('');
+    await menu.getByRole('button', { name: 'Save team' }).click();
+    check('the team editor refuses an empty name in plain words', (await menu.getByRole('alert').filter({ hasText: 'Give the team a name.' }).count()) === 1);
+    await menu.getByRole('button', { name: /^Cancel/ }).first().click();
+  } else log('no "Edit Claude" button in Teams');
   await menu.getByRole('button', { name: 'Close settings' }).click();
   await menu.waitFor({ state: 'detached' });
 
@@ -243,8 +254,26 @@ try {
   check('the stepper changes the limit', raised !== before && lowered === before);
   await axeCheck(page, 'chat with the team panel');
 
+  // Open the map; if the first click does not take (seen rarely on the fake backend, cause not found),
+  // try once more and say so in the log.
   await page.getByRole('button', { name: 'Show as a map' }).click();
-  await page.waitForSelector('.map .card >> text=helper job');
+  if (!(await page.locator('.map').waitFor({ timeout: 3000 }).then(() => true, () => false))) {
+    const why = await page.evaluate(() => ({
+      map: !!document.querySelector('.map'),
+      mapBox: document.querySelector('.map')?.getBoundingClientRect().height ?? -1,
+      cards: [...document.querySelectorAll('.map .card .name')].map((n) => n.textContent),
+      backToChat: !!document.querySelector('aside.right .link')?.textContent?.includes('Back to the chat'),
+      main: document.querySelector('main')?.innerText.slice(0, 120),
+    }));
+    log(`the map did not show within 3 s: ${JSON.stringify(why)}`);
+    if (!why.backToChat) await page.getByRole('button', { name: 'Show as a map' }).click();
+  }
+  // The third-level helper is started by a second-level one; slow CI runners can take a while.
+  const helperShown = await page.waitForSelector('.map .card >> text=helper job', { timeout: fake ? 90_000 : 30_000 }).then(() => true, () => false);
+  if (!helperShown) {
+    log(`map cards when "helper job" was missing: ${JSON.stringify(await page.locator('.map .card').allInnerTexts())}`);
+    throw new Error('"helper job" never appeared on the map');
+  }
   // Lead > shell job > helper job: a card three levels deep in the tree.
   check('the map shows three levels', (await page.locator('.map .tree.root > li > ul > li > ul > li > .card', { hasText: 'helper job' }).count()) === 1);
   const names = await page.locator('.map .card .name').allTextContents();
@@ -259,8 +288,15 @@ try {
     if (await page.locator('.map .preview').waitFor({ timeout: 3000 }).then(() => true, () => false)) break;
   }
   await page.waitForSelector('.map .preview', { timeout: 5000 });
-  // Real content, not "Loading…": at least one chat line, or "Nothing yet.".
-  await page.waitForSelector('.map .preview .p-line, .map .preview .p-empty:has-text("Nothing yet")', { timeout: 10_000 }).catch(() => {});
+  // Real content, not "Loading…": at least one chat line, or "Nothing yet." Hover again once if the
+  // first preview stays empty (its fetch can be dropped when a hover retry moved away).
+  const content = '.map .preview .p-line, .map .preview .p-empty:has-text("Nothing yet")';
+  if (!(await page.waitForSelector(content, { timeout: 5_000 }).then(() => true, () => false))) {
+    log(`the preview stayed empty (${JSON.stringify(await page.locator('.map .preview').innerText().catch(() => ''))}); hovering again`);
+    await page.mouse.move(5, 5);
+    await helperCard.hover();
+    await page.waitForSelector(content, { timeout: 10_000 }).catch(() => {});
+  }
   await page.screenshot({ path: `${shots}/3-map-${scheme}.png` });
   check(
     'hovering an agent previews its chat',

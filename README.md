@@ -1,133 +1,135 @@
 # Masthead
 
-Masthead is a local web app for working with a team of Claude agents instead of a single chat.
-You talk to one lead agent. When the work calls for it, the lead brings in more agents, and those
-can bring in their own:
+Masthead is an app on your own computer that runs a team of AI helpers for you, in your web browser.
+You talk to one main assistant; when the work calls for it, it brings in helpers, using the Claude
+Code (or Codex) you have already installed and signed in to.
 
-| Tier | Model | Started by |
-|---|---|---|
-| Lead | Fable 5.2 | you |
-| Second | Opus 5.5 | the lead |
-| Third | Sonnet 5.5 | an Opus agent |
-| Fourth | Haiku 5.5 | a Sonnet agent |
+> **Masthead 0.2.0 is in progress** (branch `next`). These notes describe 0.2.0. Masthead 0.1.4 is
+> the current release.
 
-A panel on the right sets how many agents of each tier may run at once. Agents report back to
-whoever started them, can message each other by name, and start at low thinking effort, raising it
-only when the work needs it.
+## Screenshots
 
-Masthead runs the Claude Code that is already installed and signed in on your machine. It has no
-login of its own and never sees your credentials.
+> **TODO:** take these pictures and save them under `docs/images/`, then remove this note.
 
-## Requirements
+- `![New chat](docs/images/new-chat.png)`: a new chat, with "What are we working on?" and the message box.
+- `![A chat with helpers](docs/images/chat-with-helpers.png)`: the main assistant working with two helpers.
+- `![The team](docs/images/team.png)`: the Team panel showing who is working.
+- `![Team map](docs/images/team-map.png)`: the team shown as a map.
+- `![Permission request](docs/images/permission-request.png)`: a card asking "Allow" or "Deny".
+- `![Pictures](docs/images/pictures.png)`: a picture attached to a message.
+- `![Settings](docs/images/settings.png)`: the Settings page.
+- `![Phone](docs/images/phone.png)`: Masthead on a phone over Tailscale.
 
-- Linux
-- Node.js 22 or newer
-- [Claude Code](https://code.claude.com/docs), installed and signed in (`claude` works in a terminal)
+## What you need
+
+- A computer running Windows, macOS or Linux.
+- [Node.js](https://nodejs.org) 22 or newer.
+- [Claude Code](https://code.claude.com/docs/en/setup), installed and signed in with your own account.
+  (Or Codex: see [Teams and agent programs](docs/guide/teams-and-agent-programs.md).)
+- Git, while Masthead is only available from source.
+
+**macOS and Windows support has not yet been checked on real machines.** It is built and tested
+automatically on all three systems, but until the [release checklist](docs/plans/0.2.0/release-checklist.md)
+has been done by a person on a real Mac and a real Windows PC, treat it as untested there.
 
 ## Install
 
-Packages for npm, Homebrew, the AUR and Scoop, with macOS and Windows support, are being prepared
-for 0.2.0 (`packaging/`, not published yet). Until then, install from source on Linux:
+Masthead will be installable with `npm i -g --omit=optional @luxorium/masthead` **once it is
+published**. That package is not published yet and its name may change. Until then, install from
+source as below. Full steps with more detail: [docs/guide/installing.md](docs/guide/installing.md).
 
-```sh
-git clone https://github.com/Luxorium/masthead
-cd masthead
-scripts/install.sh
-masthead
-```
+### Windows
 
-The script builds the app, installs it under `~/.local/lib/masthead`, adds a `masthead` command to
-`~/.local/bin`, registers a user service that starts at login, and adds a launcher entry. It needs
-no root. Run it again to update; if agents are working it asks before restarting (or pass `--force`).
-`scripts/uninstall.sh` removes it and keeps your conversations.
+1. Install Node.js 22 or newer and Git.
+2. Install Claude Code: open PowerShell and run `irm https://claude.ai/install.ps1 | iex`
+   (or `winget install Anthropic.ClaudeCode`).
+3. Sign in: run `claude` once and follow the steps, then close it.
+4. Install Masthead from source, in PowerShell:
+   ```powershell
+   git clone https://github.com/Luxorium/masthead
+   cd masthead
+   git switch next
+   npm ci
+   npm pack
+   npm i -g --omit=optional .\luxorium-masthead-<version>.tgz
+   ```
+   (`<version>` is the number in the file name `npm pack` printed.)
+5. Run `masthead`. Your browser opens on Masthead.
+6. Optional: run `masthead service install` so Masthead starts when you log in.
 
-`masthead` opens the app in your browser at `http://127.0.0.1:7717` and signs that browser in (see
-Security). A tab opened some other way asks you to open it with `masthead` once. If your browser is
-a snap or flatpak that cannot open the small sign-in file `masthead` hands it, run
-`masthead --no-browser` in a terminal and open the address it prints.
+### macOS
 
-| Command | What it does |
-|---|---|
-| `masthead` | Start it if needed and open the browser, signed in |
-| `masthead serve` | Run the server in this terminal |
-| `masthead status` | Say whether it is running |
-| `masthead stop` | Stop it; agents that are working are stopped too |
+1. Install Node.js 22 or newer (for example `brew install node`) and Git.
+2. Install Claude Code, for example `brew install --cask claude-code`
+   (other ways: [Claude Code setup](https://code.claude.com/docs/en/setup)).
+3. Sign in: run `claude` once in Terminal and follow the steps, then close it.
+4. Install Masthead from source, in Terminal:
+   ```sh
+   git clone https://github.com/Luxorium/masthead
+   cd masthead
+   git switch next
+   npm ci
+   npm pack
+   npm i -g --omit=optional ./luxorium-masthead-*.tgz
+   ```
+5. Run `masthead`. Your browser opens on Masthead.
+6. Optional: run `masthead service install` so Masthead starts when you log in.
 
-`--port N` or `MASTHEAD_PORT` changes the port. The installed service always serves 7717; on any
-other port `masthead` starts and stops a separate copy of its own. That copy reads its secret from
-its own data folder, so open and stop it with the same `XDG_DATA_HOME` it was started with;
-`masthead` says so if they differ.
+### Linux
 
-## Using it
+1. Install Node.js 22 or newer and Git from your distribution.
+2. Install Claude Code ([setup](https://code.claude.com/docs/en/setup)).
+3. Sign in: run `claude` once in a terminal and follow the steps, then close it.
+4. Install Masthead from source:
+   ```sh
+   git clone https://github.com/Luxorium/masthead
+   cd masthead
+   git switch next
+   scripts/install.sh
+   ```
+   The script installs Masthead for your user only (no root), adds the `masthead` command, a
+   launcher entry, and a service that starts Masthead when you log in.
+5. Run `masthead`. Your browser opens on Masthead.
 
-- **Conversations** are on the left. A new one starts in the folder you pick under the message box;
-  the agents work in that folder.
-- **The team panel** on the right holds the limits. "At once" is how many agents of that tier may
-  run at the same time across every conversation; more than that wait in a queue. Setting a tier to
-  Off stops the tier above from starting any.
-- **Effort.** With automatic effort on, every agent starts at Low. The lead raises its own when a
-  task needs careful thought. Any other agent has to ask the agent that started it, and an agent can
-  set the effort of anyone below it. "Effort up to" is the ceiling for a tier. The levels are Low,
-  Medium, High and Extra.
-- **The team map** shows the agents as a tree with what each one is doing. Click an agent to read
-  its transcript, or to message it directly.
-- **Approvals.** When an agent wants to do something that needs your say, a card appears above the
-  message box. "Permissions" in the team panel chooses how often that happens; by default it follows
-  your own Claude Code settings.
-- **Stopping.** The square button stops the lead's current turn. "Stop everything" also stops every
-  agent it started. Each agent has its own stop button.
+If the browser opens but asks you to "Open Masthead with the `masthead` command", run
+`masthead --no-browser` in a terminal and open the address it prints. More in
+[Troubleshooting](docs/guide/troubleshooting.md).
 
-Closing the browser tab stops nothing: agents keep working and the page catches up when you return.
-Stopping Masthead itself stops them.
+## Your first chat
 
-## Where things are kept
+1. Run `masthead`.
+2. Under the message box, choose the **Folder** to work in. Agents can read and change files in this folder.
+3. Type what you want in your own words in the box that says "Ask for anything", and press **Send** (or Enter).
+4. Watch the reply. When helpers join, **Team** at the top shows how many are working.
+5. If a card asks for permission, choose **Allow** or **Deny**.
+6. To stop, press **Stop**.
 
-| What | Where |
-|---|---|
-| Settings | `~/.config/masthead/settings.json` |
-| Conversations | `~/.local/share/masthead/conversations/` |
-| The local secret | `~/.local/share/masthead/secret` |
-| Claude Code's own session files | `~/.claude/` (Masthead resumes these by id) |
+Closing the browser tab stops nothing: the helpers carry on, and the page catches up when you come
+back. Step by step: [Your first chat](docs/guide/first-chat.md).
 
-## Security
+## Help
 
-The server listens on `127.0.0.1` only. It can run commands as you, so it also refuses requests that
-a web page elsewhere could trick your browser into sending: the `Host` header must name the server,
-and only Masthead's own page may open the live connection.
+- The guide: [docs/guide](docs/guide/README.md).
+- Run `masthead doctor` in a terminal: it checks your set-up and says how to fix what is wrong.
+- Report a problem: [GitHub issues](https://github.com/Luxorium/masthead/issues).
+- Report a security problem privately, as described in [SECURITY.md](SECURITY.md).
 
-On top of that, the live connection and `masthead stop` need a secret. It is created once in
-`~/.local/share/masthead/secret`, which only you can read, so other users on the machine cannot
-drive Masthead. `masthead` signs the browser in without putting the secret on any command line: it
-writes a page only you can read (in `$XDG_RUNTIME_DIR/masthead`, else `~/.local/share/masthead/open`)
-that forwards to `http://127.0.0.1:7717/#key=…`, opens that file, and deletes it a minute later. The
-key is in the part after `#`, which a browser never sends to a server. The page keeps it for that
-address, removes it from the address bar and sends it when it connects. Any program running as you
-can still read the secret, as it could run `claude` itself.
+## Costs and usage
 
-## Usage and limits
+Masthead itself is free, but every helper uses your own Claude (or Codex) plan or API key exactly as
+the program would on its own, and a team uses it much faster than a single chat. Masthead shows your
+usage under the chat list and warns you near your limit; fewer helpers at a time and shorter thinking
+time keep usage down (see [Helpers and the team](docs/guide/helpers-and-team.md)).
 
-Every agent uses your Claude plan or API key exactly as Claude Code does. A large team spends usage
-quickly; the limits and the low default effort are there to keep that in hand.
+## Contributing
 
-## Development
+See [CONTRIBUTING.md](CONTRIBUTING.md). How the code works is described in [docs/wiki](docs/wiki/Home.md).
 
-```sh
-npm ci               # a plain install; the build tools need their optional platform packages
-npm run check        # type-check server and page
-npm test             # unit tests
-npm run build
-npm start            # serve the build on port 7717
-npm run test:live    # end-to-end against the real Claude Code, using Haiku for every tier
-```
+## Not affiliated
 
-`npm run dev:web` serves the page with hot reload on port 7718; start the server with
-`MASTHEAD_DEV=1 npm start` beside it. The server prints the address of the dev page with its key.
-To run beside an installed Masthead, pick other ports and folders for both:
-`MASTHEAD_DEV=1 MASTHEAD_DEV_WEB_PORT=7720 npm start -- --port 7790` and
-`MASTHEAD_PORT=7790 MASTHEAD_DEV_WEB_PORT=7720 npm run dev:web` (plus your own `XDG_CONFIG_HOME` and
-`XDG_DATA_HOME` for the server). The design of the code is described in `docs/wiki/`.
+Masthead is an independent project. It is not affiliated with, made by or endorsed by Anthropic or
+OpenAI. Claude and Claude Code are Anthropic's; Codex is OpenAI's.
 
-Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately
-as described in [SECURITY.md](SECURITY.md).
+## Licence
 
-Masthead is an independent project. It is not made or endorsed by Anthropic.
+MIT. See [LICENSE](LICENSE).

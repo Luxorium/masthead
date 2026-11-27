@@ -95,7 +95,12 @@ export async function serveRemote(
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!access.enabled) return json(res, 503, { code: 'refused', message: 'Remote access is switched off on that computer.' });
     if (!fromServe(req)) return json(res, 403, { code: 'refused', message: 'Forbidden' });
-    const url = new URL(req.url ?? '/', 'http://x');
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', 'http://x');
+    } catch {
+      return json(res, 400, { code: 'invalid', message: 'Bad request' });
+    }
     if (url.pathname === '/api/health') return json(res, 200, { name: 'masthead' });
     if (url.pathname === '/api/shutdown') return json(res, 404, { code: 'not_found', message: 'Not found' });
 
@@ -168,7 +173,12 @@ export async function serveRemote(
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();
     };
-    const url = new URL(req.url ?? '/', 'http://x');
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', 'http://x');
+    } catch {
+      return refuse(); // a request line no URL parser accepts
+    }
     if (!access.enabled || url.pathname !== '/ws' || !fromServe(req) || req.headers.origin !== origin) return refuse();
     decide(req, offeredToken(req)).then(
       (d) => {
@@ -178,6 +188,7 @@ export async function serveRemote(
           attach(app, ws, tokens, {
             role: d.role,
             onClient: (client) => {
+              client.deviceId = d.device.nodeId;
               const set = sockets.get(d.device.nodeId) ?? new Set();
               const entry = { ws, client };
               set.add(entry);

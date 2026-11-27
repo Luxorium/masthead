@@ -1,59 +1,85 @@
 # Walkthrough: an agent starting another
 
-This follows the lead (`alpha`) starting its first Opus agent with `spawn_agent`; that agent will be named `bravo`. The same code runs when an Opus starts a Sonnet or a Sonnet starts a Haiku.
+This follows the lead (`alpha`) starting its first agent with `spawn_agent`, in a conversation on the Claude team profile; the new agent will be named `bravo` and run on the second tier (`opus`). The same code runs at every level, on every profile: an agent may only start the tier directly below its own in its profile. It describes version 0.2.0 (branch `next`). Line numbers are file-relative and were checked on 2026-11-27; the code was still changing, so search for the function name if a line has moved.
 
 ## The path
 
 ```mermaid
 sequenceDiagram
-  participant CC as Lead's Claude Code
-  participant T as tools.ts (in-process MCP)
+  participant L as Lead's session (backend)
+  participant T as Team tools (tools.ts ToolDef)
   participant C as Conversation
-  participant N as New Agent (Opus)
+  participant M as machine.ts
+  participant N as Agent "bravo" (runtime)
   participant S as Scheduler
-  participant CC2 as New Claude Code process
-  CC->>T: mcp__masthead__spawn_agent {title, task, effort?}
-  Note over CC,T: canUseTool → App allows mcp__masthead__* at once
+  participant R as App.backend() → registry
+  participant B as bravo's session
+  L->>T: spawn_agent {title, task, effort?}<br/>(Claude: mcp__masthead__spawn_agent; Codex: item/tool/call)
   T->>C: spawn(alpha, title, task, effort)
-  C->>C: checks; next phonetic name (bravo); clean title; start effort
-  C->>N: new Agent(info: queued, owesReport, seed = task)
-  C->>N: addItem(inbound task) ; start()
-  N->>S: acquire('opus', id, owner = lead id)
-  C-->>T: "Started Opus 5.5 agent "bravo" (title) at low effort…"
-  T-->>CC: tool result (the lead carries on)
-  alt slot free
-    S-->>N: granted
-  else all Opus slots busy
-    N->>N: status queued (broadcast)
+  C->>C: checks; next name (bravo); title; start effort
+  C->>M: initial(false): queued, owes a report
+  C->>N: new Agent(info, seed = task); addItem(inbound task); start()
+  C-->>T: "Started … agent "bravo" … at low effort…"
+  T-->>L: tool result (the lead carries on)
+  N->>S: acquire(tier, id, owner = alpha)
+  alt slot free and nobody queued
+    S-->>N: granted at once
+  else
+    N->>N: status queued (published)
     S-->>N: granted later by pump()
   end
-  N->>CC2: launch(): query() with seed as first message
-  CC2-->>N: init, stream, …
+  N->>R: backendFor() → host.backend(tier)
+  R-->>N: the Backend for the tier's `backend` id
+  N->>B: backend.open(spec, events); send(seed)
+  B-->>N: sessionStarted, turns…, turnEnded
+  N->>C: turnEnded → machine TurnEnded → done, report effect
+  C->>L: report(): inbound item + <agent-report> delivered to the lead
 ```
 
 ## Step by step
 
-1. **The call.** The lead's model calls `spawn_agent` with a `title` (a few words on the job, e.g. "Review the API layer"), a `task` and optionally an `effort`. Claude Code sends the call to the `masthead` MCP server built by `teamTools()` in `server/tools.ts`. It asks `canUseTool` first; `App.askPermission()` allows any `mcp__masthead__` tool without asking the person. The zod schema has already checked lengths (title ≤ 60, task ≤ 60,000) and that `effort` is one of the four levels.
-2. **`Conversation.spawn(parent, rawName, task, effort)`** (`server/conversation.ts`):
-   - `CHILD_TIER['lead']` is `opus`. A Haiku parent would get "Error: Haiku agents cannot start other agents." (it would not have the tool in the first place).
-   - If the Opus `max` is 0: "Error: Opus 5.5 agents are switched off in the settings. Do this work yourself." ("Opus 5.5" is `label('opus')`, made from the configured model id.)
-   - At 200 agents: an error suggesting reuse via `send_message`. Empty task: an error.
-   - **Name:** `agentName(agents.size)`. The conversation holds only `alpha` so far, so this is `agentName(1)` = `bravo`; if that name were somehow taken it would try the next one.
-   - **Title:** whitespace collapsed, trimmed, at most 60 characters.
-   - **Effort:** with automatic effort on, `capEffort(effort ?? 'low', settings.tiers.opus.effort)`; off, the Opus level.
-   - **Info:** `newInfo()` with the name and title, status `queued`, `parentId` = the lead, the task clipped to 400 characters as a preview, and the Opus model from settings.
-   - **Agent:** `new Agent(info, this, { owesReport: true, seed: task })`. The full task is the seed: the first user message of its new session.
-   - **Queue prediction:** `willQueue` = Opus running ≥ max, or anything already queued.
-   - `addAgent()` broadcasts the new agent; an `inbound` item with `via: 'task'` records the task in its transcript; `agent.start()`; `touch()`.
-   - Returns "Started Opus 5.5 agent "bravo" (Review the API layer) at low effort. Its report will arrive as a message when it finishes.", with "(queued: N may run at once)" added when predicted. The tool description told the lead that the reply names the new agent.
-3. **The lead carries on.** The tool result goes back to the lead immediately; the lead's turn continues. It may start more agents or end its turn, in which case it becomes `waiting` because it has a live child ([Agent life cycle](Agent-Life-Cycle.md)).
-4. **Slot.** `Agent.start()` → `ensureProcess()` → `scheduler.acquire('opus', id, leadId)`. If a slot is free and nobody is queued, it is granted at once and the agent never shows `queued`. Otherwise it shows `queued` and waits; when a slot frees, `pump()` picks the waiter whose parent has the fewest running Opus agents ([Slot scheduling](Slot-Scheduling.md)). If the person sets Opus to Off while `bravo` waits, the request is refused with `TierOff` and `bravo` fails, reporting to the lead. If `bravo` is stopped while it waits, `ensureProcess()` never launches it, even when the slot was granted in the same moment, and gives the slot back.
-5. **Launch.** `launch()` creates the input channel with the seed first, builds options with the Opus model, the starting effort, the conversation folder, the team tools for an Opus (`send_message`, `list_agents`, `spawn_agent` for Sonnets, `stop_agent`, and with automatic effort `set_effort` and `set_agent_effort`), `AskUserQuestion` disallowed, and the system prompt from `systemAppend()`: "You are "bravo", an Opus 5.5 agent …", naming its parent and its real starting effort ("You run at low thinking effort"), and telling it to reuse finished Sonnets with `send_message` when they already have the context. Status becomes `running`.
-6. **On the page.** The `{t:'agent'}` broadcast for the new agent makes "Bravo" appear in the team panel's agent tree and in the team map under Alpha, with its title and the status Queued or Working. The lead's transcript shows the tool call as "Starting an agent: Review the API layer" while it runs and "Started an agent: …" once its result is in (`toolLine()`).
-7. **Session.** The `init` message gives the session id; the seed is dropped since it is now in the session. From here the agent works like any other ([Sending a message](Walkthrough-Sending-a-Message.md), step 5).
+### 1. The tool reaches the agent's backend
 
-When it finishes, its report goes back up: [A report coming back](Walkthrough-Report-Coming-Back.md).
+When an agent's session is opened, `Agent.launch()` (`server/runtime/agent.ts`, line 341) passes `tools: this.toolsForSession()` (line 383), which asks its host for `tools(agent)`. `Conversation.tools()` (`server/core/conversation.ts`, line 449) returns `teamToolDefs(agent, this)` (`server/core/tools.ts`, line 33): backend-neutral `ToolDef`s (name, description, JSON Schema, `run`), bound to that agent. `spawn_agent` (line 59) is added only when `childTier()` finds a tier below the agent's in its profile; its `run` calls `team.spawn(agent, title, task, effort)` (line 69). Its schema: `title` 1–60 characters, `task` 1–60,000, `effort` one of the levels the backend has (left out when it has none).
+
+Each backend binds the same definitions its own way:
+
+- **Claude Code:** `ClaudeSession.options()` (`server/backends/claude/session.ts`, line 172) passes `mcpServers: { masthead: mcpServer(s.tools) }` (line 180). `mcpServer()` (`server/backends/claude/mcp.ts`, line 52) turns each `ToolDef` into an SDK tool with a zod shape (`zodShape`) and builds an **in-process** MCP server with `createSdkMcpServer` (line 60). The model sees `mcp__masthead__spawn_agent`. When it calls it, `canUseTool()` (line 239) allows any `mcp__masthead__` tool without asking the person; the tool's handler runs `d.run(args)` and returns its text, marked as an error when it starts with `Error:`.
+- **Codex:** `thread/start` carries `dynamicTools` built from the same `ToolDef`s (`server/backends/codex/index.ts`, line 347). A call arrives as the server request `item/tool/call` (line 540) and `toolCall()` (line 756) runs the matching `ToolDef`, answering with its text (`success: false` for an `Error:` text). Team tools never ask the person.
+
+See [Backend interface](Backend-Interface.md) and [server/backends/claude/](Source-Backend-Claude.md).
+
+### 2. `Conversation.spawn()` (`conversation.ts`, line 745)
+
+- `childTierOf(settings, parent.tier)` (`shared/protocol.ts`, line 68) gives the tier below the parent's in its profile (`lead` → `opus` on the Claude profile; `codex:0` → `codex:1` on the Codex one). None: "Error: … agents cannot start other agents."
+- The child tier's `max` is 0: "Error: … agents are switched off in the settings. Do this work yourself." At 200 agents (`MAX_AGENTS`): an error suggesting `send_message`. An empty task: an error. Tier names in these texts come from `label()`: the profile's label or the model's name.
+- **Name:** the next phonetic name not in use (`agentName(this.agents.size)`, then onward), here `bravo`. **Title:** whitespace collapsed, at most 60 characters.
+- **Effort:** with automatic effort on, `capEffort(effort ?? 'low', ceiling)`, where the ceiling is the tier's effort in the profile; off, the tier's effort.
+- **Info:** `newInfo()`: status `queued`, `parentId` = the lead, the model from the tier's spec, the task clipped to 400 characters as a preview.
+- `new Agent(info, this, { owesReport: true, seed: task })` (line 763): the full task is the **seed**, the first message of its new session.
+- **Machine:** `this.states.set(agent.id, initial(false))` (line 764): phase `queued`, `owesReport: true` (`server/core/machine.ts`, `initial()`, line 115). This is the state of machine row 1 ("Spawned → queued, owes a report", `case 'Spawned'`, line 242); `spawn()` sets it directly rather than sending a `Spawned` event. See [State machine](State-Machine.md).
+- `willQueue` = the tier's running count ≥ its max, or anything already queued (`scheduler.running()`/`queued()`).
+- `addAgent()` publishes the new agent; an `inbound` item with `via: 'task'` records the task in its transcript; `agent.start()` (line 768); `touch()`.
+- Returns "Started <label> agent "bravo" (<title>) at low effort. Its report will arrive as a message when it finishes.", with "(queued: N may run at once)" when predicted. This text is the tool result; the lead's turn carries on. If the lead ends its turn while bravo is live, it becomes `waiting`.
+
+### 3. Runtime start and the slot
+
+`Agent.start()` (`agent.ts`, line 244) calls `ensureProcess()` (line 293), which calls `scheduler.acquire(tier, id, owner)` (line 299) with `owner` = the parent's id (`server/core/scheduler.ts`, `acquire()`, line 72). If there is room and nobody is queued it resolves at once and the agent never shows `queued`; otherwise a microtask sets the status `queued` and the request waits until `pump()` (line 112) picks it: the waiter whose parent has the fewest running agents of that tier, first come first served within one parent. A tier at 0 refuses at once with `TierOff`; the agent fails and reports. If the agent is stopped while it waits, it is never launched and the slot is given back. See [server/core/scheduler.ts](Source-Core-Scheduler.md) and [Slot scheduling](Slot-Scheduling.md).
+
+### 4. The backend, chosen by tier
+
+`launch()` calls `backendFor()` (line 333) → `host.backend(this)` → `Conversation.backend()` (`conversation.ts`, line 433) → `App.backend(tier)` (`server/app/app.ts`, line 101): `this.registry.get(findTier(settings, tier)?.backend ?? 'claude-code')`. `BackendRegistry.get()` (`server/backends/registry.ts`, line 90) returns the fake backend for everything when it was selected on purpose (`MASTHEAD_BACKEND=fake` with `MASTHEAD_ALLOW_FAKE=1`), nothing when that backend was detected as unavailable, else the backend. With no backend, the slot is released and the agent fails with "No agent backend is available…".
+
+### 5. Opening the session
+
+`launch()` reads the tier's model and effort from the profile (`tierSettings()`), caps the agent's effort to the tier's ceiling, puts the seed first in the messages to send, and calls `backend.open(spec, this.events())` (line 375). The spec carries the model, effort, the conversation folder, `instructions` from `systemAppend()` (its name, tier label, parent, effort and the backend's capabilities), the team tools for its tier, `canAskPerson` only for the lead, the permission mode and `lean`. Then each message is `session.send()`-ed and the status becomes `running` (line 400). The runtime's `setStatus()` calls `host.agentChanged()`; `Conversation.agentChanged()` (line 452) runs a `Status` event so the machine follows (`queued` → `running`), and `App` publishes `{t:'agent'}` (the page shows bravo in the team panel and map).
+
+For Claude Code, `ClaudeBackend.open()` creates a `ClaudeSession`, whose constructor calls the SDK's `query({prompt: channel, options})`; `send()` pushes the seed into that channel. The first `init` gives the session id (`onSessionStarted()`, `agent.ts`, line 465), and the seed is dropped since it is now in the session. From here bravo works like any agent: see [Walkthrough: sending a message](Walkthrough-Sending-a-Message.md), steps 6–9.
+
+### 6. The report back
+
+When bravo's turn ends with nothing holding it, `Conversation.turnEnded()` (line 478) runs `TurnEnded` (`machine.ts`, line 260, row 7): `finish('done', text)` (line 190) ends it and, because it owes a report, adds a `report` effect (plus `setEffortLow` with automatic effort). `exec()` runs the `end` effect (`Agent.end()`, `agent.ts`, line 732: closes the session and releases the slot, which lets the scheduler start the next waiter) and the `report` effect (`conversation.ts`, line 601) → `report()` (line 643): an `inbound` item with `via: 'report'` in the lead's transcript, and `deliverTo()` (line 629) sends the lead an `<agent-report from="bravo" …>` envelope, which wakes it for a new turn. Details: [Walkthrough: a report coming back](Walkthrough-Report-Coming-Back.md).
 
 ## Related pages
 
-[Team rules](Team-Rules.md) · [server/conversation.ts](Source-Conversation.md) · [server/tools.ts](Source-Tools.md) · [Slot scheduling](Slot-Scheduling.md)
+[State machine](State-Machine.md) · [server/runtime/agent.ts](Source-Runtime.md) · [Backend interface](Backend-Interface.md) · [server/backends/claude/](Source-Backend-Claude.md) · [server/core/tools.ts](Source-Core-Tools.md) · [server/core/conversation.ts](Source-Core-Conversation.md) · [Team rules](Team-Rules.md) · [Slot scheduling](Slot-Scheduling.md)

@@ -174,7 +174,18 @@ export class RemoteAccess {
   /** The switch. Adds or removes only Masthead's own serve entry; refusals come back as a problem. */
   async setEnabled(on: boolean): Promise<{ ok: boolean; problem?: string; command?: string }> {
     await this.refresh();
-    if (!this.tailnet?.running) return { ok: false, problem: this.problem?.text };
+    if (!this.tailnet?.running) {
+      // Off must always work: the listener closes now, and the leftover entry goes at the next start
+      // (reconcile) once Tailscale is back.
+      if (!on && this.config.enabled) {
+        this.config.enabled = false;
+        this.save();
+        this.registry.audit({ event: 'switch', detail: 'remote access switched off (Tailscale not running; its entry is removed at the next start)' });
+        this.changed();
+        return { ok: true, problem: this.problem?.text };
+      }
+      return { ok: false, problem: this.problem?.text };
+    }
     if (on && !this.tailnet.https) return { ok: false, problem: this.problemFor('off')?.text };
     const result = await this.apply(on);
     if (result.ok) {
@@ -230,6 +241,15 @@ export class RemoteAccess {
 
   revoke(nodeId: string): void {
     if (!this.registry.revoke(nodeId)) throw new Error('That device is not allowed anyway.');
+    for (const fn of this.deviceListeners) fn(nodeId, { revoked: true });
+    this.changed();
+  }
+
+  /** A device asked to be forgotten ("Forget this device"): like a revoke, logged as its own choice. */
+  forget(nodeId: string): void {
+    const d = this.registry.list().find((x) => x.nodeId === nodeId);
+    if (!d || !this.registry.revoke(nodeId)) throw new Error('This device is not allowed anyway.');
+    this.registry.audit({ event: 'forget', nodeId, nodeName: d.nodeName, user: d.user?.login });
     for (const fn of this.deviceListeners) fn(nodeId, { revoked: true });
     this.changed();
   }

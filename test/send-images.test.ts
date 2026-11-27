@@ -84,3 +84,15 @@ test('send: a first message keeps its inline pictures as refs on the item', asyn
   assert.deepEqual([...store.referencedBlobs(convId)], [user.images[0]!.blob], 'referenced, so it survives the next start');
   app.shutdown();
 });
+
+test('send: uploaded and inline pictures share one 30 MB cap', async () => {
+  const { app, store, client, got, newConv } = await setup();
+  const convId = await newConv();
+  const big = store.blobs.put(convId, png(20, 20, 4.9 * 1024 * 1024));
+  const big2 = store.blobs.put(convId, png(21, 20, 4.9 * 1024 * 1024));
+  const inline = Array.from({ length: 5 }, (_, i) => ({ mediaType: 'image/png', data: png(30 + i, 30, 4.5 * 1024 * 1024).toString('base64') }));
+  got.length = 0;
+  app.handle(client, { t: 'send', convId, text: 'x', blobs: [big, big2], images: inline, ref: 'r9' });
+  assert.match(errorFor(got, 'r9'), /larger than 30 MB/);
+  app.shutdown();
+});

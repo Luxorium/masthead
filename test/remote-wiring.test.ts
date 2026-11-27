@@ -256,8 +256,9 @@ test('remote: a local session without remote access gets a clear error; devices 
   assert.match(String(got[0]?.message), /not available/);
 });
 
-test('remote: page files are served without a whois; a hijacking second request gets nothing', async () => {
-  const { access, app, webDir, target, tailscale } = setup();
+for (const kind of POSIX ? (['socket', 'loopback'] as const) : (['loopback'] as const))
+test(`remote: page files are served without a whois; a hijacking second request gets nothing of the first (${kind})`, async () => {
+  const { access, app, webDir, target, tailscale } = setup(kind === 'loopback' ? { target: { kind: 'loopback', port: freePort() } } : {});
   serveHost = target.kind === 'socket' ? 'localhost' : `${HOST}:${PORT}`;
   let lookups = 0;
   const orig = tailscale.whois.bind(tailscale);
@@ -270,9 +271,19 @@ test('remote: page files are served without a whois; a hijacking second request 
     const first = JSON.parse((await call(target, undefined, '/api/remote/request', { method: 'POST', headers: headers(phone) })).body);
     // A second asker claiming the same device (another local user on a loopback listener).
     const second = await call(target, undefined, '/api/remote/request', { method: 'POST', headers: headers(phone) });
-    assert.equal(second.status, 403);
-    assert.doesNotMatch(second.body, new RegExp(first.code));
-    assert.doesNotMatch(second.body, /pollSecret/);
+    if (target.kind === 'socket') {
+      // Only tailscaled reaches a socket: one waiting request per device, the second gets nothing.
+      assert.equal(second.status, 403);
+      assert.doesNotMatch(second.body, /pollSecret/);
+    } else {
+      // On a loopback port anyone local can claim the device, so each asker gets its own request
+      // (own code, own poll secret); the first one's is never revealed or replaced.
+      assert.equal(second.status, 200);
+      const b = JSON.parse(second.body);
+      assert.notEqual(b.requestId, first.requestId);
+      assert.notEqual(b.pollSecret, first.pollSecret);
+    }
+    assert.doesNotMatch(second.body, new RegExp(`"${first.code}"`));
     const poll = await call(target, undefined, `/api/remote/request/${first.requestId}`, { method: 'POST', headers: headers(phone), body: JSON.stringify({ pollSecret: first.pollSecret }) });
     assert.deepEqual(JSON.parse(poll.body), { state: 'pending' }, "the real device's poll still works");
   } finally {
@@ -291,4 +302,78 @@ test('remote: the socket folder must be a private folder of this user, not a sym
   symlinkSync(join(base, 'real'), join(base, 'link'));
   assert.throws(() => privateFolder(join(base, 'link')), /not a private folder/);
   assert.throws(() => privateFolder(join(base, 'ok'), 12345), /not a private folder/, 'owned by another uid');
+});
+
+for (const kind of POSIX ? (['socket', 'loopback'] as const) : (['loopback'] as const))
+test(`remote: identity is decided per request, not per connection (${kind})`, async () => {
+  const { Agent } = await import('node:http');
+  const { access, app, webDir, target } = setup(kind === 'loopback' ? { target: { kind: 'loopback', port: freePort() } } : {});
+  serveHost = target.kind === 'socket' ? 'localhost' : `${HOST}:${PORT}`;
+  await access.setEnabled(true);
+  const running = await startRemote(app, access, { webDir });
+  try {
+    // One kept-alive connection, as tailscale serve may use for many devices.
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const ask = (from: Identity | null) =>
+      new Promise<{ status: number; body: string; socket: unknown }>((resolve, reject) => {
+        const where = target.kind === 'socket' ? { socketPath: target.path } : { host: '127.0.0.1', port: target.port };
+        const h = from ? headers(from) : { host: serveHost, 'x-forwarded-host': `${HOST}:${PORT}` };
+        const req = request({ ...where, agent, path: '/api/remote/whoami', headers: h }, (res) => {
+          let body = '';
+          res.on('data', (d) => (body += d));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body, socket: req.socket }));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+    const a = await ask(phone);
+    const b = await ask(laptop);
+    const c = await ask(null);
+    assert.equal(a.socket, b.socket, 'the same connection was reused');
+    assert.equal(JSON.parse(a.body).device.name, 'phone');
+    assert.equal(JSON.parse(b.body).device.name, 'laptop', 'the second request is its own device');
+    assert.equal(c.status, 403, 'a third request on that connection without forwarded identity gets nothing');
+    agent.destroy();
+  } finally {
+    await running.stop();
+  }
+});
+
+test('remote: forget_me drops only the asking device, closes its sockets and is logged; the local page cannot send it', async () => {
+  const { access, app, localClient, local } = setup();
+  const pair = (id: Identity) => {
+    const r = access.registry.request(id, id.addresses[0]!);
+    if ('refused' in r) throw new Error(r.refused);
+    access.registry.allow(r.request.id);
+  };
+  pair(phone);
+  pair(laptop);
+  const closed: string[] = [];
+  access.onDevice((nodeId, change) => 'revoked' in change && closed.push(nodeId));
+  const got: Array<Record<string, unknown>> = [];
+  const dev: Client = { send: (m) => void got.push(m as Record<string, unknown>), role: 'read', deviceId: 'nPHONE' };
+  app.connect(dev);
+  app.handle(dev, { t: 'hello', protocol: 2 });
+  app.handle(dev, { t: 'forget_me' });
+  assert.deepEqual(access.registry.list().map((d) => d.nodeId), ['nLAPTOP']);
+  assert.deepEqual(closed, ['nPHONE']);
+  assert.ok(access.audit().some((e) => e.event === 'forget' && e.nodeId === 'nPHONE'));
+  local.length = 0;
+  app.handle(localClient, { t: 'forget_me' });
+  assert.equal(local[0]!.t, 'error');
+});
+
+test('remote: switching off works while Tailscale is down; the entry goes at the next start', async () => {
+  const { access, tailscale, target } = setup();
+  await access.setEnabled(true);
+  const status = tailscale.tailnet;
+  tailscale.tailnet = null;
+  const r = await access.setEnabled(false);
+  assert.equal(r.ok, true);
+  assert.equal(access.enabled, false);
+  tailscale.tailnet = status;
+  tailscale.commands.length = 0;
+  await access.reconcile();
+  assert.deepEqual(tailscale.commands, [['serve', `--https=${PORT}`, 'off']]);
+  void target;
 });

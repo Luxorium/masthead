@@ -5,6 +5,7 @@ import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto
 import { appendFileSync, chmodSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Identity } from './tailscale.js';
+import { renameRetry } from '../storage/atomic.js';
 
 /** What an approved device may do. `full` is everything the local browser can, except shutting down. */
 export type Role = 'full' | 'approve' | 'read';
@@ -45,7 +46,7 @@ export interface PendingRequest {
 
 export interface AuditEntry {
   ts: number;
-  event: 'request' | 'allow' | 'deny' | 'revoke' | 'expire' | 'role' | 'connect' | 'refuse' | 'collect' | 'switch';
+  event: 'request' | 'allow' | 'deny' | 'revoke' | 'expire' | 'role' | 'connect' | 'refuse' | 'collect' | 'switch' | 'forget';
   nodeId?: string;
   nodeName?: string;
   user?: string;
@@ -135,7 +136,7 @@ export class DeviceRegistry {
   private save(): void {
     const tmp = `${this.file}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify({ version: FILE_VERSION, devices: [...this.devices.values()] }, null, 2) + '\n', { mode: 0o600 });
-    renameSync(tmp, this.file);
+    renameRetry(tmp, this.file);
   }
 
   private refusalsLogged = new Map<string, number>();
@@ -225,9 +226,9 @@ export class DeviceRegistry {
       this.audit({ event: 'refuse', nodeId: id.nodeId, nodeName: id.nodeName, user: id.user?.login, address, detail: 'denied recently' });
       return { refused: 'This device was turned down recently; try again later.' };
     }
-    // One waiting request per node, and its poll secret never changes: a second asker (on a loopback
-    // listener, another local user forging this node's address) must not take over the first one's
-    // request. The device keeps its poll secret; a page that lost it waits for the request to expire.
+    // A waiting request's poll secret never changes, so a second asker cannot take it over. Through a
+    // private socket a device has one waiting request; on a loopback listener (where another local
+    // program can claim the device) a few, each with its own code and secret.
     const waiting = [...this.pending.values()].filter((p) => p.nodeId === id.nodeId && !p.denied).length;
     if (waiting >= (this.opts.loopback ? MAX_PENDING_PER_NODE_LOOPBACK : 1)) {
       return { refused: 'A request from this device is already waiting for approval.' };

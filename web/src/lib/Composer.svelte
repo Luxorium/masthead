@@ -2,6 +2,9 @@
   import { displayName, modelLabel, type ImageAttachment } from '../../../shared/protocol.ts';
   import FolderPicker from './FolderPicker.svelte';
   import { profileById, tierClass } from './tiers.ts';
+  import ProfileChip from './settings/ProfileChip.svelte';
+  import { usableProfiles } from './settings/logic.ts';
+  import { readBackends } from './settings/types.ts';
   import { MAX_PICK_BYTES, MAX_UPLOAD_BYTES, shrinkIfLarge, toBase64, uploadImage } from './images.ts';
   import { shortPath, store } from './store.svelte.ts';
   import { T } from './text.ts';
@@ -39,6 +42,7 @@
           ? T.composer.addTo(leadName)
           : T.composer.reply(leadName),
   );
+  const teams = $derived(store.settings ? usableProfiles(store.settings.profiles, readBackends(store.backends)) : []);
   /** The very first chat: say once what the folder means. */
   const firstChat = $derived(isNew && store.conversations.length === 0);
 
@@ -217,6 +221,10 @@
         <FolderPicker onclose={() => (choosingFolder = false)} />
       {/if}
     </div>
+    {#if teams.length > 1}
+      <!-- Only when there is a real choice (a second usable team): Simple by default. -->
+      <ProfileChip value={store.newProfile ?? store.settings?.defaultProfile ?? 'claude'} onchange={(id) => (store.newProfile = id)} />
+    {/if}
     {#if firstChat}<span class="first">{T.composer.folderFirst}</span>{/if}
   {:else}
     {#if store.conv}

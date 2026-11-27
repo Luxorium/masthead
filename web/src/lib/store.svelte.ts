@@ -13,7 +13,7 @@ import type {
   Settings,
 } from '../../../shared/protocol.ts';
 import type { ApprovalSummary, Capability, ClientMsgV2, ServerMsgV2 } from '../../../shared/protocol-v2.ts';
-import { deviceToken, forgetDeviceToken, isRemoteDevice, saveDeviceToken } from './signin.ts';
+import { deviceToken, forgetDevice, forgetDeviceToken, isRemoteDevice, saveDeviceToken, whoami, type DeviceRole } from './signin.ts';
 import { dropCandidate, idFromHash, keepCandidate, serverUp, storedKey, takeKey } from './signin.ts';
 import { limitKey, settingsPatch, worstLimit } from './state/pure.ts';
 import { T } from './text.ts';
@@ -73,6 +73,8 @@ export class Store {
   pending = $state<PermissionRequest[]>([]);
   view = $state<'chat' | 'map'>('chat');
   newCwd = $state('');
+  /** The team chosen on the new-chat screen (ProfileChip); null means the default team. */
+  newProfile = $state<string | null>(null);
   dirs = $state<DirListing | null>(null);
   error = $state<string | null>(null);
   /** The banner's notice key the person dismissed; the banner returns when the worst notice changes. */
@@ -135,6 +137,10 @@ export class Store {
   // ---- for the settings and remote-access pieces (web/src/lib/settings, web/src/lib/remote) ----
   /** `state.remote` (local page only) and its live updates (`{t:'remote'}`); null on a device or an older server. */
   remote = $state<Record<string, unknown> | null>(null);
+  /** On a remote device: what its role allows (full, approve, read); null on this computer's own page. */
+  deviceRole = $state<DeviceRole | null>(null);
+  /** The device is signing itself out (Forget this device): its socket closing is expected. */
+  private forgetting = false;
   /** `state.backends` (protocol v2) and the answer to `check_backends`. */
   backends = $state<Record<string, unknown>[]>([]);
   private listeners = new Map<string, Set<(msg: Record<string, unknown>) => void>>();
@@ -311,6 +317,10 @@ export class Store {
       this.subscribedOnServer = false;
       this.v1State = null;
       this.helloPending = this.sendV2({ t: 'hello', protocol: 2, caps: ['drafts-delta', 'items-paging', 'blobs', 'resync'] });
+      // The role decides what this page offers (the server enforces it either way).
+      void whoami().then((w) => {
+        if (w?.state === 'approved') this.deviceRole = w.role;
+      });
     };
     ws.onmessage = (ev) => this.receive(JSON.parse(ev.data as string) as ServerMsgV2);
     ws.onclose = (ev) => {
@@ -318,6 +328,12 @@ export class Store {
       this.connected = false;
       this.ws = null;
       this.dropped();
+      if (this.forgetting) {
+        // Forget this device: the server closes with 4001 too, but this was the person's own choice.
+        this.forgetting = false;
+        this.signedOut = 'device';
+        return;
+      }
       if (ev.code === 4001) {
         // The computer withdrew this device's access.
         forgetDeviceToken();
@@ -325,15 +341,47 @@ export class Store {
         return;
       }
       if (opened) return this.later();
-      void serverUp().then((up) => {
+      // Refused before it opened. A brief refusal (remote access switched off and on, the listener
+      // restarting) must not cost the token: forget it only when the server says it is no longer valid.
+      void whoami().then((w) => {
         if (this.ws) return;
-        if (!up) return this.later();
-        // Up, and it refused the token (revoked or expired): back to the sign-in screen.
-        forgetDeviceToken();
-        this.signedOut = 'device';
+        if (w?.state === 'unknown' || w?.state === 'refused') {
+          forgetDeviceToken();
+          this.signedOut = 'device';
+          return;
+        }
+        this.later();
       });
     };
     ws.onerror = () => ws.close();
+  }
+
+  /**
+   * Forget this device (on a borrowed or shared phone): tell the server to drop it, forget the token and
+   * any pairing request, close the socket and go back to the sign-in screen.
+   */
+  forgetThisDevice(): void {
+    this.forgetting = true;
+    this.request({ t: 'forget_me' });
+    forgetDevice();
+    this.deviceRole = null;
+    const ws = this.ws;
+    setTimeout(() => {
+      // If the server did not close it already, close it here.
+      if (this.ws === ws && ws) ws.close();
+      else if (!this.ws) {
+        this.forgetting = false;
+        this.signedOut = 'device';
+      }
+    }, 1500);
+  }
+
+  /** What this page may do: everything on this computer; on a device, what its role allows. */
+  get mayAct(): boolean {
+    return this.deviceRole === null || this.deviceRole === 'full';
+  }
+  get mayAnswer(): boolean {
+    return this.deviceRole === null || this.deviceRole !== 'read';
   }
 
   /** The remote sign-in screen got a token for this device: keep it and connect. */
@@ -738,7 +786,7 @@ export class Store {
     const uploaded = d.images.filter((i) => i.ref).map((i) => i.ref!);
     const inline = d.images.filter((i) => !i.ref && i.data).map(({ mediaType, data }) => ({ mediaType, data }));
     const msg: ClientMsg = isNew
-      ? { t: 'send', convId: null, cwd: this.newCwd, text, images: inline, ref }
+      ? { t: 'send', convId: null, cwd: this.newCwd, text, images: inline, ref, ...(this.newProfile ? { profile: this.newProfile } : {}) }
       : { t: 'send', convId: this.convId, text, images: inline, ...(uploaded.length ? { blobs: uploaded } : {}), agentId: this.viewAgentId ?? undefined, ref };
     if (!this.send(msg)) return false;
     if (isNew) {

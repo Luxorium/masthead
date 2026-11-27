@@ -59,7 +59,7 @@
     </section>
   {/if}
 
-  {#if ui.advanced}
+  {#if ui.advanced && store.mayAct}
     <TierControls />
   {/if}
 </aside>

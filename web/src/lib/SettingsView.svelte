@@ -7,7 +7,10 @@
   import { shortPath, store } from './store.svelte.ts';
   import { T } from './text.ts';
   import { ui, type Theme } from './ui.svelte.ts';
+  import { isRemoteDevice } from './signin.ts';
   import RemoteSection from './remote/RemoteSection.svelte';
+  import BackendsSection from './settings/BackendsSection.svelte';
+  import ProfilesSection from './settings/ProfilesSection.svelte';
 
   /** Choices for the longest a helper may work, in minutes; 0 is no limit. */
   const RUN_LIMITS = [0, 15, 30, 60, 120, 240];
@@ -35,8 +38,21 @@
       <button class="btn ghost close" onclick={() => ui.closeSettings()} aria-label={T.settings.close}>×</button>
     </div>
 
+    {#if isRemoteDevice()}
+      <section class="group" aria-labelledby="set-device">
+        <h2 id="set-device">{T.device.title}</h2>
+        <p class="about">{T.device.staysSignedIn}</p>
+        {#if store.deviceRole && store.deviceRole !== 'full'}
+          <p class="about">{store.deviceRole === 'approve' ? T.device.roleApprove : T.device.roleRead}</p>
+        {/if}
+        <button class="btn danger forget" onclick={() => store.forgetThisDevice()}>{T.device.forget}</button>
+        <p class="about small">{T.device.forgetHelp}</p>
+      </section>
+    {/if}
+
     {#if store.settings}
       {@const s = store.settings}
+      <fieldset class="plain" disabled={!store.mayAct}>
       <section class="group" aria-labelledby="set-general">
         <h2 id="set-general">{T.settings.general}</h2>
         <label class="mode">
@@ -77,6 +93,10 @@
         {/if}
       </section>
 
+      <!-- Teams and the agents on this computer (bravo, web/src/lib/settings). -->
+      <section class="group plug"><ProfilesSection /></section>
+      <section class="group plug"><BackendsSection /></section>
+
       {#if store.remote}
         <!-- Remote access (golf, web/src/lib/remote): only on this computer's own page. -->
         <section class="group plug">
@@ -95,6 +115,8 @@
           </select>
         </label>
       </section>
+
+      </fieldset>
 
       <section class="group" aria-labelledby="set-about">
         <h2 id="set-about">{T.settings.about}</h2>
@@ -198,6 +220,19 @@
     margin: 6px 0 0;
     font-size: 13px;
     color: var(--bad);
+  }
+  .plain {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+  .forget {
+    margin-top: 12px;
+  }
+  .small {
+    margin-top: 6px;
+    font-size: 12.5px;
   }
   .about {
     margin: 0;

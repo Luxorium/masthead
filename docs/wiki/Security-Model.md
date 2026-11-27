@@ -1,114 +1,168 @@
 # Security model
 
-Masthead's server can run commands and edit files as the person, because the Claude Code agents it starts can. Anyone who can talk to the server can therefore act as the person. This page explains what the server does to limit who can reach it, and what it does not protect against. How the agents themselves are kept in hand is on [Safety model](Safety-Model.md). Code: `serve()` and `serveStatic()` in `server/http.ts`; the secret in `server/config.ts`; input checks in `server/app.ts` and `server/store.ts`. Everything here was read from the code at 0.1.4. The HTTP checks are exercised by `test/http.test.ts` and the sign-in file by `test/launcher.test.ts` (see [Tests](Source-Tests.md)); the rest was not verified by running.
+Masthead can run commands and change files as you, because the agents it starts can. So anyone who can
+drive Masthead can act as you. This page explains who can reach it and what they need, and then what
+it does not protect against. How the agents themselves are kept in hand is on
+[Safety model](Safety-Model.md); use from other devices is on [Remote access](Remote-Access.md).
 
-## What it defends against
+Everything here was read from the code of 0.2.0 (branch `next`). The HTTP checks are covered by unit
+tests (see [Tests](Source-Tests.md)). Remote access has run only against a **fake Tailscale** in tests;
+the first run against the real one is the person's (see [Using Masthead from your phone](Using-Masthead-From-Your-Phone.md)).
 
-The main threat considered in the code is **a web page on another site** trying to use the person's browser to reach the local server. Browsers let any page send requests to `127.0.0.1`, so local servers need their own checks.
+## Two listeners
 
-### 1. Listening only on the loopback address
+| Listener | Where | Who reaches it | Credential |
+|---|---|---|---|
+| **Local** | `127.0.0.1:<port>` (7717 by default), `serve()` in `server/transport/http.ts` | programs on this computer, including your browser | the local secret |
+| **Remote** (only while Remote access is on) | a Unix socket in a private folder (Linux, macOS), or `127.0.0.1:7719` (Windows), `serveRemote()` in `server/transport/remote.ts` | Tailscale's `serve`, forwarding your tailnet devices; on Windows also any local program | a device token, plus the device's Tailscale identity |
 
-`server.listen(port, '127.0.0.1')` in `serve()`. Other machines on the network cannot connect. Other user accounts on the same machine can connect to the port, which is why the secret below exists.
+Masthead never listens on another network interface and never uses Tailscale Funnel.
 
-### 2. The Host header check (DNS rebinding)
+## The local listener
 
-**DNS rebinding** is a trick where an attacker's domain name is made to point at `127.0.0.1`, so the attacker's page becomes "same origin" with the local server in the browser's eyes. The browser still sends the attacker's name in the `Host` header. Every HTTP request and the WebSocket upgrade must therefore carry `Host: 127.0.0.1:<port>` or `localhost:<port>`, or get `403 Forbidden` (`hostOk()`).
+### Host and Origin
 
-In development mode (`MASTHEAD_DEV=1`, see [server/main.ts](Source-Main.md)) the list also contains `localhost:<dev port>` and `127.0.0.1:<dev port>`, the Vite development server that forwards the page's requests. The dev port is `MASTHEAD_DEV_WEB_PORT`, 7718 by default. The check itself is never switched off. `AGENTS.md` makes this a rule for anyone changing the code: the server binds to `127.0.0.1` and checks `Host` and `Origin`, and neither may be weakened.
+- **Host.** Every request and socket upgrade must name `127.0.0.1:<port>` or `localhost:<port>`
+  (`hostOk()`), else `403`. This defeats DNS rebinding: an attacker's site can point its own name at
+  127.0.0.1, but the browser still sends that name.
+- **Origin.** The WebSocket upgrade must come from `http://127.0.0.1:<port>` or `http://localhost:<port>`.
+  Only Masthead's own page can open it.
+- In development (`MASTHEAD_DEV=1`) the Vite page's port (`MASTHEAD_DEV_WEB_PORT`, default 7718) is
+  added to both lists. Nothing else is relaxed.
 
-### 3. The Origin check on the WebSocket
+### The local secret
 
-Browsers always send an `Origin` header naming the page that opened a WebSocket, and a page cannot fake it. The upgrade is refused unless the path is `/ws` and the Origin is `http://127.0.0.1:<port>` or `http://localhost:<port>` (plus the Vite development server's origins in development mode). So only Masthead's own page can open the socket, and the socket is where everything powerful happens.
+- **Where.** `<data folder>/secret`: `~/.local/share/masthead/secret` on Linux, `~/Library/Application
+  Support/Masthead/secret` on macOS, `%LOCALAPPDATA%\Masthead\secret` on Windows (`server/paths.ts`).
+- **How it is made.** `loadSecret()` in `server/transport/auth.ts` creates it once: 32 random bytes as
+  64 hex characters, written to a temporary file and linked into place, so two processes starting
+  together agree on it. It is kept across restarts.
+- **Who can read it.** `makePrivate()`: mode `0600` on Linux and macOS; on Windows `icacls` removes
+  inherited permissions and grants only the current user.
+- **The socket.** The page offers the subprotocol `key.<secret>`; the upgrade is refused unless it
+  matches (constant-time compare). The answer names only `masthead`, never the key.
+- **Shutdown.** `POST /api/shutdown` needs `x-masthead: 1` and `x-masthead-key: <secret>`. A site
+  elsewhere cannot add custom headers without a CORS preflight, which this server never grants.
+- **Proof.** `GET /api/proof?nonce=<64 hex>` answers an HMAC of the nonce and port with the secret
+  (`proofOf()`). The `masthead` command uses it (`serverProves()` in `server/cli.ts`) to check that the
+  server on the port knows the secret *before* sending the secret anywhere. The answer reveals nothing.
+- **Signing a browser in.** `masthead` writes a small page only you can read (in `$XDG_RUNTIME_DIR`
+  or the data folder), opens that file, and deletes it a minute later. The page forwards to
+  `http://127.0.0.1:<port>/#key=<secret>`. The key is in the fragment, which a browser never sends to
+  a server or in a `Referer`. The page keeps it in `localStorage` for that address and removes it from
+  the address bar. The key is never on a command line.
+- **What needs no secret.** The page files, and `GET /api/health` (name, version, process id, and
+  how many conversations are busy).
 
-### 4. The local secret
+## The remote listener
 
-The Host and Origin checks stop web pages, not programs: a local program can send any headers it likes. So the socket and the shutdown endpoint also need a **secret** that only the person's own user account can read, and the launcher only sends that secret to a server that proves it knows it already.
+Details and the pairing flow are on [Remote access](Remote-Access.md). In short:
 
-- **Where it lives.** `<DATA_DIR>/secret`, by default `~/.local/share/masthead/secret` (`SECRET_FILE` in `server/config.ts`). `loadSecret()` creates it once, when it is missing: 32 random bytes written as 64 hex characters, mode `0600`, in a folder created with mode `0700`. The file is written to a temporary name and hard-linked into place, so a launcher and a server starting at the same moment end up with the same secret. An existing file that does not hold 64 hex characters is replaced; one with looser permissions is set back to `0600`. The secret is kept across restarts, so a signed-in browser stays signed in.
-- **The server** (`masthead serve`) loads it at start-up (`secretOrExit()` in `server/main.ts`; it exits with code 1 if the file can be neither read nor created) and passes it to `serve()`. Comparisons use `timingSafeEqual` (`secretOk()` in `server/http.ts`).
-- **Signing a browser in.** `masthead` (the `open` command) signs the browser in with `http://127.0.0.1:<port>/#key=<secret>` (`signInUrl()` in `server/cli.ts`). The key is in the URL fragment, which the browser never sends to the server, so it is not in a request, a server log or a `Referer` header. The key is never put on a command line either. `openSignedIn()` writes a small HTML file, `sign-in-<random>.html`, that sends the browser on to that address, and gives `xdg-open` (or `gio open`) only the file's path. See [Sign-in file](#sign-in-file) below. The page (`takeKey()` in `web/src/lib/store.svelte.ts`) reads `#key=` (and still accepts `?key=` from older launchers), saves the key in `localStorage` under `masthead.key`, which is per origin, and removes it from the address bar with `history.replaceState`, so it is not left in the address bar or in bookmarks (see the history caveat below). If storage is refused (private browsing), the key works for that page load only. A tab opened without a key and with none stored shows a signed-out screen asking the person to open Masthead with `masthead`.
-- **The socket.** The page opens `/ws` offering two subprotocols: `masthead` and `key.<secret>`. The upgrade is refused with `403` unless the `key.` subprotocol carries the secret (`offeredKey()`). The server's answer names only `masthead` (`handleProtocols`), so the key is never echoed back.
-- **Proof.** Before `masthead` (the `open` command) opens the sign-in file, and before `masthead stop` sends `x-masthead-key`, the launcher asks the server on the port to prove it knows the secret (`serverProves()` in `server/cli.ts`). It picks a fresh nonce, 32 random bytes as 64 lowercase hex characters, and sends `GET /api/proof?nonce=<nonce>`. The server answers `{"name":"masthead","proof":…}` (with `cache-control: no-store`), where the proof is HMAC-SHA256, keyed with the secret, over `masthead-proof\n<port>\n<nonce>` (`proofOf()` in `server/config.ts`); `<port>` is the port the server actually bound. The launcher computes the same value and compares in constant time (`proofOk()`). Asking needs no secret, and the answer reveals nothing about it. A nonce that is not 64 lowercase hex characters gets `400`; any method but `GET` gets `405`. A server that gives no answer, a wrong proof, or no `/api/proof` at all (another program, or a Masthead older than this check) fails, and the launcher prints `Another Masthead (or another program) is using port N: it did not prove it knows <secret file>, so it was not sent the key. …` and exits 1 without sending the key or opening the browser. What this protects against:
-  - **Port squatting.** Another user on the machine can start a program on Masthead's port while Masthead is not running. Without the secret file it cannot answer the proof, so it never receives the key (in a request header or through the browser).
-  - **Relay from another port.** A program on port N could pass the launcher's nonce on to a real Masthead on another port and return its answer. That answer is the HMAC for the other port, so it fails the check for port N.
+- **Only through Tailscale `serve`.** Every request must carry `X-Forwarded-Host:
+  <machine>.<tailnet>.ts.net:<port>`, an `X-Forwarded-For` address, and the Host `serve` sends
+  (`localhost` to a socket, the tailnet name to a port) (`fromServe()`).
+- **Identity from Tailscale, not from headers.** The forwarded address is looked up with `tailscale
+  whois` (`authorise()` in `server/remote/authorise.ts`). The result names the device by its stable
+  node id. Users of other tailnets and tagged devices are refused unless the person allows them.
+- **A device token.** After the person approves a pairing request, the device gets a token. Only its
+  SHA-256 is stored. The token works only from the node it was issued to, and expires after 30 days
+  unused.
+- **Origin.** The socket must come from `https://<machine>.<tailnet>.ts.net:<port>`, with the
+  subprotocol `device.<token>`. The local secret is never accepted here.
+- **No shutdown, little health.** `/api/shutdown` is `404`; `/api/health` answers only `{name}`.
+- **Roles.** Every message a device sends passes one gate (`Hub.admit()` in `server/app/clients.ts`,
+  using `allowedMessage()`): `full` may do everything the local page can except manage remote access
+  and devices; `approve` may read, answer approvals and stop work; `read` may only read. A device must
+  say hello with protocol 2 before anything, and reads a conversation's details only while subscribed.
 
-  The endpoint and the check are tested in `test/http.test.ts` and `test/launcher.test.ts`; the whole launcher flow against an impostor server was not verified by running.
-- **Shutdown.** `POST /api/shutdown` needs the header `x-masthead: 1` **and** `x-masthead-key: <secret>`. A page on another site cannot add custom headers to a cross-site request without a CORS "preflight" check, and this server never answers one with permission (it sends no CORS headers, and `OPTIONS` gets `405`). `masthead stop` reads the secret file, checks the server's proof (above), and only then sends both headers. If there is no secret file, or the proof fails, it stops there with exit 1 and sends nothing.
-- **What needs no secret.** The page itself (HTML, scripts, styles) holds no secret and is served to anyone who passes the Host check. `GET /api/health` returns only `name`, `version`, `pid` and `busy`, the number of conversations with agents working (`App.workingCount()`). Any local program, including one run by another user, can read those four values. `masthead status` and `install.sh` rely on them.
+## Page headers
 
-In development mode the server prints the Vite page's address with its key (`http://localhost:<dev port>/#key=…`) to its own terminal; that page keeps the key in its own origin's storage.
+- **Local page CSP:** `default-src 'self'`; images also from `data:` and `blob:`; inline styles;
+  `connect-src 'self' ws://127.0.0.1:* ws://localhost:*`; `frame-ancestors 'none'`; `base-uri 'none'`;
+  `form-action 'none'`.
+- **Remote page CSP:** the same, with `connect-src 'self' wss://<machine>.<tailnet>.ts.net:<port>`
+  (`remoteCsp()`).
+- `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` on every page file; hashed assets
+  cached for a year, the page itself revalidated.
+- Static paths are decoded and normalised; a NUL byte or malformed escape is `400`, anything outside
+  the web folder `403`. A file that vanishes mid-read is `404`, never a crash.
+- Agent-written text is rendered through `marked` (raw HTML escaped) and DOMPurify; see
+  [Rendering Markdown safely](Source-Web-Front-End.md#rendering-markdown-safely-markdownts).
 
-#### Sign-in file
+## Pictures (blobs)
 
-`writeSignInFile()` in `server/cli.ts` (read from the code and covered by `test/launcher.test.ts`):
+- **Fetch:** `GET /blob/<conversation>/<sha256>?t=<blob token>`. The blob token is random per socket,
+  sent in `state.blobToken`, and valid while that socket is open plus 60 s (`BlobTokens` in
+  `server/transport/blobs.ts`, constant-time compare). Both parts of the path are checked against
+  strict patterns and looked up only inside that conversation's `blobs/` folder.
+- **Upload:** `POST /blob?conv=<id>` with the raw bytes and `x-masthead-key` (local) or
+  `x-masthead-device` (a device with the `full` role).
+- **What is accepted:** PNG, JPEG, GIF and WebP only, decided from the file's bytes, never SVG. At most
+  5 MB each, 8192 pixels a side and 40 megapixels; 30 MB per message; 500 MB per conversation
+  (`server/storage/blobs.ts`). A declared type that disagrees with the bytes is refused.
+- **Served with:** the stored type as `Content-Type`, `nosniff`, `Content-Disposition: inline`, and its
+  own CSP `default-src 'none'; …; sandbox`, so a picture opened on its own can run nothing.
 
-- **Folder.** `signInDir()`: `$XDG_RUNTIME_DIR/masthead` when `XDG_RUNTIME_DIR` is set and absolute (a per-user tmpfs), else `<DATA_DIR>/open`. It is created with mode `0700` and then set to `0700` with `chmod`, in case it already existed with looser rights.
-- **File.** `sign-in-<12 random hex characters>.html`, mode `0600`, created with the `wx` flag, so an existing file of that name is never written through. It holds `<meta name="referrer" content="no-referrer">`, a `<meta http-equiv="refresh">` to the sign-in address and a plain "Open Masthead" link, in case the refresh does not run. The address is HTML-escaped.
-- **Removal.** After the opener exits with code 0, or is still running after 3 seconds (`OPENER_WAIT_MS`; some openers run the browser in the foreground), the launcher starts `sh -c 'sleep 60; rm -f -- "$1"'` in the background with the file's path. Each run also removes `sign-in-*` files older than two minutes (`SIGN_IN_STALE_MS`), in case that never ran. If the opener fails, the file is removed at once.
-- **Fallback.** If there is no `xdg-open` or `gio`, the file cannot be written, or the opener fails, no file is left. The sign-in address is printed instead, but only when standard output is a terminal; otherwise the launcher prints only ``Could not open the browser. Run `masthead --no-browser` in a terminal to get the sign-in address.``, so the key never lands in a log. In a terminal the launcher always ends with `If the browser did not open signed in, run: masthead --no-browser`.
-- **Browsers in a sandbox.** A snap or flatpak browser may be unable to read a file in `$XDG_RUNTIME_DIR` or `~/.local/share`. Then run `masthead --no-browser` in a terminal and paste the printed address into the browser.
-- Whether a real browser follows the meta refresh from a `file://` page was not verified by running.
+## Input checks and error codes
 
-### 5. Headers on the page itself
+- Every socket message is JSON; anything else is answered `{t:'error', code:'invalid'}`.
+  `App.handle()` turns every refusal into an `error` message, never a crash.
+- Version 2 errors carry a code. A version 1 (0.1.x) page gets the old shape without it.
 
-`serveStatic()` sends with each file it serves:
+| Code | Meaning |
+|---|---|
+| `protocol` | Wrong or missing protocol version (a device must say hello with protocol 2 first). |
+| `refused` | Not allowed: the device's role, a conversation not subscribed to, a remote-access change Tailscale refused. |
+| `not_found` | The conversation, agent, item, picture or team no longer exists here. |
+| `too_large` | Over a limit: message length, image count or size. |
+| `invalid` | Malformed or unknown request. |
 
-- `Content-Security-Policy`: scripts, styles and connections only from the server itself (`default-src 'self'`), inline styles allowed, images also from `data:` and `blob:`, WebSockets only to `ws://127.0.0.1:*` or `ws://localhost:*`, and `frame-ancestors 'none'` so no other site can embed the page in a frame.
-- The rest of the policy: `base-uri 'none'` and `form-action 'none'`.
-- `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. The referrer policy also keeps a `?key=` from an older launcher from being sent to any other site; a `#key=` fragment is never sent in a `Referer` anyway.
-- `Cache-Control`: `no-cache` for the page, `public, max-age=31536000, immutable` for the hashed files under `/assets/`. API replies carry `no-store`.
+- **Settings** are merged over the current ones and sanitised field by field
+  ([Configuration and settings](Configuration-and-Settings.md)).
+- **Folders** for a new conversation must exist. Ids used in file names must match strict patterns.
 
-Static paths are URL-decoded and normalised (`serveStatic()`). A malformed escape or a NUL byte gets `400`. A path that does not stay inside the web folder gets `403`; the check compares against the folder name plus a path separator, so a sibling folder whose name starts the same way does not count as inside. A missing file under `/assets/`, or any path with a file extension, gets `404`. Any other path gets `index.html`, because the page handles its own routes. A file that vanishes between the check and the read gets `404`, never a crash. Only `GET` and `HEAD` are served; other methods get `405`. Paths such as `/%2e%2e/…` and a sibling folder sharing the root's prefix are tested in `test/http.test.ts`.
+## Files on disk
 
-Each socket is pinged every 30 seconds. One that did not answer the previous ping is closed (`attach()`), and a closed socket stops nothing: agents keep working.
-
-### 6. Rendering agent output in the page
-
-Agent text is Markdown written by a model, and could contain HTML. The page turns it into HTML with `marked`, whose `html` hook escapes any raw HTML the agent wrote, and then cleans the result with **DOMPurify**, a library that removes scripts and other dangerous markup (`renderMarkdown()` in `web/src/lib/markdown.ts`). It also forbids `style`, `form`, `input` and `iframe` tags and `style`, `id` and `name` attributes, keeps only the classes Masthead's own renderer and highlight.js produce, and makes links open in a new tab with `rel="noopener noreferrer"`. So agent text cannot restyle the page, for example to draw a fake "Allow" button. Other text (the person's own messages, tool input and output, notices) is inserted as plain text by Svelte. See [Rendering Markdown safely](Source-Web-Front-End.md#rendering-markdown-safely-markdownts).
-
-### 7. Input checks
-
-- Every socket message is parsed as JSON in `attach()`; one that is not JSON gets "Malformed message.". `App.handle()` wraps `dispatch()` so that any thrown error becomes an `error` reply, carrying the `ref` of a refused `send` (clipped to 80 characters), never a crash. Unknown types get "Unknown request."; unknown conversation or agent ids get "no longer exists".
-- **Messages** (`send`): text up to 400,000 characters (`MAX_TEXT`), not empty unless it has images. Images: at most 8 (`MAX_IMAGES`), media type PNG, JPEG, GIF or WebP, data only base64 characters (`checkImages()`). Each image may be at most 5 MiB (`MAX_IMAGE_BYTES`) and all images in a message together at most 30 MiB (`MAX_TOTAL_IMAGE_BYTES`), counted as decoded bytes from the base64 length less its `=` padding; otherwise "An image is larger than 5 MB." or "The images together are larger than 30 MB.". These match the page's composer (`web/src/lib/Composer.svelte`). The whole socket message is limited to 48 MiB (`MAX_WS_PAYLOAD` in `server/http.ts`).
-- **Folders.** A new conversation's folder must exist and be a directory (`checkDir()`, with `~` expanded). The folder picker (`listDirs()`) lists non-hidden folders and symlinks to folders inside any path the server can read.
-- **Settings** (`{t:'settings'}`) are merged over the current settings by `sanitizeSettings(raw, current)` in `server/config.ts`. A field that is missing or invalid keeps its current value, so a partial update changes only what it names. Model ids must match `^[A-Za-z0-9._\-\[\]:]{1,80}$`. Effort must be one of the four levels (no `max`). Limits are clamped to 0..12. The permission mode must be one of the five choices. Booleans must be booleans. `defaultCwd` must start with `/`.
-- **Rename**: whitespace collapsed, at most 120 characters; an empty title is ignored.
-- Ids used in file paths must match `^[A-Za-z0-9_-]{1,64}$` (`assertId()` in `server/store.ts`), so a conversation or agent id cannot lead out of the data folder.
-
-### 8. Files on disk
-
-| What | Where | Mode |
+| What | Where (Linux) | Protection |
 |---|---|---|
-| Settings | `$XDG_CONFIG_HOME/masthead/settings.json` (default `~/.config/masthead/`) | `0600`; folder created `0700`. Written by `writeFileAtomic()`: a temporary file then a rename, so a crash never leaves half a file. |
-| Secret | `$XDG_DATA_HOME/masthead/secret` (default `~/.local/share/masthead/`) | `0600`, reset to `0600` if looser; folder `0700` (`loadSecret()`) |
-| Conversations | `…/masthead/conversations/<id>/conversation.json` | `0600` via `writeFileAtomic()`; folders `0700` (`Store`) |
-| Transcripts | `…/conversations/<id>/items/<agent>.jsonl` | `0600` when created (`Store.appendItem()`) |
+| Settings | `~/.config/masthead/settings.json` | `0600`, folder `0700` |
+| Secret | `~/.local/share/masthead/secret` | `0600` (Windows: `icacls`, current user only) |
+| Conversations, transcripts, pictures | `~/.local/share/masthead/conversations/` | files `0600`, folders `0700` |
+| Remote access (devices, audit, config) | `~/.local/share/masthead/remote/` | files `0600`, folder `0700` |
+| Remote socket | `$XDG_RUNTIME_DIR/masthead/remote.sock`, else `/tmp/masthead-<uid>/remote.sock` | socket `0600` in a `0700` folder that must be yours and not a link |
 
-Folder modes apply only when Masthead creates the folder. A folder that already exists keeps its mode. Failed writes (a full disk, say) are logged once and never stop the server (`App.safely()`).
+On Windows only the secret is set with `icacls`; the other files rely on the permissions of your own
+`%APPDATA%` and `%LOCALAPPDATA%` folders, which Windows keeps private to your account by default. Folder
+modes apply only when Masthead creates the folder.
 
-### 9. Development mode
+## What other users of the computer can and cannot do
 
-With `MASTHEAD_DEV=1`, `runServer()` adds `http://localhost:<dev port>` and `http://127.0.0.1:<dev port>` to the allowed origins and their hosts to the Host list. The dev port is `MASTHEAD_DEV_WEB_PORT` (`parseDevWebPort()` in `server/cli.ts`), 7718 by default; an invalid value stops the server with exit 2. Nothing else is relaxed: the secret is still required. At start-up the server prints the Vite page's address with `#key=` to its own terminal only. `vite.config.ts` serves the page on the same port (`strictPort`, so it fails rather than move to another port) and forwards `/ws` and `/api` to `MASTHEAD_PORT`, 7717 by default. See [Building, testing and installing](Building-Testing-Installing.md) for running beside the installed service.
+- **Linux and macOS.** They cannot read the secret, your data or the remote socket's folder, so they
+  cannot drive Masthead or pretend to be a device. They can connect to the local port, read
+  `/api/health`, and load the page.
+- **Windows.** The same for the secret and your files. **But the remote listener is a local port,** so
+  another program on the computer, including one run by another user account, can send requests that
+  claim to come through Tailscale with any device's address. What still protects you: such a program
+  has no device token, so it can only *ask* to pair; the person must approve, and the six-digit code on
+  the approval card will not match the one on their real device. The settings say this in plain words
+  next to the switch.
 
-## What it does not defend against
+## What this does not protect against
 
-- **Programs running as the person.** Any program running under the person's own account can read the secret file, so it can open the socket and drive agents. `README.md` says so: such a program could run `claude` itself anyway. Other user accounts on the machine cannot read the file (mode `0600`) and are refused.
-- **Other users on the machine** cannot read the secret file or the data and settings files (modes above), so they cannot open the socket or stop the server. They can still connect to the port, read `/api/health`, ask `/api/proof` (whose answer is useless without the secret), load the page, and run a server of their own on another port, or on Masthead's port while Masthead is not running. Such a server fails the proof, so `masthead` and `masthead stop` never send it the key; it can still answer `/api/health` as `masthead`, so `masthead status` may report it as running.
-- **Browser history.** The browser may record the sign-in file's `file://` path and then the `http://…/#key=…` address in its history before the page removes the key from the address bar (not verified). The key is also printed to the terminal in development mode, with `--no-browser`, and when the browser could not be opened (in both cases only when standard output is a terminal).
-- **A leaked key.** Whoever has the key can connect for as long as the secret file is unchanged. Nothing rotates it; deleting `<DATA_DIR>/secret` and restarting the server makes a new one, and every browser then has to be signed in again with `masthead`. (This follows from `loadSecret()`; not verified by running.)
-- **What the agents do.** Agents run with the person's permissions and the chosen permission mode. With `bypassPermissions`, Claude Code does not ask before acting. See [Permissions and questions](Permissions-and-Questions.md).
-- **The folder picker** (`{t:'dirs'}`) lists the names of non-hidden folders anywhere the server process can read, for anyone who holds the socket.
-- **A flood from a socket holder.** There is no rate limit on socket messages; each may be up to 48 MiB.
-- **`/api/health` is open by design.** Anyone who can reach the port can read `name`, `version`, `pid` and `busy`. It proves nothing: the launcher relies on `/api/proof`, not on `health`, before sending the key.
-- **Malformed requests.** A request line whose target cannot be parsed gets `400`, on plain requests and on socket upgrades, and any other unexpected error while answering a request is logged and answered `500`; one bad request no longer stops the server (tested in `test/http.test.ts`).
-- **Plain HTTP on loopback.** Traffic is not encrypted. That is normal for `127.0.0.1`, but anything able to capture loopback traffic (root) sees the key.
-
-## Agents and authority
-
-Text from other agents arrives wrapped in `<agent-report>` or `<agent-message>` tags, and the system prompt tells each agent to treat it as information from a colleague that never carries the person's authority or approval (`server/prompts.ts`). This is instruction to the model, not something code can enforce.
-
-Masthead does not touch credentials. `agentEnv()` (`server/config.ts`) passes the person's environment to Claude Code, including credential variables such as `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`, and removes only variables an enclosing Claude Code session sets about itself.
+- **Programs running as you.** Anything running under your own account can read the secret (and on
+  Windows reach the remote port), so it can drive Masthead, as it could run `claude` itself.
+- **An approved device that is lost or compromised.** With the `full` role it can do everything the
+  local page can, including running commands through the agents. Remove it from the device list.
+- **Approving the wrong device.** Nothing stops a careless approval; compare the code.
+- **A leaked key or token.** A leaked secret works until the file is deleted and the server restarted
+  (every browser then signs in again). A leaked device token works only from that same device, until
+  it is removed or expires.
+- **The browser's history.** The first address with `#key=` may be recorded before the page removes it
+  (not verified).
+- **No rate limit on the local socket**, and plain HTTP on loopback (anything able to capture loopback
+  traffic, i.e. root, sees the key).
+- **The folder picker** lists folder names anywhere the server can read, for anyone with the socket.
 
 ## Related pages
 
-[Safety model](Safety-Model.md) · [server/http.ts](Source-Http.md) · [server/cli.ts](Source-Cli.md) · [Command-line launcher](Command-Line-Launcher.md) · [Configuration and settings](Configuration-and-Settings.md) · [Storage on disk](Storage-on-Disk.md)
+[Remote access](Remote-Access.md) · [Safety model](Safety-Model.md) · [server/transport/http.ts](Source-Http.md) · [server/transport/remote.ts](Source-Transport-Remote.md) · [server/transport/auth.ts](Source-Transport-Auth.md) · [Pictures](Source-Blobs.md) · [Browser/server protocol](Browser-Server-Protocol.md)

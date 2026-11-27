@@ -383,11 +383,11 @@ test('reset_profile: a built-in team goes back to how it ships; others and lower
   const local: Client = { send: (m) => void got.push(m as Record<string, unknown>) };
   app.connect(local);
   got.length = 0;
-  app.handle(local, { t: 'reset_profile', profileId: claude.id });
+  app.handle(local, { t: 'reset_profile', id: claude.id });
   const s = got.find((m) => m.t === 'settings') as { settings: { profiles: Array<{ id: string; tiers: Array<{ max: number }> }> } };
   assert.equal(s.settings.profiles.find((p) => p.id === claude.id)!.tiers[1]!.max, shipped);
   got.length = 0;
-  app.handle(local, { t: 'reset_profile', profileId: 'nope' });
+  app.handle(local, { t: 'reset_profile', id: 'nope' });
   assert.equal(got[0]!.t, 'error');
   for (const role of ['approve', 'read'] as const) {
     const out: Array<Record<string, unknown>> = [];
@@ -395,7 +395,7 @@ test('reset_profile: a built-in team goes back to how it ships; others and lower
     app.connect(device);
     app.handle(device, { t: 'hello', protocol: 2 });
     out.length = 0;
-    app.handle(device, { t: 'reset_profile', profileId: claude.id });
+    app.handle(device, { t: 'reset_profile', id: claude.id });
     assert.equal(out[0]!.code, 'refused', role);
   }
 });

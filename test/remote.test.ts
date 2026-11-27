@@ -247,7 +247,7 @@ test('tailscale: commands refuse foreign targets, Funnel ports and bad ports', (
   assert.deepEqual(addCommand(7443, 'http://127.0.0.1:7719'), ['serve', '--bg', '--https=7443', 'http://127.0.0.1:7719']);
   assert.deepEqual(removeCommand(7443), ['serve', '--https=7443', 'off']);
   for (const t of ['http://192.168.1.2:80', 'https://example.com', '/etc', 'unix:relative', 'http://127.0.0.1:7719/x', '3000']) assert.throws(() => addCommand(7443, t), /only its own/, t);
-  for (const p of [443, 8443, 10000, 80, 70000, 1.5]) assert.throws(() => addCommand(p, SOCK), undefined, String(p));
+  for (const p of [443, 8443, 10000, 80, 70000, 1.5, 7717]) assert.throws(() => addCommand(p, SOCK), undefined, String(p));
   assert.throws(() => removeCommand(8443));
 });
 
