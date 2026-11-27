@@ -1,6 +1,6 @@
 // Types shared by the server and the browser. Nothing in here may import Node or DOM APIs.
 
-export const VERSION = '0.1.2';
+export const VERSION = '0.1.3';
 
 /** The four levels of the team. `lead` is the agent the person talks to. */
 export type Tier = 'lead' | 'opus' | 'sonnet' | 'haiku';
@@ -39,16 +39,29 @@ export const AGENT_NAMES: readonly string[] = [
   'november', 'oscar', 'papa', 'quebec', 'romeo', 'sierra', 'tango', 'uniform', 'victor', 'whiskey', 'xray', 'yankee', 'zulu',
 ];
 
-/** The name of the nth agent in a conversation (0 is the lead): alpha … zulu, then alpha-2 … */
+function roman(n: number): string {
+  const parts: Array<[number, string]> = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
+  let out = '';
+  for (const [value, letters] of parts) while (n >= value) (out += letters), (n -= value);
+  return out;
+}
+
+/**
+ * The name of the nth agent in a conversation (0 is the lead): alpha … zulu, then a second round with
+ * a Roman numeral, alpha-ii … zulu-ii, then alpha-iii … People see these as "Alpha II".
+ */
 export function agentName(n: number): string {
   const round = Math.floor(n / AGENT_NAMES.length);
   const base = AGENT_NAMES[n % AGENT_NAMES.length]!;
-  return round === 0 ? base : `${base}-${round + 1}`;
+  return round === 0 ? base : `${base}-${roman(round + 1)}`;
 }
 
-/** How a name is shown to people: "bravo" is written "Bravo". */
+/** How a name is shown to people: "bravo" is written "Bravo", "alpha-ii" is written "Alpha II". */
 export function displayName(name: string): string {
-  return name.charAt(0).toUpperCase() + name.slice(1);
+  const m = /^([a-z]+)-([ivxlcdm]+)$/.exec(name);
+  const word = m ? m[1]! : name;
+  const shown = word.charAt(0).toUpperCase() + word.slice(1);
+  return m ? `${shown} ${m[2]!.toUpperCase()}` : shown;
 }
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh';

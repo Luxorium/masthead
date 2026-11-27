@@ -20,7 +20,7 @@ The message types themselves (`ClientMsg`, `ServerMsg`, `Item`) are explained on
 Agents are not named by whoever starts them. Each conversation hands out names in order from the radio spelling alphabet:
 
 - `AGENT_NAMES`: `alpha`, `bravo`, `charlie`, … `xray`, `yankee`, `zulu`. The code uses the common English spellings `juliet` and `xray`, which are easy to type.
-- `agentName(n)`: the name of the nth agent in a conversation. 0 is the lead, so the lead is always `alpha`. After `zulu` (n = 25) a round number is added: `alpha-2`, `bravo-2`, …, then `alpha-3`.
+- `agentName(n)`: the name of the nth agent in a conversation. 0 is the lead, so the lead is always `alpha`. After `zulu` (n = 25) a round is added as a Roman numeral: `alpha-ii`, `bravo-ii`, …, then `alpha-iii`. `displayName` shows these as "Alpha II".
 - `displayName(name)`: the form people see, with a capital first letter ("Bravo").
 
 The person and the agents can then refer to any agent by a short name they can say. See [Team rules](Team-Rules.md#names-and-titles).

@@ -5,7 +5,7 @@ Terms used in the code and this wiki, in alphabetical order. Code names are in b
 | Term | Meaning |
 |---|---|
 | **Agent** | One member of a team: a Claude Code session plus Masthead's record of it. Class `Agent` in `server/agent.ts`; record `AgentInfo` in `shared/protocol.ts`. |
-| **Agent name** | The short name every agent gets, in order, from the radio spelling alphabet: `alpha` (the lead), `bravo`, `charlie`, … `zulu`, then `alpha-2`. Shown capitalised ("Bravo"). See `agentName()`. |
+| **Agent name** | The short name every agent gets, in order, from the radio spelling alphabet: `alpha` (the lead), `bravo`, `charlie`, … `zulu`, then `alpha-ii` (a second round, with a Roman numeral). Shown capitalised ("Bravo", "Alpha II"). See `agentName()`. |
 | **Agent SDK** | `@anthropic-ai/claude-agent-sdk`, the library Masthead uses to start and talk to Claude Code (`query()`), and to define in-process tools (`tool()`, `createSdkMcpServer()`). |
 | **`AgentHost`** | Interface for what an `Agent` needs from its owner; implemented by `Conversation`. |
 | **Ancestor** | An agent's parent, its parent's parent, and so on up to the lead. Checked by `isAncestor()`. Ancestors may stop agents below them and set their effort. |

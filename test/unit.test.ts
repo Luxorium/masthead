@@ -209,8 +209,14 @@ test('agent names: handed out in order, and they carry on after zulu', () => {
   assert.equal(agentName(0), 'alpha');
   assert.equal(agentName(1), 'bravo');
   assert.equal(agentName(25), 'zulu');
-  assert.equal(agentName(26), 'alpha-2');
-  assert.equal(agentName(53), 'bravo-3');
+  assert.equal(agentName(26), 'alpha-ii');
+  assert.equal(agentName(27), 'bravo-ii');
+  assert.equal(agentName(52), 'alpha-iii');
+  assert.equal(agentName(26 * 3 + 1), 'bravo-iv');
+  assert.equal(displayName('alpha-ii'), 'Alpha II');
+  assert.equal(displayName('bravo'), 'Bravo');
+  assert.equal(displayName('alpha-2'), 'Alpha-2', 'names from older conversations are left as they were');
+  assert.equal(agentName(53), 'bravo-iii');
   assert.equal(displayName('charlie'), 'Charlie');
   assert.equal(new Set(Array.from({ length: 200 }, (_, i) => agentName(i))).size, 200);
 });

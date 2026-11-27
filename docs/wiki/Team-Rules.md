@@ -29,7 +29,7 @@ flowchart TD
 
 Agents are not named by whoever starts them. Each conversation hands out names from the radio spelling alphabet, in the order agents are created (`AGENT_NAMES` and `agentName()` in `shared/protocol.ts`):
 
-- The lead is always `alpha`. The first agent started is `bravo`, then `charlie`, and so on up to `zulu`; then `alpha-2`, `bravo-2`, …
+- The lead is always `alpha`. The first agent started is `bravo`, then `charlie`, and so on up to `zulu`; then `alpha-ii`, `bravo-ii`, … (shown as "Alpha II"), then `alpha-iii`, …
 - `spawn()` takes `agentName(agents.size)` and moves on to the next name if that one is taken.
 - People see the name with a capital letter ("Bravo", `displayName()`). The lead's system prompt tells it that the person may refer to any agent by name.
 
