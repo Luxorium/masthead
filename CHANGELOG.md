@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (0.2.0)
+
+Project
+- Prepared for packaging: package.json describes an npm package with the built app inside (name
+  `@luxorium/masthead` pending a decision; still private, so nothing can be published by accident).
+- Continuous integration on Linux, macOS and Windows: type check, unit tests, build, and installing
+  the packed package.
+- SECURITY.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md and issue templates.
+- Outlines for Homebrew, AUR and Scoop packages under `packaging/` (not published).
+
 ## 0.1.4
 
 Security

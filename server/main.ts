@@ -4,10 +4,11 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VERSION } from '../shared/protocol.js';
-import { App } from './app.js';
+import { App } from './app/app.js';
 import { UsageError, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, unitPortFrom, type Opener } from './cli.js';
-import { DATA_DIR, DEFAULT_PORT, SECRET_FILE, loadSecret, readSecret } from './config.js';
-import { serve } from './http.js';
+import { DATA_DIR, DEFAULT_PORT, SECRET_FILE } from './paths.js';
+import { loadSecret, readSecret } from './transport/auth.js';
+import { serve } from './transport/http.js';
 
 // Masthead approves its own tools ahead of the permission callback on purpose; the SDK's notice about that is noise here.
 const emitWarning = process.emitWarning.bind(process);

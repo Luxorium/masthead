@@ -6,9 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import { App, type Client } from '../server/app.ts';
-import { agentEnv, defaultSettings, loadSecret, readSecret, sanitizeSettings } from '../server/config.ts';
-import { Store } from '../server/store.ts';
+import { App, type Client } from '../server/app/app.ts';
+import { agentEnv } from '../server/backends/claude/env.ts';
+import { defaultSettings, sanitizeSettings } from '../server/settings/settings.ts';
+import { loadSecret, readSecret } from '../server/transport/auth.ts';
+import { Store } from '../server/storage/store.ts';
 import type { AgentInfo, ServerMsg, Settings } from '../shared/protocol.ts';
 
 function setup(opts: { claudePath?: string | null; settings?: Settings; conversations?: number } = {}) {

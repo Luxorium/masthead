@@ -5,9 +5,10 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, unlinkSync } from 
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentInfo, Item, ServerMsg } from '../shared/protocol.ts';
-import { App, type Client } from '../server/app.ts';
-import { defaultSettings, findClaude } from '../server/config.ts';
-import { Store } from '../server/store.ts';
+import { App, type Client } from '../server/app/app.ts';
+import { defaultSettings } from '../server/settings/settings.ts';
+import { findClaude } from '../server/backends/claude/env.ts';
+import { Store } from '../server/storage/store.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'masthead-live-'));
 const settings = defaultSettings();

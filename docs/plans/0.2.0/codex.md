@@ -448,3 +448,88 @@ translates its own.
 - **Images:** data URL input, and image output from a dynamic tool.
 - **Concurrency:** 10+ active threads on one app-server (overload `-32001`), and the process dying
   mid-turn.
+
+## Sub-agents: settled
+
+Added 2026-11-27 by bravo. The test agents ran on `gpt-6-luna` at low effort with ephemeral sessions; `~/.codex/sessions` has no files for the day afterwards.
+
+### The real tool list
+
+`codex debug prompt-input [-c …] "hi"` prints the model-visible input as JSON without calling the model, so it costs nothing. Its first item is `{"type":"additional_tools","role":"developer","tools":[…]}`, which is the real tool list. With the default catalog and `model="gpt-6-luna"` it contains:
+
+```
+functions.{exec,wait,request_user_input,request_user_input_async}  clock.sleep
+collaboration.{followup_task,interrupt_agent,list_agents,send_message,spawn_agent,wait_agent}  mcp__cua_repl.{js,js_reset}
+```
+
+(`tool_mode: code_mode_only`: other tools are reached from inside `functions.exec`.) The names were extracted with `/tmp/codex-exp/names.py`.
+
+### Switches tried (6 = all collaboration tools present)
+
+| Switch | collaboration.* |
+|---|---|
+| none | 6 |
+| `--disable multi_agent` / `multi_agent_v2` / both / `--enable multi_agent_v2` | 6 |
+| `-c agents.max_depth=0` | 6 |
+| `-c agents.max_concurrent_threads_per_session=1` | 6 |
+| `-c agents.max_concurrent_threads_per_session=0` | error: "must be at least 1" |
+| `--disable collaboration_modes`, `runtime_agent_instances`, `code_mode_host`; `--enable code_mode_only`; `-c tools.collaboration=false` | 6 |
+| `-c model="gpt-5.6-luna"` (catalog `multi_agent_version` v1) | 0 |
+| **`-c model_catalog_json="/path/catalog.json"`**, a copy of `codex debug models` with `multi_agent_version: null` (or `"none"`) on every model | **0** |
+
+These tools come from the model catalog (`multi_agent_version: "v2"` on current models), not from features. `codex debug models` shows the field.
+
+### Proof in app-server
+
+Run: `codex app-server -c model_catalog_json='"…/cat-nomulti.json"'`, with the prompt "Call the tool collaboration.list_agents once".
+
+- **Default catalog:** the model calls it and answers "OK".
+- **Override:** the model answers "I couldn't find `collaboration.list_agents` in the available tools."
+
+### Recommended switch (process-level)
+
+1. At start-up, run `codex debug models`.
+2. Set `multi_agent_version` to null on every entry and write the result to Masthead's own data folder.
+3. Start `codex app-server -c model_catalog_json="<that file>"`.
+4. Never send the `ultra` effort.
+
+The catalog comes from the person's own account, so model access is unchanged.
+
+Unverified:
+
+- Whether the override also works per thread (`thread/start.config`). Assume it works only per process.
+- Whether the frozen catalog misses later server-side catalog updates. Regenerate it each time the app-server starts.
+- Whether a future CLI renames the field. Check at start-up that the debug prompt input of a test thread holds no `collaboration.*`, and fall back to enforcement if it does.
+
+### Fallback if the switch ever fails
+
+What a native spawn emits, observed with the prompt "spawn a helper, wait, report":
+
+```
+item/started {"type":"subAgentActivity","kind":"started","model":"gpt-6-luna","agentThreadId":"01a21bb5-…"}
+turn/started for a NEW threadId (the child), its own items, turn/completed
+item/started {"type":"collabAgentToolCall","tool":"wait","senderThreadId":…}
+item/started {"type":"subAgentActivity","kind":"completed","agentThreadId":…}
+```
+
+- **No approval request was raised.** There is no `requestApproval` for collab calls, so a host cannot decline them; the approval path is not an option.
+- **Enforcement:**
+  - On any `subAgentActivity` (kind started) or `collabAgentToolCall` item, `turn/interrupt` both the parent turn and the child thread (by `agentThreadId`).
+  - Then steer or start a turn in the parent: "Codex's own sub-agents are not allowed; use spawn_agent."
+- **Cost:** the child's first model call is already spent. In the test the child reached `turn/started` 0 s after the parent's spawn item (child id `…1335`), and the whole child turn took about 3.7 s. Each violation is roughly one wasted child turn plus one corrective parent turn.
+
+### Side answers
+
+**Background commands.** Asked to start `sleep 10; echo BG-DONE` in the background:
+
+- The model ran `nohup sh -c '…' > bg-done.log &` as an ordinary `commandExecution`, which completed at once with exit 0.
+- The turn completed, and no further turn or `process/*` event followed in the next 20 s.
+- So Codex does not track detached work and does not wake the agent. Masthead needs no background-wait state for Codex, and the agent must be told to poll if it cares.
+
+**Several active threads in one app-server process: yes.**
+
+- Two threads were started together; both emitted `turn/started` at 0.5 s.
+- One finished at 4.0 s while the other ran a command and finished at 6.9 s, with events interleaved by `threadId`.
+- In the sub-agent run, parent and child threads were also active at the same time.
+
+Load at 10 or more threads is untested.

@@ -1,0 +1,5 @@
+{"id":"i1","ts":1,"kind":"user","text":"hello"}
+{"id":"t1","ts":2,"kind":"tool","name":"Read","input":{"file_path":"/x"},"done":false}
+{"id":"t1","ts":2,"kind":"tool","name":"Read","input":{"file_path":"/x"},"result":"ok","done":true}
+{"id":"i2","ts":3,"kind":"text","text":"done"}
+{"broken

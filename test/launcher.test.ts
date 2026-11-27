@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { SIGN_IN_STALE_MS, UsageError, openSignedIn, parseCommand, parseDevWebPort, parsePort, serverProves, signInDir, signInUrl, unitPortFrom, writeSignInFile, type Opener } from '../server/cli.ts';
-import { DEFAULT_PORT, proofOf } from '../server/config.ts';
+import { DEFAULT_PORT } from '../server/paths.ts';
+import { proofOf } from '../server/transport/auth.ts';
 
 test('launcher: the port comes from --port, then MASTHEAD_PORT, then the default', () => {
   assert.equal(parsePort([]), DEFAULT_PORT);

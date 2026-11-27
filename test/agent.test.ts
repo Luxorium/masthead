@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import type { Options, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import { Agent, BACKGROUND_GRACE_MS, type AgentHost, type TurnOutcome } from '../server/agent.ts';
-import { defaultSettings } from '../server/config.ts';
-import { Scheduler } from '../server/scheduler.ts';
+import { Agent, BACKGROUND_GRACE_MS, type AgentHost, type TurnOutcome } from '../server/runtime/agent.ts';
+import { defaultSettings } from '../server/settings/settings.ts';
+import { Scheduler } from '../server/core/scheduler.ts';
 import type { AgentInfo, Item, Settings, Tier } from '../shared/protocol.ts';
 
 const tick = () => new Promise((r) => setImmediate(r));

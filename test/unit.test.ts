@@ -3,10 +3,10 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { defaultSettings, sanitizeSettings } from '../server/config.ts';
-import { messageEnvelope, reportEnvelope, systemAppend } from '../server/prompts.ts';
-import { Scheduler, SlotCancelled } from '../server/scheduler.ts';
-import { Store } from '../server/store.ts';
+import { defaultSettings, sanitizeSettings } from '../server/settings/settings.ts';
+import { messageEnvelope, reportEnvelope, systemAppend } from '../server/core/prompts.ts';
+import { Scheduler, SlotCancelled } from '../server/core/scheduler.ts';
+import { Store } from '../server/storage/store.ts';
 import { CHILD_TIER, EFFORTS, agentName, capEffort, displayName, modelLabel, type Item, type Tier } from '../shared/protocol.ts';
 import { toolLine } from '../shared/toolline.ts';
 

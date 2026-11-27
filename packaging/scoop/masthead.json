@@ -1,0 +1,18 @@
+{
+  "##": "Outline for a Scoop bucket. Not published; untested on Windows. Fill url/hash at release.",
+  "version": "0.2.0",
+  "description": "Local web app that runs a tiered team of AI agents through your own Claude Code",
+  "homepage": "https://github.com/Luxorium/masthead",
+  "license": "MIT",
+  "depends": "nodejs-lts",
+  "url": "https://registry.npmjs.org/@luxorium/masthead/-/masthead-0.2.0.tgz#/masthead.tgz",
+  "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "installer": {
+    "script": [
+      "npm install -g --omit=optional --no-audit --no-fund --prefix \"$dir\" \"$dir\\masthead.tgz\"",
+      "Remove-Item \"$dir\\masthead.tgz\""
+    ]
+  },
+  "bin": "masthead.cmd",
+  "notes": "Install Claude Code and sign in with `claude`, then run `masthead`."
+}

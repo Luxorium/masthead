@@ -209,6 +209,9 @@ try {
   await page.waitForSelector('.inbound.task');
   await page.screenshot({ path: `${shots}/4-agent-${scheme}.png` });
   check('a sub-agent transcript opens with its task', (await page.locator('.inbound.task').count()) === 1);
+  // Its reply has a python code block: the page's own code-block markup survives the sanitiser in a real browser.
+  await page.waitForSelector('.md .code-block .code-copy', { timeout: 30_000 }).catch(() => {});
+  check('code blocks render with a Copy button', (await page.locator('.md .code-block .code-copy').count()) >= 1);
   // The message box says who it is pointed at, and Back returns it to the lead.
   const targetLine = (await page.locator('.addressee .to').textContent().catch(() => '')) ?? '';
   const placeholderText = (await page.locator('textarea').getAttribute('placeholder')) ?? '';

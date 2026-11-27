@@ -1,0 +1,15 @@
+# Packaging outlines (not published)
+
+Drafts for package-manager listings. Nothing here is published, and none of it may be until the
+person has decided the package name and the gates in `docs/plans/0.2.0/PLAN.md` are cleared.
+Every outline installs the npm tarball with `--omit=optional`, which skips the Agent SDK's private
+Claude Code binary: Masthead always runs the person's own `claude`.
+
+| File | For | Status |
+|---|---|---|
+| `homebrew/masthead.rb` | a Homebrew tap (`Luxorium/homebrew-tap`) | outline; `sha256` and URL filled at release |
+| `aur/PKGBUILD` | the Arch User Repository | outline; check against the Arch Node.js packaging guidelines before submitting |
+| `scoop/masthead.json` | a Scoop bucket (Windows, no admin) | outline; untested on Windows |
+| `masthead.desktop`, `masthead.svg` | the Linux launcher entry and icon used by `scripts/install.sh` | in use |
+
+The npm name `@luxorium/masthead` used below is a placeholder pending that decision.

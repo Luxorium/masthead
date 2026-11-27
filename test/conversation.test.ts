@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { defaultSettings } from '../server/config.ts';
-import { Conversation, type ConversationHost } from '../server/conversation.ts';
-import type { Agent } from '../server/agent.ts';
-import { messageEnvelope, reportEnvelope, systemAppend, withArticle } from '../server/prompts.ts';
-import { Scheduler, TierOff } from '../server/scheduler.ts';
+import { defaultSettings } from '../server/settings/settings.ts';
+import { Conversation, type ConversationHost } from '../server/core/conversation.ts';
+import type { Agent } from '../server/runtime/agent.ts';
+import { messageEnvelope, reportEnvelope, systemAppend, withArticle } from '../server/core/prompts.ts';
+import { Scheduler, TierOff } from '../server/core/scheduler.ts';
 import type { Item, Tier } from '../shared/protocol.ts';
 
 // These tests run Conversation without Claude Code: claudePath() returns null, so an agent that gets a

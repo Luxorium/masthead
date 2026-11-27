@@ -9,9 +9,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import WebSocket from 'ws';
-import type { Client } from '../server/app.ts';
-import { proofOf, proofOk } from '../server/config.ts';
-import { serve, type ServedApp } from '../server/http.ts';
+import type { Client } from '../server/app/app.ts';
+import { proofOf, proofOk } from '../server/transport/auth.ts';
+import { serve, type ServedApp } from '../server/transport/http.ts';
 
 const SECRET = 'a'.repeat(64);
 const dir = mkdtempSync(join(tmpdir(), 'masthead-http-'));

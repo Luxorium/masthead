@@ -1,0 +1,21 @@
+# Outline for the AUR. Not published. Check against the Arch Node.js packaging guidelines first.
+pkgname=masthead
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Local web app that runs a tiered team of AI agents through your own Claude Code"
+arch=(any)
+url="https://github.com/Luxorium/masthead"
+license=(MIT)
+depends=(nodejs)
+makedepends=(npm)
+optdepends=('claude-code: the agent backend (install it and sign in with `claude`)')
+source=("https://registry.npmjs.org/@luxorium/masthead/-/masthead-$pkgver.tgz")
+noextract=("masthead-$pkgver.tgz")
+sha256sums=('SKIP')  # replace with the real checksum at release
+
+package() {
+  # --omit=optional: skip the Agent SDK's private Claude Code binary; Masthead runs the user's own.
+  npm install -g --omit=optional --no-audit --no-fund --prefix "$pkgdir/usr" "$srcdir/masthead-$pkgver.tgz"
+  find "$pkgdir/usr" -type d -exec chmod 755 {} +
+  install -Dm644 "$pkgdir/usr/lib/node_modules/@luxorium/masthead/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -26,6 +26,9 @@ login of its own and never sees your credentials.
 
 ## Install
 
+Packages for npm, Homebrew, the AUR and Scoop, with macOS and Windows support, are being prepared
+for 0.2.0 (`packaging/`, not published yet). Until then, install from source on Linux:
+
 ```sh
 git clone https://github.com/Luxorium/masthead
 cd masthead
@@ -109,7 +112,7 @@ quickly; the limits and the low default effort are there to keep that in hand.
 ## Development
 
 ```sh
-npm install
+npm ci               # a plain install; the build tools need their optional platform packages
 npm run check        # type-check server and page
 npm test             # unit tests
 npm run build
@@ -123,5 +126,8 @@ To run beside an installed Masthead, pick other ports and folders for both:
 `MASTHEAD_DEV=1 MASTHEAD_DEV_WEB_PORT=7720 npm start -- --port 7790` and
 `MASTHEAD_PORT=7790 MASTHEAD_DEV_WEB_PORT=7720 npm run dev:web` (plus your own `XDG_CONFIG_HOME` and
 `XDG_DATA_HOME` for the server). The design of the code is described in `docs/wiki/`.
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately
+as described in [SECURITY.md](SECURITY.md).
 
 Masthead is an independent project. It is not made or endorsed by Anthropic.
